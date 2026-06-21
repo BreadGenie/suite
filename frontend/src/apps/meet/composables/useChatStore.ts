@@ -14,7 +14,6 @@ export interface ChatStore {
 	chatMessages: ChatMessage[];
 	hasUnreadMessages: boolean;
 	toggleChat: () => void;
-	hostOnlyChat: boolean;
 	markAsRead: () => void;
 	addMessage: (message: ChatMessage) => void;
 	$reset: () => void;
@@ -24,7 +23,6 @@ export const useChatStore = defineStore("meet-chat", () => {
 	const isChatOpen = ref(false);
 	const chatMessages = ref<ChatMessage[]>([]);
 	const hasUnreadMessages = ref(false);
-	const hostOnlyChat = ref(false);
 
 	function toggleChat() {
 		isChatOpen.value = !isChatOpen.value;
@@ -48,7 +46,6 @@ export const useChatStore = defineStore("meet-chat", () => {
 		isChatOpen.value = false;
 		chatMessages.value = [];
 		hasUnreadMessages.value = false;
-		hostOnlyChat.value = false;
 	}
 
 	return {
@@ -56,7 +53,6 @@ export const useChatStore = defineStore("meet-chat", () => {
 		chatMessages,
 		hasUnreadMessages,
 		toggleChat,
-		hostOnlyChat,
 		markAsRead,
 		addMessage,
 		$reset,

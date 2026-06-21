@@ -1,6 +1,7 @@
 import { computed, type Ref, watch } from "vue";
 import { getInitials } from "../utils/text";
-import type { GridLayout, PinnedTile } from "./useGridLayout";
+import type { GridLayout } from "./useGridLayout";
+import type { PinnedTile } from "./useLayout";
 
 interface ScreenShare {
 	consumerId: string;
@@ -28,7 +29,7 @@ interface ScreenShareTile {
 
 interface UseScreenShareTilesOptions {
 	displayScreenShares: Ref<ScreenShare[]>;
-	pinnedTiles: Ref<PinnedTile[]>;
+	pinnedTile: Ref<PinnedTile | null>;
 	currentUser: Ref<CurrentUser | null | undefined>;
 	gridLayout: GridLayout;
 	getParticipantName: (participantId: string) => string;
@@ -36,7 +37,7 @@ interface UseScreenShareTilesOptions {
 
 export function useScreenShareTiles({
 	displayScreenShares,
-	pinnedTiles,
+	pinnedTile,
 	currentUser,
 	gridLayout,
 	getParticipantName,
@@ -51,26 +52,21 @@ export function useScreenShareTiles({
 			const shares = displayScreenShares.value;
 			const primaryShareId = shares[0]?.consumerId;
 
-			const activePinnedShares = pinnedTiles.value.filter(
-				(t) => t.type === "screenshare",
-			);
-			activePinnedShares.forEach((share) => {
-				if (!shares.some((s) => s.consumerId === share.id)) {
-					gridLayout.unpinTile("screenshare", share.id);
+			if (!signature) {
+				if (pinnedTile.value?.type === "screenshare") {
+					gridLayout.unpinTile();
 				}
-			});
-
-			if (!signature) return;
+				return;
+			}
 
 			const hasNewShare = signature !== previousSignature;
+			const shouldAutoPin =
+				hasNewShare ||
+				!pinnedTile.value ||
+				pinnedTile.value.type !== "screenshare" ||
+				pinnedTile.value.id !== primaryShareId;
 
-			const isPrimaryPinned = pinnedTiles.value.some(
-				(t) => t.type === "screenshare" && t.id === primaryShareId,
-			);
-
-			const shouldAutoPin = primaryShareId && (hasNewShare || !isPrimaryPinned);
-
-			if (shouldAutoPin) {
+			if (primaryShareId && shouldAutoPin) {
 				gridLayout.pinTile("screenshare", primaryShareId);
 			}
 		},

@@ -53,6 +53,9 @@ import type {
 	ScreenShareStoppedEvent,
 	SFUErrorEvent,
 	SFUScope,
+	SttSegmentEvent,
+	SttToggleRequest,
+	TranscriptSegment,
 	UpdateTokenRequest,
 	UserData,
 	WebRTCSignalData,
@@ -103,6 +106,9 @@ export type {
 	ScreenShareStoppedEvent,
 	SFUErrorEvent,
 	SFUScope,
+	SttSegmentEvent,
+	SttToggleRequest,
+	TranscriptSegment,
 	UpdateTokenRequest,
 	UserData,
 	WebRTCSignalData,
@@ -123,7 +129,6 @@ export interface ServerToClientEvents {
 	screen_share_started: (data: ScreenShareStartedEvent) => void;
 	screen_share_stopped: (data: ScreenShareStoppedEvent) => void;
 	'chat:message': (data: ChatMessage) => void;
-	'chat:restriction_updated': (data: { enabled: boolean }) => void;
 	'reaction:message': (data: ReactionMessage) => void;
 	webrtc_offer: (data: WebRTCSignalData) => void;
 	webrtc_answer: (data: WebRTCSignalData) => void;
@@ -134,6 +139,7 @@ export interface ServerToClientEvents {
 	hand_raised: (data: HandRaisedEvent) => void;
 	existing_raised_hands: (data: ExistingRaisedHandsEvent) => void;
 	network_quality_update: (data: NetworkQualityUpdateEvent) => void;
+	'stt:segment': (data: SttSegmentEvent) => void;
 }
 
 export interface ClientToServerEvents {
@@ -209,7 +215,6 @@ export interface ClientToServerEvents {
 	host_control: (data: HostControlRequest) => void;
 	screen_share: (data: ScreenShareRequest) => void;
 	'chat:send': (data: ChatSendRequest) => void;
-	'chat:toggle_restriction': (data: { enabled: boolean }) => void;
 	'reaction:send': (data: ReactionSendRequest) => void;
 	'consumer:update_preferences': (
 		data: ConsumerUpdatePreferencesRequest,
@@ -220,13 +225,16 @@ export interface ClientToServerEvents {
 		callback: (response: SFUResponse) => void,
 	) => void;
 	leave_room: (data?: LeaveRoomRequest) => void;
+	'stt:toggle': (
+		data: SttToggleRequest,
+		callback: (response: SFUResponse & { enabled?: boolean }) => void,
+	) => void;
 }
 
 export interface SocketData {
 	userId: string;
 	userName: string;
 	meetingId: string;
-	site?: string;
 	isHost: boolean;
 	isGuest?: boolean;
 	roomId?: string;
@@ -318,6 +326,7 @@ export interface Room {
 	router: Router;
 	audioLevelObserver: AudioLevelObserver;
 	peers: Map<string, Peer>;
+	producerToPeerId: Map<string, string>;
 	created: Date;
 }
 
@@ -396,7 +405,6 @@ export interface JWTPayload {
 	session_id?: string;
 	exp?: number;
 	iat?: number;
-	site?: string;
 }
 
 // Server types
@@ -419,7 +427,6 @@ declare module 'socket.io' {
 		userId: string;
 		userName: string;
 		meetingId: string;
-		site?: string;
 		isHost: boolean;
 		isCohost: boolean;
 		roomId?: string;

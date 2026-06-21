@@ -49,7 +49,7 @@
 
 		<!-- Main meeting interface -->
 		<template v-else>
-			<div class="relative flex flex-1 min-h-0 overflow-hidden">
+			<div class="relative flex flex-1 min-h-0">
 				<div
 					class="grid flex-1 min-h-0 transition-[grid-template-columns] duration-300 ease-out relative"
 					:style="{
@@ -64,8 +64,12 @@
 						:style="{ paddingBottom: isToolbarVisible ? '6rem' : '0' }"
 					>
 						<!-- Video area -->
-						<div class="p-4 flex flex-col flex-1 min-h-0 text-white">
+						<div class="p-4 flex flex-col flex-1 min-h-0 text-white relative">
 							<MeetingLayout @open-people-panel="togglePeople" />
+							<CaptionOverlay
+								:is-captions-enabled="captionStore.isCaptionsEnabled"
+								:lines="captionStore.captionLines"
+							/>
 						</div>
 					</div>
 
@@ -93,15 +97,17 @@
 								v-if="activePanel === 'chat'"
 								:open="true"
 								:messages="chatStore.chatMessages"
-								:user-id="(currentUser.currentUser.value?.user_id as string) || ''"
+								:user-id="
+									(currentUser.currentUser.value
+										?.user_id as string) || ''
+								"
 								:user-name="
-									(currentUser.currentUser.value?.full_name as string) ||
-									(currentUser.currentUser.value?.name as string) ||
+									(currentUser.currentUser.value
+										?.full_name as string) ||
+									(currentUser.currentUser.value
+										?.name as string) ||
 									'You'
 								"
-								:isHost="isCurrentUserHost"
-								:isCohost="isCurrentUserCohost"
-                                :hostOnlyChat="chatStore.hostOnlyChat"
 								@close="toggleChat"
 								@send="chat.onSendChat"
 							/>
@@ -144,6 +150,7 @@
 						:isFullscreen="isFullscreen"
 						:isHandRaised="isHandRaised"
 						:isReactionPickerOpen="isReactionPickerOpen"
+						:isCaptionsEnabled="captionStore.isCaptionsEnabled"
 						@update:isReactionPickerOpen="isReactionPickerOpen = $event"
 						:meetingId="meetingId"
 						:meetingTitle="meetingTitle"
@@ -158,6 +165,7 @@
 						@toggle-screen-share="mediaControls.toggleScreenShare()"
 						@toggle-fullscreen="toggleFullscreen"
 						@toggle-raise-hand="raiseHand.toggleRaiseHand()"
+						@toggle-captions="toggleCaptions"
 						@report-problem="handleReportProblem"
 						@end-call="sfuConnection.endCall()"
 						@device-changed="handleDeviceChanged"
@@ -194,7 +202,7 @@
 import { Button, frappeRequest, toast } from "frappe-ui";
 import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-
+import CaptionOverlay from "../components/CaptionOverlay.vue";
 import ChatNotificationQueue from "../components/ChatNotificationQueue.vue";
 import ChatPanel from "../components/ChatPanel.vue";
 import JoinRequestNotifications from "../components/JoinRequestNotifications.vue";
@@ -206,6 +214,8 @@ import PeoplePanel from "../components/PeoplePanel.vue";
 import RejectionOverlay from "../components/RejectionOverlay.vue";
 import Spinner from "../components/Spinner.vue";
 import { useBackgroundEffects } from "../composables/useBackgroundEffects";
+import { useCaptionStore } from "../composables/useCaptionStore";
+import { useCaptions } from "../composables/useCaptions";
 import { useChat } from "../composables/useChat";
 import { useChatStore } from "../composables/useChatStore";
 import { useConnectionState } from "../composables/useConnectionState";
@@ -258,6 +268,7 @@ const lobbyStore = useLobbyStore();
 const reactionStore = useReactionStore();
 const raiseHandStore = useRaiseHandStore();
 const gridLayout = useGridLayout(mediaState);
+const captionStore = useCaptionStore();
 
 // --- Lobby notification tracking ---
 const notifiedLobbyUsers = ref(new Set<string>());
@@ -268,7 +279,6 @@ const {
 	meetingTitle,
 	meetingOwner,
 	isCurrentUserHost,
-	isCurrentUserCohost,
 	meetingCoHosts,
 } = useMeetingDoc();
 const meetingDoc = getMeetingDoc(meetingId.value);
@@ -411,13 +421,16 @@ const raiseHand = useRaiseHand({
 	sfuClient: sfuConnection.sfuClient,
 });
 
+// --- Captions ---
+const { toggleCaptions } = useCaptions({
+	sfuClient: sfuConnection.sfuClient,
+});
+
 // --- Lobby ---
 const lobby = useLobby({
 	lobbyStore,
 	meetingId: meetingId.value as string,
 });
-
-type AccessData = { allow_guest?: boolean; host_only_chat?: boolean };
 
 // --- Keyboard Shortcuts ---
 const keyboardShortcuts = useKeyboardShortcuts({
@@ -509,7 +522,8 @@ const participantsForPeoplePanel = computed<Record<string, Participant>>(
 	() => participantStore.participants as Record<string, Participant>,
 );
 
-const { isMobile } = useResponsiveGrid();
+const { windowWidth } = useResponsiveGrid();
+const isMobile = computed(() => windowWidth.value < 768);
 
 const panelWidth = computed(() => {
 	if (!activePanel.value) return "0rem";
@@ -646,12 +660,11 @@ onMounted(async () => {
 				},
 			});
 
-			if ((accessData as AccessData).host_only_chat !== undefined) {
-				chatStore.hostOnlyChat = !!(accessData as AccessData).host_only_chat;
-			}
 			if (!(accessData as { allow_guest?: boolean }).allow_guest) {
-				const loginUrl = `/login?redirect-to=${encodeURIComponent(`/meet/${meetingId.value}`)}`;
-				window.location.href = loginUrl;
+				router.push({
+					name: "Login",
+					query: { next: `/${meetingId.value}` },
+				});
 				return;
 			}
 		} catch (error) {
@@ -779,18 +792,5 @@ watch(
 		}
 	},
 	{ immediate: true },
-);
-
-watch(
-	() => chatStore.hostOnlyChat,
-	(isRestricted, oldValue) => {
-		if (
-			isRestricted !== oldValue &&
-			(isCurrentUserHost.value || isCurrentUserCohost.value) &&
-			sfuConnection.sfuClient?.isConnected()
-		) {
-			chat.toggleRestriction(isRestricted);
-		}
-	},
 );
 </script>

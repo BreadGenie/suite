@@ -19,7 +19,6 @@ export interface PresenceTokenResponse {
 	sfu_url?: string;
 	sfu_port?: number;
 	error?: string;
-	expires_in?: number;
 }
 
 export interface PresenceParticipant {

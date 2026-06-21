@@ -10,9 +10,9 @@ import { useRouter } from "vue-router";
 import { useSocket } from "../socket";
 import audioNotificationManager from "../utils/audioNotifications";
 import { getErrorMessage } from "../utils/error";
+import { SocketIOSignalChannel } from "../utils/media/SignalChannel";
 import { SFUClient } from "../utils/SFUClient";
 import { SFUMeetingManager } from "../utils/SFUMeetingManager";
-import { useChatStore } from "./useChatStore";
 import type { ConnectionState } from "./useConnectionState";
 import type { CurrentUser } from "./useCurrentUser";
 import type { GridLayout } from "./useGridLayout";
@@ -82,9 +82,8 @@ export function useSFUConnection(deps: {
 	const router = useRouter();
 	const socket = useSocket();
 
-	const chatStore = useChatStore();
-
-	const sfuClient = new SFUClient();
+	const signalChannel = new SocketIOSignalChannel();
+	const sfuClient = new SFUClient(signalChannel);
 	const sfuManager = shallowRef<SFUMeetingManager | null>(null);
 
 	const realtimeListenersSetup = shallowRef(false);
@@ -442,13 +441,6 @@ export function useSFUConnection(deps: {
 					(response as Record<string, unknown>)?.status === "joined" &&
 					(response as Record<string, unknown>).auth_token
 				) {
-					if (
-						(response as Record<string, unknown>).host_only_chat !== undefined
-					) {
-						chatStore.hostOnlyChat = !!(response as Record<string, unknown>)
-							.host_only_chat;
-					}
-
 					connectionState.guestAuthToken = (response as Record<string, unknown>)
 						.auth_token as string;
 					connectionState.guestSfuUrl =
@@ -636,10 +628,6 @@ export function useSFUConnection(deps: {
 			connectionState.guestSfuUrl = (joinResult.sfu_url as string) || null;
 			connectionState.guestSfuPort = (joinResult.sfu_port as string) || null;
 
-			if (joinResult.host_only_chat !== undefined) {
-				chatStore.hostOnlyChat = !!joinResult.host_only_chat;
-			}
-
 			if (joinResult.status === "waiting_for_approval") {
 				lobbyStore.isWaitingForApproval = true;
 				connectionState.isInPreview = false;
@@ -692,10 +680,6 @@ export function useSFUConnection(deps: {
 				(joinResult?.is_cohost || false) as boolean,
 			);
 
-			if (joinResult?.host_only_chat !== undefined) {
-				chatStore.hostOnlyChat = !!joinResult.host_only_chat;
-			}
-
 			setupFrappeRealtimeEventListeners();
 			connectionState.isInPreview = false;
 			connectionState.isConnecting = false;
@@ -720,7 +704,7 @@ export function useSFUConnection(deps: {
 			audioNotificationManager.playLeaveNotification(true);
 
 			if (sfuManager.value) {
-				await sfuManager.value.cleanup();
+				sfuManager.value.cleanup();
 			}
 
 			sfuManager.value = null;
@@ -732,7 +716,7 @@ export function useSFUConnection(deps: {
 		}
 	};
 
-	onUnmounted(async () => {
+	onUnmounted(() => {
 		if (activeSpeakerTimeout.value) {
 			clearTimeout(activeSpeakerTimeout.value);
 			activeSpeakerTimeout.value = null;
@@ -746,7 +730,7 @@ export function useSFUConnection(deps: {
 		removeFrappeRealtimeEventListeners();
 
 		if (sfuManager.value) {
-			await sfuManager.value.cleanup();
+			sfuManager.value.cleanup();
 		}
 		sfuManager.value = null;
 

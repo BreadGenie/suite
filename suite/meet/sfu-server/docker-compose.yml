@@ -1,0 +1,78 @@
+# ==============================================================================
+# Frappe Meet SFU — Docker Compose
+# ==============================================================================
+# Supports CPU-only and NVIDIA GPU deployments. Server auto-detects CUDA:
+# - GPU available → float16 on NVIDIA
+# - CPU only      → int8 on CPU
+#
+# For GPU support, uncomment the `deploy` block below and ensure:
+#   apt install nvidia-container-toolkit && systemctl restart docker
+#
+# Usage:
+#   docker compose up --build     # build & start
+#   docker compose down           # stop
+# ==============================================================================
+
+services:
+  sfu:
+    build:
+      context: ..
+      dockerfile: suite/meet/sfu-server/Dockerfile
+    ports:
+      - "3000:3000"
+      - "40000-40200:40000-40200/udp"
+      - "40000-40200:40000-40200/tcp"
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret}
+      - PORT=3000
+      - HOST=0.0.0.0
+      - WEBRTC_LISTEN_IP=0.0.0.0
+      - WEBRTC_ANNOUNCED_IP=${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
+      - RTC_MIN_PORT=40000
+      - RTC_MAX_PORT=40200
+      - SFU_LOG_LEVEL=debug
+      - WHISPER_SERVER_URL=http://whisper:8080
+      - STT_VAD_THRESHOLD=0.012
+      - NODE_ENV=development
+    depends_on:
+      - whisper
+    command: ["node", "dist/sfu-server/src/server.js"]
+
+  whisper:
+    build:
+      context: ..
+      dockerfile: suite/meet/sfu-server/Dockerfile
+      target: runtime
+    command:
+      - /app/.venv/bin/python3
+      - /app/stt-server/server.py
+    environment:
+      - WHISPER_MODEL=large-v3-turbo
+      - WHISPER_HOST=0.0.0.0
+      - WHISPER_PORT=8080
+      - WHISPER_CPU_THREADS=${WHISPER_CPU_THREADS:-4}
+      - HF_TOKEN=${HF_TOKEN:-}
+      # Auto-detected by server.py (cuda/float16 vs cpu/int8):
+      #   WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, WHISPER_BACKEND
+      - NVIDIA_VISIBLE_DEVICES=all
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 120s
+    # ════════════════════════════════════════════════════════════════════
+    # NVIDIA GPU — uncomment for GPU-accelerated transcription on Linux
+    # Prerequisites:
+    #   apt install nvidia-container-toolkit
+    #   systemctl restart docker
+    # ════════════════════════════════════════════════════════════════════
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

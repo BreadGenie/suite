@@ -1449,6 +1449,11 @@
   dependencies:
     pdfjs-dist "4.2.67"
 
+"@timephy/rnnoise-wasm@^1.0.0":
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/@timephy/rnnoise-wasm/-/rnnoise-wasm-1.0.0.tgz#a8c4f4088c12ca95ede01bc16cc51c7637638012"
+  integrity sha512-zzRdFyALbhaNIuEo3LKazPWxabatbPxkaBrHzRjGDlVHX2dFklh68HUENHlvHkKsq+OOQSC1ag5sGPDMDgg2CA==
+
 "@tiptap/core@^3.26.0", "@tiptap/core@^3.26.1":
   version "3.26.1"
   resolved "https://registry.yarnpkg.com/@tiptap/core/-/core-3.26.1.tgz#a4d3222248af7af01aede146806a5757465cc654"

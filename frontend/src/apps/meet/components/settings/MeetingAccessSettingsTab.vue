@@ -36,15 +36,6 @@
 					/>
 				</div>
 
-				<div class="space-y-3">
-                    <Switch
-                        class="w-full !px-0"
-                        label="Host Only Chat"
-                        description="Restrict chat so only hosts and co-hosts can send messages"
-                        v-model="hostOnlyChat"
-                        :disabled="meetingDoc.updateSettings.loading || meetingDoc.get.loading"
-                    />
-                </div>
 
 			</div>
 		</template>
@@ -54,7 +45,6 @@
 <script setup lang="ts">
 import { debounce, FormControl, Switch, toast } from "frappe-ui";
 import { onMounted, ref, watch } from "vue";
-import { useChatStore } from "@/apps/meet/composables/useChatStore";
 import { useMeetingDoc } from "../../composables/useMeetingDoc";
 import SettingsLayoutBase from "./SettingsLayoutBase.vue";
 
@@ -71,11 +61,8 @@ const {
 	meetingType: globalMeetingType,
 } = useMeetingDoc();
 
-const chatStore = useChatStore();
-
 const allowGuest = ref<boolean>(globalAllowGuest.value);
 const meetingType = ref<string>(globalMeetingType.value);
-const hostOnlyChat = ref<boolean>(chatStore.hostOnlyChat);
 
 const meetingDoc = getMeetingDoc(props.meetingId);
 
@@ -83,9 +70,6 @@ onMounted(async () => {
 	try {
 		allowGuest.value = globalAllowGuest.value;
 		meetingType.value = globalMeetingType.value;
-		if (meetingDoc.doc?.host_only_chat !== undefined) {
-			hostOnlyChat.value = !!meetingDoc.doc.host_only_chat;
-		}
 	} catch (error) {
 		console.error("Failed to load meeting settings");
 	}
@@ -98,24 +82,16 @@ const saveSettings = debounce(async () => {
 		await meetingDoc.updateSettings.submit({
 			allow_guest: allowGuest.value,
 			meeting_type: meetingType.value,
-			host_only_chat: hostOnlyChat.value,
 		});
 
 		await meetingDoc.reload();
 	} catch (error) {
 		console.error("Failed to update meeting settings:", error);
 		toast.error("Failed to update meeting settings");
-
-		if (meetingDoc.doc?.host_only_chat !== undefined) {
-			hostOnlyChat.value = !!meetingDoc.doc.host_only_chat;
-		}
 	}
-}, 300);
+}, 3000);
 
-watch(hostOnlyChat, (newValue) => {
-	chatStore.hostOnlyChat = newValue;
-});
-watch([allowGuest, meetingType, hostOnlyChat], () => {
+watch([allowGuest, meetingType], () => {
 	if (!meetingDoc.get.loading) {
 		saveSettings();
 	}

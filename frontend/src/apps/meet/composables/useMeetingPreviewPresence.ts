@@ -16,26 +16,6 @@ export function useMeetingPreviewPresence(meetingId: string) {
 	const participants = ref<ParticipantPreview[]>([]);
 	const error = ref<string | null>(null);
 	let socket: Socket | null = null;
-	let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-	let isRefreshing = false;
-
-	const scheduleTokenRefresh = (expiresIn: number) => {
-		if (refreshTimer) {
-			clearTimeout(refreshTimer);
-		}
-
-		// refresh at 90% of token expires
-		const refreshAfter = Math.max(Math.floor(expiresIn * 0.9), 10) * 1000;
-
-		refreshTimer = setTimeout(async () => {
-			if (isRefreshing || !socket) return;
-			isRefreshing = true;
-
-			console.log("Refreshing preview presence token");
-			await fetchPresenceToken.fetch();
-			isRefreshing = false;
-		}, refreshAfter);
-	};
 
 	const fetchPresenceToken = createResource({
 		url: "suite.meet.api.meeting.get_sfu_presence_preview_token",
@@ -50,7 +30,7 @@ export function useMeetingPreviewPresence(meetingId: string) {
 		},
 		onError(err: FrappeRequestError) {
 			error.value = err.messages?.length
-				? err.messages[err.messages.length - 1]
+				? err.messages.join(", ")
 				: "Failed to fetch presence token";
 		},
 	});
@@ -65,20 +45,6 @@ export function useMeetingPreviewPresence(meetingId: string) {
 			return;
 		}
 
-		// not initial connection, just update token and reconnect
-		if (socket) {
-			socket.auth = { token: tokenData.auth_token };
-			socket.disconnect();
-			socket.connect();
-
-			// schedule next refresh
-			if (tokenData.expires_in) {
-				scheduleTokenRefresh(tokenData.expires_in);
-			}
-			return;
-		}
-
-		// initial connection (socket doesn't exist)
 		let sfuUrl: string;
 		const urlObj = new URL(tokenData.sfu_url);
 		const isSecured = urlObj.protocol === "https:";
@@ -177,11 +143,6 @@ export function useMeetingPreviewPresence(meetingId: string) {
 				participants.value.splice(index, 1);
 			}
 		});
-
-		// schedule the first token refresh
-		if (tokenData.expires_in) {
-			scheduleTokenRefresh(tokenData.expires_in);
-		}
 	};
 
 	const refresh = (): void => {
@@ -189,11 +150,9 @@ export function useMeetingPreviewPresence(meetingId: string) {
 		fetchPresenceToken.fetch();
 	};
 
-	onUnmounted(() => {
-		if (refreshTimer) {
-			clearTimeout(refreshTimer);
-		}
+	// fetchPresenceToken.fetch();
 
+	onUnmounted(() => {
 		if (socket) {
 			socket.off("participant_joined");
 			socket.off("participant_left");

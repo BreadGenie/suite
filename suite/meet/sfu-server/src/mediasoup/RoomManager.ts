@@ -32,16 +32,10 @@ export class RoomManager {
 			audioLevelObserver.on('volumes', (volumes) => {
 				const activeSpeakerIds: string[] = [];
 
-				for (const { producer, volume } of volumes) {
-					if (volume > -70) {
-						const peer = Array.from(room.peers.values()).find((p) =>
-							Array.from(p.producers.values()).some(
-								(prod) => prod.id === producer.id,
-							),
-						);
-						if (peer && !activeSpeakerIds.includes(peer.id)) {
-							activeSpeakerIds.push(peer.id);
-						}
+				for (const { producer } of volumes) {
+					const peerId = room.producerToPeerId.get(producer.id);
+					if (peerId && !activeSpeakerIds.includes(peerId)) {
+						activeSpeakerIds.push(peerId);
 					}
 				}
 
@@ -54,6 +48,7 @@ export class RoomManager {
 			router,
 			audioLevelObserver,
 			peers: new Map(),
+			producerToPeerId: new Map(),
 			created: new Date(),
 		};
 

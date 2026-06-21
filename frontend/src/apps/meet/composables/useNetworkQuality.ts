@@ -1,9 +1,4 @@
 import { inject, onMounted, onUnmounted, type Ref, ref } from "vue";
-import {
-	type ConsumerSample,
-	extractInboundBytesReceived,
-	StallDetector,
-} from "../utils/media/stallDetector";
 import type { SFUMeetingManager } from "../utils/SFUMeetingManager";
 
 type NetworkQuality = "good" | "poor" | "critical";
@@ -16,21 +11,14 @@ interface NetworkStats {
 	isValid: boolean;
 }
 
-const POOR_RTT_MS = 450;
-const CRITICAL_RTT_MS = 900;
-const POOR_PACKET_LOSS_PERCENT = 8;
-const CRITICAL_PACKET_LOSS_PERCENT = 18;
-const POOR_VIDEO_BITRATE_BPS = 350_000;
-const CRITICAL_VIDEO_BITRATE_BPS = 200_000;
-
 export function useNetworkQuality() {
 	const networkQuality = ref<NetworkQuality>("good");
 	const isPolling = ref(false);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
-	const stallDetector = new StallDetector();
 
 	const pollIntervalMs = 3000;
 	const sfuManagerRef = inject<Ref<SFUMeetingManager | null>>("sfuManager");
+	const sfuManager = sfuManagerRef?.value;
 
 	const updateQuality = (stats: NetworkStats) => {
 		if (!stats.isValid) {
@@ -39,22 +27,11 @@ export function useNetworkQuality() {
 			return;
 		}
 
-		const hasBitrateEstimate = stats.availableOutgoingBitrate > 0;
-		const hasPoorVideoBitrate =
-			hasBitrateEstimate &&
-			stats.availableOutgoingBitrate < POOR_VIDEO_BITRATE_BPS;
-		const hasCriticalVideoBitrate =
-			hasBitrateEstimate &&
-			stats.availableOutgoingBitrate < CRITICAL_VIDEO_BITRATE_BPS;
-
-		// Prefer clear signs of actual media degradation over moderate RTT spikes.
-		const isCritical =
-			stats.packetLoss > CRITICAL_PACKET_LOSS_PERCENT ||
-			stats.rtt > 1_200 ||
-			(stats.rtt > CRITICAL_RTT_MS && hasCriticalVideoBitrate);
-		const isPoor =
-			stats.packetLoss > POOR_PACKET_LOSS_PERCENT ||
-			(stats.rtt > POOR_RTT_MS && hasPoorVideoBitrate);
+		// Threshold
+		// critical: rtt > 600ms or packet loss > 15%
+		const isCritical = stats.rtt > 600 || stats.packetLoss > 15;
+		// poor: rtt > 300ms or packet loss > 5%
+		const isPoor = stats.rtt > 300 || stats.packetLoss > 5;
 
 		if (isCritical) {
 			networkQuality.value = "critical";
@@ -65,54 +42,12 @@ export function useNetworkQuality() {
 		}
 	};
 
-	const checkConsumerStalls = async (): Promise<void> => {
-		const sfuManager = sfuManagerRef?.value;
-		if (!sfuManager) return;
-
-		const consumerManager = sfuManager.mediaManager?.consumerManager;
-		if (!consumerManager) return;
-
-		const consumers = consumerManager.getAllConsumers();
-		if (consumers.length === 0) return;
-
-		const statsResults = await Promise.all(
-			consumers.map(async (entry) => {
-				let bytes: number | null = null;
-				try {
-					const stats = await entry.consumer.getStats();
-					bytes = extractInboundBytesReceived(stats);
-				} catch {
-					bytes = null;
-				}
-				return { entry, bytes };
-			}),
-		);
-
-		const samples: ConsumerSample[] = statsResults.map(({ entry, bytes }) => ({
-			id: entry.id,
-			kind: entry.kind,
-			isPaused: () => entry.consumer.paused,
-			isMuted: () => entry.track?.muted ?? false,
-			getBytesReceived: () => bytes,
-			getCreatedAt: () => entry.createdAt,
-		}));
-
-		const stalledIds = stallDetector.check(samples);
-		if (stalledIds.length === 0) return;
-
-		const recoveryManager = sfuManager.recoveryManager;
-		if (!recoveryManager) return;
-		void recoveryManager.recoverTransportIce(
-			`consumer_stall_${stalledIds.join(",")}`,
-		);
-	};
-
 	const pollStats = async () => {
 		if (isPolling.value) return;
 
 		isPolling.value = true;
 		try {
-			const transportManager = sfuManagerRef?.value?.transportManager;
+			const transportManager = sfuManager?.transportManager;
 
 			if (!transportManager) {
 				networkQuality.value = "good";
@@ -124,8 +59,11 @@ export function useNetworkQuality() {
 			const sendState = tStats?.sendTransport?.state;
 			const recvState = tStats?.recvTransport?.state;
 
-			// Only treat "failed" as a hard error.
-			const isFailed = sendState === "failed" || recvState === "failed";
+			// Local quality should primarily reflect uplink health.
+			// recv can be disconnected while local publishing still works.
+			const sendFailed = ["failed", "disconnected"].includes(sendState);
+			const recvFailed = recvState === "failed";
+			const isFailed = sendFailed || recvFailed;
 
 			if (isFailed) {
 				networkQuality.value = "critical";
@@ -136,8 +74,6 @@ export function useNetworkQuality() {
 				const stats = await transportManager.getNetworkStats();
 				updateQuality(stats);
 			}
-
-			await checkConsumerStalls();
 		} finally {
 			isPolling.value = false;
 		}
@@ -152,7 +88,6 @@ export function useNetworkQuality() {
 			clearInterval(pollInterval);
 			pollInterval = null;
 		}
-		stallDetector.reset();
 	});
 
 	return {

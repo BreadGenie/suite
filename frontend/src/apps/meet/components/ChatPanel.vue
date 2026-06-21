@@ -32,19 +32,7 @@
 								:key="message.id"
 								class="text-sm text-gray-900 whitespace-pre-wrap [overflow-wrap:anywhere] leading-4"
 							>
-								<template
-									v-for="(token, i) in tokenizeChatMessage(message.message)"
-									:key="i"
-								>
-									<a
-										v-if="token.type === 'link'"
-										:href="token.url"
-										target="_blank"
-										rel="noopener noreferrer"
-										class="text-blue-500 underline"
-									>{{ token.text }}</a>
-									<span v-else>{{ token.text }}</span>
-								</template>
+								<span v-html="linkify(message.message)"></span>
 							</div>
 						</div>
 					</div>
@@ -54,29 +42,24 @@
 				</div>
 
 				<form class="p-2 relative" @submit.prevent="handleSend">
-					<template v-if="canSendMessages">
-						<div class="flex gap-2">
-							<FormControl
-								size="md"
-								v-model="draft"
-								@keydown="handleKeydown"
-								placeholder="Type a message"
-								class="flex-1"
-								autocomplete="off"
-								data-testid="chat-input"
-							/>
-							<Button size="md" type="submit" variant="outline" data-testid="chat-send"> Send </Button>
-						</div>
-						<EmojiPicker
-							:show="showEmojiPicker"
-							:filtered-emojis="filteredEmojis"
-							:selected-index="selectedEmojiIndex"
-							@select="addEmoji"
+					<div class="flex gap-2">
+						<FormControl
+							size="md"
+							v-model="draft"
+							@keydown="handleKeydown"
+							placeholder="Type a message"
+							class="flex-1"
+							autocomplete="off"
+							data-testid="chat-input"
 						/>
-					</template>
-					<div v-else class="text-center text-sm text-gray-500 py-3 bg-gray-50 rounded border border-gray-200 m-2">
-						The host has restricted chat to hosts and co-hosts only.
+						<Button size="md" type="submit" variant="outline" data-testid="chat-send"> Send </Button>
 					</div>
+					<EmojiPicker
+						:show="showEmojiPicker"
+						:filtered-emojis="filteredEmojis"
+						:selected-index="selectedEmojiIndex"
+						@select="addEmoji"
+					/>
 				</form>
 			</div>
 		</div>
@@ -96,7 +79,6 @@ import {
 	toRefs,
 	watch,
 } from "vue";
-import { tokenizeChatMessage } from "../utils/chatMessageTokens";
 import EmojiPicker from "./EmojiPicker.vue";
 
 interface ChatMessage {
@@ -123,9 +105,6 @@ const props = defineProps<{
 	userId?: string;
 	userName?: string;
 	messages?: ChatMessage[] | { value: ChatMessage[] };
-	isHost?: boolean;
-	isCohost?: boolean;
-	hostOnlyChat?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -140,11 +119,6 @@ const draft = ref("");
 const selectedEmojiIndex = ref(0);
 const filteredEmojis = ref<EmojiItem[]>([]);
 const isEmojiDataReady = ref(false);
-
-const canSendMessages = computed(() => {
-	if (!props.hostOnlyChat) return true;
-	return props.isHost || props.isCohost;
-});
 
 const defaultEmojis: EmojiItem[] = [
 	{ emoji: "😀", keywords: ["smile"] },
@@ -231,6 +205,14 @@ function time(ts) {
 	} catch {
 		return "";
 	}
+}
+
+function linkify(text) {
+	const urlRegex = /(https?:\/\/[^\s]+)/g;
+	return text.replace(
+		urlRegex,
+		'<a href="$1" target="_blank" rel="noopener noreferrer" class="text-blue-500 underline">$1</a>',
+	);
 }
 
 const showEmojiPicker = computed(() => {
@@ -351,7 +333,6 @@ function handleSend() {
 		return;
 	}
 	const text = draft.value.trim();
-	if (!canSendMessages.value) return;
 	if (!text) return;
 	emit("send", text);
 	draft.value = "";
