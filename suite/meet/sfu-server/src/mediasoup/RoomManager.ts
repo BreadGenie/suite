@@ -86,12 +86,12 @@ export class RoomManager {
 		return this.rooms.get(roomId);
 	}
 
-	getRouter(roomId: string): mediasoup.types.Router | undefined {
-		return this.routers.get(roomId);
-	}
-
 	getAllRooms(): Room[] {
 		return Array.from(this.rooms.values());
+	}
+
+	getRouter(roomId: string): mediasoup.types.Router | undefined {
+		return this.routers.get(roomId);
 	}
 
 	getRoomStats(roomId: string): RoomStats | null {
@@ -112,15 +112,6 @@ export class RoomManager {
 				0,
 			),
 		};
-	}
-
-	getAllRoomsStats(): RoomStats[] {
-		const stats: RoomStats[] = [];
-		for (const [roomId] of this.rooms) {
-			const stat = this.getRoomStats(roomId);
-			if (stat) stats.push(stat);
-		}
-		return stats;
 	}
 
 	getRoomCount(): number {

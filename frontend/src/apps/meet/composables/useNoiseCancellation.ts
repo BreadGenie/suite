@@ -1,4 +1,8 @@
 import { onUnmounted, type Ref, ref } from "vue";
+import {
+	createNoiseSuppressionAudioWorklet,
+	type NoiseSuppressionAudioWorkletHandle,
+} from "@workadventure/noise-suppression/audio-worklet";
 
 interface NoiseCancellationResult {
 	stream: MediaStream;
@@ -15,37 +19,8 @@ interface UseNoiseCancellationReturn {
 	stopProcessing: () => void;
 }
 
-const registeredContexts = new WeakSet<AudioContext>();
-let workletRegistrationPromise: Promise<void> | null = null;
-
-async function registerWorklet(audioContext: AudioContext): Promise<void> {
-	if (registeredContexts.has(audioContext)) {
-		return;
-	}
-
-	if (workletRegistrationPromise) {
-		return workletRegistrationPromise;
-	}
-
-	workletRegistrationPromise = (async () => {
-		try {
-			const workletUrl = await import(
-				"@timephy/rnnoise-wasm/NoiseSuppressorWorklet?worker&url"
-			);
-
-			await audioContext.audioWorklet.addModule(workletUrl.default);
-
-			registeredContexts.add(audioContext);
-		} finally {
-			workletRegistrationPromise = null;
-		}
-	})();
-
-	return workletRegistrationPromise;
-}
-
 /**
- * Composable for noise cancellation using RNNoise
+ * Composable for noise cancellation using DTLN.
  */
 export function useNoiseCancellation(): UseNoiseCancellationReturn {
 	const isProcessing = ref<boolean>(false);
@@ -55,7 +30,7 @@ export function useNoiseCancellation(): UseNoiseCancellationReturn {
 	let audioContext: AudioContext | null = null;
 	let sourceNode: MediaStreamAudioSourceNode | null = null;
 	let destinationNode: MediaStreamAudioDestinationNode | null = null;
-	let noiseSuppressorNode: AudioWorkletNode | null = null;
+	let noiseSuppressorWorklet: NoiseSuppressionAudioWorkletHandle | null = null;
 
 	async function applyNoiseCancellation(
 		inputStream: MediaStream,
@@ -74,18 +49,11 @@ export function useNoiseCancellation(): UseNoiseCancellationReturn {
 
 			stopProcessing();
 
-			// RNNoise expects 48kHz sample rate
-			audioContext = new AudioContext({ sampleRate: 48000 });
-
-			await registerWorklet(audioContext);
-
-			const { NoiseSuppressorWorklet_Name } = await import(
-				"@timephy/rnnoise-wasm"
-			);
-
-			noiseSuppressorNode = new AudioWorkletNode(
+			// DTLN expects mono 16kHz audio.
+			audioContext = new AudioContext({ sampleRate: 16000 });
+			noiseSuppressorWorklet = await createNoiseSuppressionAudioWorklet(
 				audioContext,
-				NoiseSuppressorWorklet_Name,
+				{ bypassUntilReady: true },
 			);
 
 			const audioOnlyStream = new MediaStream([audioTrack]);
@@ -94,8 +62,8 @@ export function useNoiseCancellation(): UseNoiseCancellationReturn {
 			destinationNode = audioContext.createMediaStreamDestination();
 
 			// connect the audio graph: source -> noise suppressor -> destination
-			sourceNode.connect(noiseSuppressorNode);
-			noiseSuppressorNode.connect(destinationNode);
+			sourceNode.connect(noiseSuppressorWorklet.node);
+			noiseSuppressorWorklet.node.connect(destinationNode);
 
 			const outputStream = destinationNode.stream;
 			processedStream.value = outputStream;
@@ -105,7 +73,7 @@ export function useNoiseCancellation(): UseNoiseCancellationReturn {
 				cleanup: stopProcessing,
 			};
 		} catch (err) {
-			console.error("[RNNoise] Failed to apply noise cancellation:", err);
+			console.error("[DTLN] Failed to apply noise cancellation:", err);
 			error.value =
 				err instanceof Error
 					? err.message
@@ -131,13 +99,13 @@ export function useNoiseCancellation(): UseNoiseCancellationReturn {
 			sourceNode = null;
 		}
 
-		if (noiseSuppressorNode) {
+		if (noiseSuppressorWorklet) {
 			try {
-				noiseSuppressorNode.disconnect();
+				noiseSuppressorWorklet.dispose();
 			} catch (e) {
 				console.warn("Failed to disconnect noise suppressor node:", e);
 			}
-			noiseSuppressorNode = null;
+			noiseSuppressorWorklet = null;
 		}
 
 		if (audioContext && audioContext.state !== "closed") {

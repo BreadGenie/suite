@@ -31,6 +31,7 @@ export class SocketHandlerManager {
 	private rateLimiter: RateLimiter;
 	private fullAccessSockets: Map<string, Set<string>> = new Map(); // roomId -> Set<socketId>
 	private previewSockets: Map<string, Set<string>> = new Map(); // roomId -> Set<socketId>
+	private idleExpirySweep: NodeJS.Timeout | null = null;
 
 	constructor(
 		io: Server<ClientToServerEvents, ServerToClientEvents>,
@@ -220,11 +221,10 @@ export class SocketHandlerManager {
 
 	setupSocketHandlers(): void {
 		this.io.use((socket, next) => {
-			if (this.authManager.authenticateSocket(socket)) {
-				next();
-			} else {
-				next(new Error('Authentication failed'));
+			if (!this.authManager.authenticateSocket(socket)) {
+				return next(new Error('Authentication failed'));
 			}
+			next();
 		});
 
 		this.io.on('connection', (socket) => {
@@ -281,6 +281,31 @@ export class SocketHandlerManager {
 				this.authManager.triggerTokenExpiry(socket, 'invalid_refresh_token');
 			}
 		});
+
+		this.idleExpirySweep = setInterval(
+			() => this.sweepExpiredSockets(),
+			30_000,
+		);
+	}
+
+	private sweepExpiredSockets(): void {
+		for (const [, socket] of this.io.sockets.sockets) {
+			if (this.authManager.isTokenExpired(socket as never)) {
+				loggers.authManager.debug(
+					'Idle sweep: disconnecting expired socket %s (user %s)',
+					socket.id,
+					(socket as { userId?: string }).userId,
+				);
+				this.authManager.triggerTokenExpiry(socket as never, 'idle_sweep');
+			}
+		}
+	}
+
+	stop(): void {
+		if (this.idleExpirySweep) {
+			clearInterval(this.idleExpirySweep);
+			this.idleExpirySweep = null;
+		}
 	}
 
 	private setupRoomHandlers(socket: Socket): void {

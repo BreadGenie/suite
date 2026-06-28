@@ -14,6 +14,7 @@ function makeRoom(): Room {
 		router: {} as Room['router'],
 		audioLevelObserver: {} as Room['audioLevelObserver'],
 		peers: new Map(),
+		producerToPeerId: new Map(),
 		created: new Date(),
 	};
 }

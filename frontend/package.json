@@ -18,9 +18,8 @@
     "@hocuspocus/provider": "^4.1.0",
     "@iframe-resizer/child": "5.5.9",
     "@iframe-resizer/vue": "5.5.9",
-    "@mediapipe/selfie_segmentation": "0.1.1671057942",
-    "@timephy/rnnoise-wasm": "^1.0.0",
-    "@tanstack/vue-virtual": "^3.13.24",
+		"@mediapipe/selfie_segmentation": "0.1.1671057942",
+		"@tanstack/vue-virtual": "^3.13.24",
     "@tato30/vue-pdf": "1.10.0",
     "@tiptap/core": "^3.26.0",
     "@tiptap/extension-bubble-menu": "^3.11.0",
@@ -106,6 +105,7 @@
     "postcss": "^8.5.14",
     "tailwindcss": "^3.4.19",
     "vite": "^8.0.16",
+    "vite-plugin-pwa": "^1.0.1",
     "vitest": "^4.1.6"
   }
 }

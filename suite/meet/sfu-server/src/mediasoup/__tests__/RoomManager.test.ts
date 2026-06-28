@@ -52,7 +52,13 @@ function addPeersTo(room: Room, ...peerIds: string[]): void {
 
 describe('RoomManager', () => {
 	const codecs: RtpCodecCapability[] = [
-		{ kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
+		{
+			kind: 'audio',
+			mimeType: 'audio/opus',
+			preferredPayloadType: 111,
+			clockRate: 48000,
+			channels: 2,
+		},
 	];
 
 	it('createRoom creates a router and an audio level observer; second call returns the same room', async () => {

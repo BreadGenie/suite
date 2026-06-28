@@ -53,9 +53,8 @@
 
 <script lang="ts" setup>
 import { Button, createResource, FormControl, toast } from "frappe-ui";
+import { session, userResource } from "@/boot/session";
 import { useRoute, useRouter } from "vue-router";
-import { session } from "../data/session";
-import { userResource } from "../data/user";
 import FrappeMeetingLogo from "../icons/FrappeMeetingLogo.vue";
 
 const router = useRouter();

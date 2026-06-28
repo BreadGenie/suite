@@ -1,15 +1,16 @@
-import { describe, expect, it, type vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
 	createManager,
 	createMockSocket,
 	type MockSocket,
+	type TypedSocket,
 } from './test-helpers';
 
 function connectFullSocket(
 	harness: ReturnType<typeof createManager>,
 	overrides: Partial<MockSocket> = {},
 ): MockSocket {
-	const socket = createMockSocket(overrides);
+	const socket = harness.createSocket(overrides);
 	harness.connect(socket);
 	return socket;
 }
@@ -46,6 +47,29 @@ function emitJoin(
 }
 
 describe('SocketHandlerManager characterization', () => {
+	it('middleware rejects sockets when authentication fails', () => {
+		const harness = createManager();
+		const socket = createMockSocket();
+		const next = vi.fn();
+
+		harness.authManager.authenticateSocket.mockReturnValue(false);
+		harness.io.middlewareFn?.(socket, next);
+
+		expect(next).toHaveBeenCalledWith(expect.any(Error));
+		expect(next.mock.calls[0]?.[0].message).toBe('Authentication failed');
+	});
+
+	it('middleware proceeds without an error when authentication succeeds', () => {
+		const harness = createManager();
+		const socket = createMockSocket();
+		const next = vi.fn();
+
+		harness.authManager.authenticateSocket.mockReturnValue(true);
+		harness.io.middlewareFn?.(socket, next);
+
+		expect(next).toHaveBeenCalledWith();
+	});
+
 	it('join_room with scope:full adds the socket to fullAccessSockets, calls mediasoup.createRoom + addPeer, and emits existing_raised_hands to the joiner', async () => {
 		const harness = createManager();
 		const socket = connectFullSocket(harness, { id: 'sock-A' });
@@ -114,6 +138,40 @@ describe('SocketHandlerManager characterization', () => {
 		expect(socket.emitCalls.some((c) => c.event === 'participant_joined')).toBe(
 			false,
 		);
+	});
+
+	it('join_room returns an authentication error when socket identity fields are missing', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			userId: undefined,
+			meetingId: undefined,
+		});
+		const callback = vi.fn();
+
+		socket.fire(
+			'join_room',
+			{
+				roomId: 'room-1',
+				userData: {
+					name: 'Alice',
+					userId: 'user-1',
+					avatar: '',
+					is_guest: false,
+				},
+				mediaState: {
+					audio_enabled: true,
+					video_enabled: true,
+				},
+			},
+			callback,
+		);
+		await new Promise((r) => setImmediate(r));
+
+		expect(callback).toHaveBeenCalledWith({
+			success: false,
+			error: 'Authentication required',
+		});
+		expect(harness.mediasoup.createRoom).not.toHaveBeenCalled();
 	});
 
 	it('disconnect of a full-access socket removes the peer, broadcasts participant_left, and closes the room when the last full-access socket leaves', async () => {
@@ -370,5 +428,29 @@ describe('SocketHandlerManager characterization', () => {
 		expect(lowered?.data).toEqual(
 			expect.objectContaining({ participantId: 'rh-1', raised: false }),
 		);
+	});
+
+	describe('idle expiry sweep', () => {
+		it('disconnects sockets whose token has expired, leaves non-expired ones alone', () => {
+			const harness = createManager();
+			const expired = connectFullSocket(harness, { id: 'sock-exp' });
+			const fresh = connectFullSocket(harness, { id: 'sock-fresh' });
+
+			const expiredSocket = expired as unknown as { tokenExpiresAt: number };
+			const freshSocket = fresh as unknown as { tokenExpiresAt: number };
+			expiredSocket.tokenExpiresAt = Date.now() - 1000;
+			freshSocket.tokenExpiresAt = Date.now() + 60_000;
+
+			harness.manager['sweepExpiredSockets']();
+
+			expect(harness.authManager.triggerTokenExpiry).toHaveBeenCalledWith(
+				expired,
+				'idle_sweep',
+			);
+			expect(harness.authManager.triggerTokenExpiry).not.toHaveBeenCalledWith(
+				fresh,
+				expect.anything(),
+			);
+		});
 	});
 });

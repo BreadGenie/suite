@@ -1,6 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import { vi } from 'vitest';
 import type { MediasoupManager } from '../../mediasoup/MediasoupManager';
+import type { SttManager } from '../../stt/SttManager';
 import type {
 	ClientToServerEvents,
 	ServerToClientEvents,
@@ -37,6 +38,7 @@ const SOCKET_DEFAULTS = {
 
 export function createMockSocket(
 	partial: Partial<TypedSocket> = {},
+	adapterRooms: Map<string, Set<string>> | null = null,
 ): MockSocket {
 	const handlers = new Map<string, ((...args: unknown[]) => void)[]>();
 	const emitCalls: { event: string; data: unknown }[] = [];
@@ -71,7 +73,21 @@ export function createMockSocket(
 		},
 		join(roomId: string) {
 			joinCalls.push(roomId);
+			if (adapterRooms) {
+				let set = adapterRooms.get(roomId);
+				if (!set) {
+					set = new Set();
+					adapterRooms.set(roomId, set);
+				}
+				set.add(socket.id);
+			}
 			return Promise.resolve(this);
+		},
+		leave(roomId: string) {
+			if (adapterRooms) {
+				adapterRooms.get(roomId)?.delete(socket.id);
+			}
+			return this;
 		},
 		disconnect(_close: boolean) {
 			return socket;
@@ -93,6 +109,7 @@ export function createMockSocket(
 
 interface MockServer {
 	io: Server<ClientToServerEvents, ServerToClientEvents>;
+	middlewareFn: ((s: Socket, next: (err?: Error) => void) => void) | null;
 	connectionFn: ((s: Socket) => void) | null;
 	socketsAdapterRooms: Map<string, Set<string>>;
 	socketsMap: Map<string, Socket>;
@@ -107,13 +124,15 @@ function createMockServer(): MockServer {
 			ClientToServerEvents,
 			ServerToClientEvents
 		>,
+		middlewareFn: null,
 		connectionFn: null,
 		socketsAdapterRooms,
 		socketsMap,
 	};
 
 	const io = {
-		use() {
+		use(fn: (s: Socket, next: (err?: Error) => void) => void) {
+			mock.middlewareFn = fn;
 			return io;
 		},
 		on(event: string, fn: (s: Socket) => void) {
@@ -144,14 +163,27 @@ function createMockMediasoupManager(): MediasoupManager {
 	} as unknown as MediasoupManager;
 }
 
-function createMockAuthManager(): AuthManager {
+function createMockAuthManager() {
 	return {
+		authenticateSocket: vi.fn().mockReturnValue(true),
 		ensureFullAccess: vi.fn(),
 		ensurePresenceAccess: vi.fn(),
-		isTokenExpired: vi.fn().mockReturnValue(false),
+		isTokenExpired: vi.fn((socket: { tokenExpiresAt?: number }) => {
+			if (!socket?.tokenExpiresAt) return false;
+			return Date.now() >= socket.tokenExpiresAt;
+		}),
 		triggerTokenExpiry: vi.fn(),
 		cleanupSocket: vi.fn(),
-	} as unknown as AuthManager;
+	};
+}
+
+function createMockSttManager() {
+	return {
+		setActiveSpeakers: vi.fn(),
+		addSubscriber: vi.fn().mockReturnValue(true),
+		removeSubscriber: vi.fn().mockReturnValue(false),
+		stopRoom: vi.fn().mockResolvedValue(undefined),
+	} as unknown as SttManager;
 }
 
 interface ManagerHarness {
@@ -159,14 +191,22 @@ interface ManagerHarness {
 	io: MockServer;
 	mediasoup: ReturnType<typeof createMockMediasoupManager>;
 	authManager: ReturnType<typeof createMockAuthManager>;
+	sttManager: ReturnType<typeof createMockSttManager>;
 	connect(socket: MockSocket): void;
+	createSocket(overrides?: Partial<TypedSocket>): MockSocket;
 }
 
 export function createManager(): ManagerHarness {
 	const io = createMockServer();
 	const mediasoup = createMockMediasoupManager();
 	const authManager = createMockAuthManager();
-	const manager = new SocketHandlerManager(io.io, mediasoup, authManager);
+	const sttManager = createMockSttManager();
+	const manager = new SocketHandlerManager(
+		io.io,
+		mediasoup,
+		authManager as unknown as AuthManager,
+		sttManager,
+	);
 	manager.setupSocketHandlers();
 
 	const connect = (socket: MockSocket) => {
@@ -175,5 +215,32 @@ export function createManager(): ManagerHarness {
 		io.connectionFn(socket);
 	};
 
-	return { manager, io, mediasoup, authManager, connect };
+	const createSocket = (overrides: Partial<TypedSocket> = {}): MockSocket => {
+		const socket = createMockSocket(overrides, io.socketsAdapterRooms);
+		io.socketsMap.set(socket.id, socket);
+		const origDisconnect = socket.disconnect.bind(socket);
+		(socket as { disconnect: (close: boolean) => void }).disconnect = (
+			close: boolean,
+		) => {
+			// Mirror socket.io's auto-leave-on-disconnect: remove the socket
+			// from every adapter room it joined.
+			for (const [roomId, ids] of io.socketsAdapterRooms) {
+				ids.delete(socket.id);
+				if (ids.size === 0) io.socketsAdapterRooms.delete(roomId);
+			}
+			io.socketsMap.delete(socket.id);
+			return origDisconnect(close);
+		};
+		return socket;
+	};
+
+	return {
+		manager,
+		io,
+		mediasoup,
+		authManager,
+		sttManager,
+		connect,
+		createSocket,
+	};
 }
