@@ -70,14 +70,15 @@
 				/>
 			</template>
 			<template #actions>
-				<Button
-					variant="solid"
-					:disabled="!isMeetingCodeValid(meetingCode)"
-					@click="joinWithCode"
-					data-testid="join-meeting-button"
-				>
-					Join
-				</Button>
+				<div class="flex justify-end">
+					<Button
+						variant="solid"
+						@click="joinWithCode"
+						data-testid="join-meeting-button"
+					>
+						Join
+					</Button>
+				</div>
 			</template>
 		</Dialog>
 	</div>
