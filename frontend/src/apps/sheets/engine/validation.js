@@ -2,10 +2,60 @@
 // Rule shape: { type: 'list',        options: ['A','B','C'], message? }
 //             { type: 'number',      operator: 'between'|'gt'|'gte'|'lt'|'lte'|'eq'|'neq'|'not_between', min, max?, message? }
 //             { type: 'text_length', operator: 'between'|'gt'|'gte'|'lt'|'lte'|'eq'|'neq'|'not_between', min, max?, message? }
+//             { type: 'checkbox',    message? }  — cell holds TRUE / FALSE, painted as a tickbox
 // Pure state, no DOM dependency.
 
 import { parseCellId, colLabel } from '../utils/cells.js'
 import { deepClone } from '../utils/deep-clone.js'
+
+function _checkNumOp(n, op, min, max) {
+  switch (op || 'between') {
+    case 'between':     return (min == null || n >= min) && (max == null || n <= max)
+    case 'not_between': return !(n >= min && n <= max)
+    case 'gt':          return n >  min
+    case 'gte':         return n >= min
+    case 'lt':          return n <  min
+    case 'lte':         return n <= min
+    case 'eq':          return n === min
+    case 'neq':         return n !== min
+    default:            return true
+  }
+}
+
+// Pure rule check — given a rule and a value, is the value allowed?
+// Shared by the engine's per-cell validate() and the canvas painter (which
+// needs to know validity to draw the invalid marker) so there's one source
+// of truth for what "valid" means. No state, no sheet lookup.
+export function checkRule(rule, value) {
+  if (!rule) return { valid: true }
+
+  if (rule.type === 'list') {
+    const opts = rule.options || []
+    const ok = opts.includes(String(value))
+    return { valid: ok, message: ok ? null : (rule.message || `Value must be one of: ${opts.join(', ')}`) }
+  }
+
+  if (rule.type === 'number') {
+    const n = parseFloat(value)
+    if (isNaN(n)) return { valid: false, message: rule.message || 'Value must be a number' }
+    const ok = _checkNumOp(n, rule.operator, rule.min, rule.max)
+    return { valid: ok, message: ok ? null : (rule.message || 'Value out of allowed range') }
+  }
+
+  if (rule.type === 'text_length') {
+    const len = String(value == null ? '' : value).length
+    const ok = _checkNumOp(len, rule.operator, rule.min, rule.max)
+    return { valid: ok, message: ok ? null : (rule.message || 'Text length out of allowed range') }
+  }
+
+  if (rule.type === 'checkbox') {
+    const up = String(value).toUpperCase()
+    const ok = up === 'TRUE' || up === 'FALSE'
+    return { valid: ok, message: ok ? null : (rule.message || 'Value must be TRUE or FALSE') }
+  }
+
+  return { valid: true }
+}
 
 export function createValidationEngine() {
   // { sheetName: { cellId: rule } }
@@ -33,43 +83,8 @@ export function createValidationEngine() {
     return store[sheet] || {}
   }
 
-  function _checkNumOp(n, op, min, max) {
-    switch (op || 'between') {
-      case 'between':     return (min == null || n >= min) && (max == null || n <= max)
-      case 'not_between': return !(n >= min && n <= max)
-      case 'gt':          return n >  min
-      case 'gte':         return n >= min
-      case 'lt':          return n <  min
-      case 'lte':         return n <= min
-      case 'eq':          return n === min
-      case 'neq':         return n !== min
-      default:            return true
-    }
-  }
-
   function validate(id, value, sheet = 'Sheet1') {
-    const rule = get(id, sheet)
-    if (!rule) return { valid: true }
-
-    if (rule.type === 'list') {
-      const ok = rule.options.includes(String(value))
-      return { valid: ok, message: ok ? null : (rule.message || `Value must be one of: ${rule.options.join(', ')}`) }
-    }
-
-    if (rule.type === 'number') {
-      const n = parseFloat(value)
-      if (isNaN(n)) return { valid: false, message: rule.message || 'Value must be a number' }
-      const ok = _checkNumOp(n, rule.operator, rule.min, rule.max)
-      return { valid: ok, message: ok ? null : (rule.message || 'Value out of allowed range') }
-    }
-
-    if (rule.type === 'text_length') {
-      const len = String(value == null ? '' : value).length
-      const ok = _checkNumOp(len, rule.operator, rule.min, rule.max)
-      return { valid: ok, message: ok ? null : (rule.message || 'Text length out of allowed range') }
-    }
-
-    return { valid: true }
+    return checkRule(get(id, sheet), value)
   }
 
   function _shift(sheet, pred, newIdFn, descending) {

@@ -3,6 +3,7 @@ import type {
 	AppData,
 	CloseProducerResult,
 	Consumer,
+	ConsumerData,
 	DtlsParameters,
 	ExistingProducer,
 	IceCandidate,
@@ -11,6 +12,7 @@ import type {
 	ParticipantInfo,
 	Peer,
 	PeerInfo,
+	ProducerData,
 	Room,
 	RtpCapabilities,
 	RtpCodecCapability,
@@ -31,7 +33,7 @@ export class MediasoupManager {
 	private peerManager = new PeerManager();
 	private transportManager = new TransportManager();
 	private producerManager = new ProducerManager();
-	private consumerManager = new ConsumerManager();
+	consumerManager = new ConsumerManager();
 	private sttManager: SttManager | null = null;
 
 	private networkQualityListeners: Array<
@@ -90,7 +92,6 @@ export class MediasoupManager {
 					delete peerState[kind];
 					this.evaluateAndEmitNetworkQuality(roomId, peerId);
 				}
-				// Notify STT manager
 				if (this.sttManager && kind === 'audio') {
 					this.sttManager.stopTranscription(roomId, peerId).catch((error) => {
 						loggers.mediasoupManager.warn(
@@ -209,7 +210,19 @@ export class MediasoupManager {
 	async removePeer(roomId: string, peerId: string): Promise<void> {
 		const room = this.roomManager.getRoom(roomId);
 		if (!room) return;
+		const peer = room.peers.get(peerId);
 
+		for (const producerId of this.producerManager.getProducerIdsByPeer(
+			roomId,
+			peerId,
+		)) {
+			this.closeProducer(producerId);
+		}
+		this.consumerManager.closePeerConsumers(roomId, peerId);
+		this.transportManager.closePeerTransports(roomId, peerId);
+		peer?.producers.clear();
+		peer?.consumers.clear();
+		peer?.transports.clear();
 		this.peerManager.removePeer(room, peerId);
 		this.peerScores.delete(peerId);
 	}
@@ -291,7 +304,11 @@ export class MediasoupManager {
 		rtpParameters: RtpParameters,
 		kind: 'audio' | 'video',
 		appData: AppData = {},
+		senderId?: number,
+		paused = false,
 	): Promise<{ id: string; kind: 'audio' | 'video'; appData: AppData }> {
+		const enrichedAppData: AppData =
+			senderId !== undefined ? { ...appData, senderId } : appData;
 		const transportData = this.transportManager.getTransportData(transportId);
 		if (!transportData) {
 			throw new Error(`Transport ${transportId} not found`);
@@ -313,7 +330,8 @@ export class MediasoupManager {
 			peerId,
 			rtpParameters,
 			kind,
-			appData,
+			enrichedAppData,
+			paused,
 		);
 
 		const producer = this.producerManager.getProducer(result.id);
@@ -321,14 +339,12 @@ export class MediasoupManager {
 			throw new Error(`Failed to create producer ${result.id}`);
 		}
 		peer.producers.set(result.id, producer);
-		room.producerToPeerId.set(result.id, peerId);
 
 		// Add audio producers to the audio level observer for active speaker detection
 		if (kind === 'audio') {
 			room.audioLevelObserver.addProducer({ producerId: result.id });
 		}
 
-		// Start STT transcription for audio producers
 		if (this.sttManager && kind === 'audio') {
 			const peerInfo = peer.info;
 			this.sttManager
@@ -354,6 +370,7 @@ export class MediasoupManager {
 		kind: 'audio' | 'video';
 		rtpParameters: RtpParameters;
 		paused: boolean;
+		senderId?: number;
 	}> {
 		const transportData = this.transportManager.getTransportData(transportId);
 		if (!transportData) {
@@ -403,7 +420,13 @@ export class MediasoupManager {
 		}
 		peer.consumers.set(result.id, consumer);
 
-		return result;
+		return {
+			...result,
+			senderId:
+				typeof producerData.producer.appData?.senderId === 'number'
+					? producerData.producer.appData.senderId
+					: undefined,
+		};
 	}
 
 	closeProducer(producerId: string): CloseProducerResult {
@@ -418,7 +441,6 @@ export class MediasoupManager {
 			if (peer) {
 				peer.producers.delete(producerId);
 			}
-			room.producerToPeerId.delete(producerId);
 		}
 
 		// Close related consumers
@@ -456,6 +478,14 @@ export class MediasoupManager {
 
 	async resumeProducer(producerId: string): Promise<boolean> {
 		return this.producerManager.resumeProducer(producerId);
+	}
+
+	async requestConsumerKeyFrame(consumerId: string): Promise<boolean> {
+		return this.consumerManager.requestConsumerKeyFrame(consumerId);
+	}
+
+	getConsumerData(consumerId: string): ConsumerData | undefined {
+		return this.consumerManager.getConsumerData(consumerId);
 	}
 
 	async updateConsumerPreferences(options: {
@@ -504,6 +534,7 @@ export class MediasoupManager {
 		let appliedLayers:
 			| { spatialLayer: number | null; temporalLayer: number | null }
 			| undefined;
+		let previousSpatial: number | null = null;
 
 		if (consumer.kind === 'video') {
 			const spatialLayer = this.estimateSpatialLayer(
@@ -540,22 +571,7 @@ export class MediasoupManager {
 						layerResult.temporalLayer,
 					);
 					const currentLayers = consumer.currentLayers;
-					const previousSpatial = currentLayers?.spatialLayer ?? null;
-					if (
-						(previousSpatial !== null &&
-							layerResult.spatialLayer > previousSpatial) ||
-						wasPaused
-					) {
-						try {
-							await consumer.requestKeyFrame();
-						} catch (error) {
-							loggers.mediasoupManager.warn(
-								'Failed to request key frame for consumer %s: %s',
-								consumer.id,
-								(error as Error).message,
-							);
-						}
-					}
+					previousSpatial = currentLayers?.spatialLayer ?? null;
 				}
 			} else {
 				// Even if we didn't change layers, return the current state
@@ -572,6 +588,23 @@ export class MediasoupManager {
 						appliedLayers.temporalLayer,
 					);
 				}
+			}
+		}
+
+		const layerUpgraded =
+			appliedLayers &&
+			appliedLayers.spatialLayer !== null &&
+			previousSpatial !== null &&
+			appliedLayers.spatialLayer > previousSpatial;
+		if (consumer.kind === 'video' && (wasPaused || layerUpgraded)) {
+			try {
+				await consumer.requestKeyFrame();
+			} catch (error) {
+				loggers.mediasoupManager.warn(
+					'Failed to request key frame for consumer %s: %s',
+					consumer.id,
+					(error as Error).message,
+				);
 			}
 		}
 
@@ -741,6 +774,9 @@ export class MediasoupManager {
 				return {
 					id: peerId,
 					user_id: peerId,
+					senderId: peer.info.senderId,
+					sender_id: peer.info.senderId,
+					is_host: peer.info.isHost || false,
 					info: {
 						name: peer.info.name,
 						userId: peer.info.userId,
@@ -784,15 +820,19 @@ export class MediasoupManager {
 		}
 	}
 
+	getRoomPeers(roomId: string): Map<string, Peer> | undefined {
+		return this.roomManager.getRoom(roomId)?.peers;
+	}
+
+	getProducerData(producerId: string): ProducerData | undefined {
+		return this.producerManager.getProducerData(producerId);
+	}
+
 	peerExistsInRoom(roomId: string, peerId: string): boolean {
 		const room = this.roomManager.getRoom(roomId);
 		return room?.peers.has(peerId) || false;
 	}
 
-	/**
-	 * Start STT transcription for all existing audio producers in a room.
-	 * Called when STT is toggled on after participants have already joined.
-	 */
 	async startSttForExistingProducers(
 		roomId: string,
 		sttManager: SttManager,
@@ -809,8 +849,7 @@ export class MediasoupManager {
 		const started: string[] = [];
 		for (const [peerId, peer] of room.peers) {
 			for (const producer of peer.producers.values()) {
-				if (producer.kind !== 'audio') continue;
-				if (producer.closed) continue;
+				if (producer.kind !== 'audio' || producer.closed) continue;
 
 				try {
 					await sttManager.startTranscription(
@@ -837,11 +876,6 @@ export class MediasoupManager {
 				started.length,
 				roomId,
 			);
-		} else {
-			loggers.mediasoupManager.debug(
-				'No existing audio producers to transcribe in room %s',
-				roomId,
-			);
 		}
 	}
 
@@ -866,7 +900,6 @@ export class MediasoupManager {
 		};
 		loggers.mediasoupManager.info('Initial cleanup stats: %o', initialStats);
 
-		// Stop all STT sessions
 		if (this.sttManager) {
 			const sttManager = this.sttManager;
 			await Promise.all(

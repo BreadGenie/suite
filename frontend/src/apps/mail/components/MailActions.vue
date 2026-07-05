@@ -42,7 +42,12 @@ import {
 } from 'lucide-vue-next'
 import { Button, Dropdown, createResource, toast } from 'frappe-ui'
 
-import { downloadUrlAsFile, raisePromiseToast, raiseToast } from '@/apps/mail/utils'
+import {
+	downloadUrlAsFile,
+	matchesScreenedValue,
+	raisePromiseToast,
+	raiseToast,
+} from '@/apps/mail/utils'
 import { useBlockSender, useScreenSize, useUndo } from '@/apps/mail/utils/composables'
 import { userStore } from '@/apps/mail/stores/user'
 
@@ -79,15 +84,19 @@ const emit = defineEmits(['setFlagged', 'syncUnseen'])
 const { isMobile } = useScreenSize()
 const route = useRoute()
 const router = useRouter()
-const { accountId, mailboxes, mailboxIds, identities, screenedAddresses } = userStore()
+// Read store.accountId live in makeParams; destructuring would snapshot the
+// unwrapped value and miss account switches while this component stays mounted.
+const store = userStore()
+const { mailboxes, mailboxIds, identities, screenedAddresses } = store
 const { setUndoAction, undo } = useUndo()
 const { promptBlockSenders, willJunkSenders } = useBlockSender()
 const user = inject('$user')
 
-// A sender is "blocked" when screened with the Reject action (their mail is discarded).
+// A sender is "blocked" when screened with the Reject action (their mail is discarded) — either by their
+// exact address or by a '@domain' entry covering them.
 const isSenderBlocked = (email: string) =>
 	screenedAddresses.data?.some(
-		(a: ScreenedAddress) => a.email === email && a.action === 'Reject',
+		(a: ScreenedAddress) => a.action === 'Reject' && matchesScreenedValue(email, a.email),
 	)
 
 const primaryActions = (mail: Mail): MailAction[] => [
@@ -268,7 +277,7 @@ const downloadEmail = createResource({
 
 const markAsSpam = createResource({
 	url: 'suite.mail.api.mail.set_mails_spam_status',
-	makeParams: ({ spam }: { spam: boolean }) => ({ account_id: accountId, ids: [mail.id], spam }),
+	makeParams: ({ spam }: { spam: boolean }) => ({ account: store.accountId, ids: [mail.id], spam }),
 })
 
 const handleMarkAsSpam = (spam: boolean, isUndo = false) => {
@@ -303,7 +312,7 @@ const handleMarkAsSpam = (spam: boolean, isUndo = false) => {
 const moveMail = createResource({
 	url: 'suite.mail.api.mail.move_mails',
 	makeParams: (mailbox: string) => ({
-		account_id: accountId,
+		account: store.accountId,
 		ids: [mail.id],
 		mailbox,
 		clear_junk: mail.junk === 1 && mailbox !== mailboxIds.junk,
@@ -331,7 +340,7 @@ const handleMoveMail = (mailbox: string, isUndo = false) => {
 }
 
 const deleteMail = createResource({
-	url: 'suite.client.doctype.mail_message.mail_message.bulk_delete',
+	url: 'suite.mail.doctype.mail_message.mail_message.bulk_delete',
 	makeParams: () => ({ names: [mail.name] }),
 	onSuccess: () => reloadMails(),
 })
@@ -345,7 +354,7 @@ const handleDeleteMail = () =>
 
 const setMailsSeen = createResource({
 	url: 'suite.mail.api.mail.set_mails_seen',
-	makeParams: ({ ids }: { ids: string[] }) => ({ account_id: accountId, ids, seen: false }),
+	makeParams: ({ ids }: { ids: string[] }) => ({ account: store.accountId, ids, seen: false }),
 	onSuccess: (ids: string[]) => {
 		raiseToast(__('{0} marked as unread.', [ids.length === 1 ? __('Mail') : __('Mails')]))
 		router.push({
@@ -372,7 +381,7 @@ const handleMarkUnreadFromHere = () => {
 const screenSender = createResource({
 	url: 'suite.mail.api.mail.screen_email_address',
 	makeParams: ({ action }: { action: string }) => ({
-		account_id: accountId,
+		account: store.accountId,
 		email: mail.from_email,
 		action,
 	}),
@@ -396,12 +405,12 @@ const handleScreenSender = (action: 'Accepted' | 'Reject') => {
 
 const blockEmailAddress = createResource({
 	url: 'suite.mail.api.mail.screen_email_address',
-	makeParams: () => ({ account_id: accountId, email: mail.from_email, action: 'Reject' }),
+	makeParams: () => ({ account: store.accountId, email: mail.from_email, action: 'Reject' }),
 })
 
 const unblockEmailAddress = createResource({
 	url: 'suite.mail.api.mail.unscreen_email_addresses',
-	makeParams: () => ({ account_id: accountId, emails: [mail.from_email] }),
+	makeParams: () => ({ account: store.accountId, emails: [mail.from_email] }),
 })
 
 const handleBlockAddress = (block: boolean, isUndo = false) => {

@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io';
 import type {
+	ActivePoll,
 	ClientToServerEvents,
 	ServerToClientEvents,
 	UserData,
@@ -12,6 +13,12 @@ export class RoomRegistry {
 	private io: Server<ClientToServerEvents, ServerToClientEvents>;
 	private raisedHands: Record<string, Record<string, string>> = {};
 	private hostOnlyChat: Record<string, boolean> = {};
+	private participantSockets: Record<string, Record<string, string>> = {};
+	private activePolls: Record<string, Map<string, ActivePoll>> = {};
+	private fullAccessSockets: Map<string, Set<string>> = new Map();
+	private previewSockets: Map<string, Set<string>> = new Map();
+	private nextSenderIdByRoom: Map<string, number> = new Map();
+	private participantToSender: Map<string, Map<string, number>> = new Map();
 
 	constructor(io: Server<ClientToServerEvents, ServerToClientEvents>) {
 		this.io = io;
@@ -23,6 +30,67 @@ export class RoomRegistry {
 		scope: 'full' | 'presence-preview',
 	): void {
 		socket.join(scope === 'full' ? fullRoom(roomId) : previewRoom(roomId));
+		const sockets =
+			scope === 'full' ? this.fullAccessSockets : this.previewSockets;
+		if (!sockets.has(roomId)) sockets.set(roomId, new Set());
+		sockets.get(roomId)?.add(socket.id);
+	}
+
+	leaveScope(
+		socket: Socket,
+		roomId: string,
+		scope: 'full' | 'presence-preview',
+	): void {
+		const sockets =
+			scope === 'full' ? this.fullAccessSockets : this.previewSockets;
+		sockets.get(roomId)?.delete(socket.id);
+		socket.leave(scope === 'full' ? fullRoom(roomId) : previewRoom(roomId));
+	}
+
+	getFullAccessSockets(): Map<string, Set<string>> {
+		return this.fullAccessSockets;
+	}
+
+	getParticipantToSender(): Map<string, Map<string, number>> {
+		return this.participantToSender;
+	}
+
+	assignSenderId(roomId: string, participantId: string): number {
+		const map = this.participantToSender.get(roomId) || new Map();
+		const existing = map.get(participantId);
+		if (existing !== undefined) return existing;
+
+		const next = this.nextSenderIdByRoom.get(roomId) || 1;
+		this.nextSenderIdByRoom.set(roomId, next + 1);
+		map.set(participantId, next);
+		this.participantToSender.set(roomId, map);
+		return next;
+	}
+
+	removeSender(roomId: string, participantId: string): void {
+		this.participantToSender.get(roomId)?.delete(participantId);
+	}
+
+	claimParticipant(
+		socket: Socket,
+		roomId: string,
+		participantId: string,
+	): void {
+		if (!this.participantSockets[roomId]) this.participantSockets[roomId] = {};
+		this.participantSockets[roomId][participantId] = socket.id;
+	}
+
+	releaseParticipant(
+		socket: Socket,
+		roomId: string,
+		participantId: string,
+	): boolean {
+		if (this.participantSockets[roomId]?.[participantId] !== socket.id) {
+			return false;
+		}
+
+		delete this.participantSockets[roomId][participantId];
+		return true;
 	}
 
 	setRaisedHand(roomId: string, peerId: string, isoTimestamp: string): void {
@@ -50,6 +118,14 @@ export class RoomRegistry {
 		return Boolean(this.hostOnlyChat[roomId]);
 	}
 
+	getActivePolls(roomId: string): Map<string, ActivePoll> | undefined {
+		return this.activePolls[roomId];
+	}
+
+	setActivePolls(roomId: string, polls: Map<string, ActivePoll>): void {
+		this.activePolls[roomId] = polls;
+	}
+
 	isEmpty(roomId: string): boolean {
 		const adapter = this.io.sockets.adapter;
 		const full = adapter.rooms.get(fullRoom(roomId))?.size ?? 0;
@@ -60,6 +136,12 @@ export class RoomRegistry {
 	cleanupRoom(roomId: string): void {
 		delete this.raisedHands[roomId];
 		delete this.hostOnlyChat[roomId];
+		delete this.participantSockets[roomId];
+		delete this.activePolls[roomId];
+		this.fullAccessSockets.delete(roomId);
+		this.previewSockets.delete(roomId);
+		this.nextSenderIdByRoom.delete(roomId);
+		this.participantToSender.delete(roomId);
 	}
 
 	emitToScope(

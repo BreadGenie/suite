@@ -50,7 +50,7 @@ const store = userStore()
 const router = useRouter()
 
 const defaultAddressBook = {
-	account_id: store.accountId,
+	account: store.accountId,
 	name: '',
 	description: '',
 	default: false,
@@ -59,7 +59,7 @@ const defaultAddressBook = {
 const addressBook = reactive({ ...defaultAddressBook })
 
 const createAddressBook = createResource({
-	url: 'suite.client.doctype.address_book.address_book.add_address_book',
+	url: 'suite.mail.doctype.address_book.address_book.add_address_book',
 	makeParams: () => addressBook,
 	onSuccess: (data: string) => {
 		raiseToast(__('Address book created.'))

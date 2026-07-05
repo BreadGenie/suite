@@ -19,6 +19,7 @@ export class ProducerManager extends EventEmitter {
 		rtpParameters: RtpParameters,
 		kind: 'audio' | 'video',
 		appData: AppData = {},
+		paused = false,
 	): Promise<{ id: string; kind: 'audio' | 'video'; appData: AppData }> {
 		loggers.producerManager.info(
 			'Creating %s producer for peer %s',
@@ -30,6 +31,7 @@ export class ProducerManager extends EventEmitter {
 			kind,
 			rtpParameters,
 			appData,
+			paused,
 		});
 
 		const producerData: ProducerData = {
@@ -153,6 +155,15 @@ export class ProducerManager extends EventEmitter {
 
 	getProducerCount(): number {
 		return this.producers.size;
+	}
+
+	getProducerIdsByPeer(roomId: string, peerId: string): string[] {
+		return Array.from(this.producers.entries())
+			.filter(
+				([, producerData]) =>
+					producerData.roomId === roomId && producerData.peerId === peerId,
+			)
+			.map(([producerId]) => producerId);
 	}
 
 	cleanup(): void {

@@ -157,7 +157,11 @@ import { IconPicker } from 'frappe-ui/icons'
 import { Settings, Zap } from 'lucide-vue-next'
 import { Alert, Button, Dialog, FormControl, Switch, Tabs, createResource } from 'frappe-ui'
 
-import { FOLDER_COLOR_MAP, FOLDER_ICON_MAP } from '@/apps/mail/constants'
+import {
+	FOLDER_COLOR_MAP,
+	FOLDER_ICON_MAP,
+	SCREENER_MAILBOX_NAME,
+} from '@/apps/mail/constants'
 import { raiseToast } from '@/apps/mail/utils'
 import { userStore } from '@/apps/mail/stores/user'
 import SetSieveScriptStateModal from '@/apps/mail/components/Modals/SetSieveScriptStateModal.vue'
@@ -201,8 +205,9 @@ const original = reactive({ ...DEFAULT_FOLDER })
 const isNotificationsDisabled = computed(
 	() =>
 		!isNew.value &&
-		mailbox?.role &&
-		['sent', 'drafts', 'junk', 'trash'].includes(mailbox.role),
+		((mailbox?.role &&
+			['sent', 'drafts', 'junk', 'trash', 'archive'].includes(mailbox.role)) ||
+			mailbox?._name === SCREENER_MAILBOX_NAME),
 )
 
 const isNotDirty = computed(() => {
@@ -225,7 +230,7 @@ const isNotDirty = computed(() => {
 const createFolder = createResource({
 	url: 'suite.mail.api.mail.create_mailbox',
 	makeParams: () => ({
-		account_id: store.accountId,
+		account: store.accountId,
 		...folder,
 		automation_rules: isDefaultAutomation.value ? null : automationRules,
 	}),
@@ -241,7 +246,7 @@ const createFolder = createResource({
 const updateFolder = createResource({
 	url: 'suite.mail.api.mail.update_mailbox',
 	makeParams: () => ({
-		account_id: store.accountId,
+		account: store.accountId,
 		...folder,
 		old_name: original.name,
 		automation_rules: isDefaultAutomation.value ? null : automationRules,
@@ -257,7 +262,7 @@ const updateFolder = createResource({
 
 const createAutomationScript = createResource({
 	url: 'suite.mail.api.sieve.create_automation_script',
-	makeParams: () => ({ account_id: store.accountId, active: true }),
+	makeParams: () => ({ account: store.accountId, active: true }),
 	onSuccess: () => {
 		raiseToast(__('Folder Automation enabled.'))
 		sieveScripts.reload()

@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, inject, reactive, ref, watch } from 'vue'
-import { useDebounceFn } from '@vueuse/core'
-import { Button, Combobox, Dialog, Dropdown, FormControl, createResource, toast } from 'frappe-ui'
+import { Button, Dialog, Dropdown, FormControl, createResource, toast } from 'frappe-ui'
 
-import { getReorderedParticipants, raiseToast } from '@/apps/calendar/utils'
+import { getReorderedParticipants } from '@/apps/calendar/utils'
 import { getRepeatMessage } from '@/apps/calendar/utils/format'
 import { userStore } from '@/apps/calendar/stores/user'
 import EventAlertList from '@/apps/calendar/components/EventAlertList.vue'
-import EventParticipantList from '@/apps/calendar/components/EventParticipantList.vue'
+import ParticipantSelector from '@/apps/calendar/components/ParticipantSelector.vue'
 import EventRepeatSettingsModal from '@/apps/calendar/components/Modals/EventRepeatSettingsModal.vue'
 
 const show = defineModel<boolean>()
@@ -48,6 +47,7 @@ const getEventData = () => {
 		description: ev.description || '',
 		participants: [...ev.participants],
 		recurrence_rule: ev.recurrence_rule,
+		addMeetLink: hasMeetLink(ev),
 	}
 }
 
@@ -81,6 +81,7 @@ const getDefaultEventData = () => {
 			},
 		],
 		recurrence_rule: {},
+		addMeetLink: false,
 	}
 }
 
@@ -103,11 +104,26 @@ const duration = computed(() => {
 	return dayjs.duration({ hours, minutes }).toISOString()
 })
 
+const startsAt = computed(() =>
+	dayjs(`${event.startDate}T${event.isAllDay ? '00:00' : event.startTime}`),
+)
+const endsAt = computed(() =>
+	dayjs(`${event.endDate}T${event.isAllDay ? '00:00' : event.endTime}`),
+)
+
+const isDateTimeValid = computed(() => {
+	if (!event.startDate || !event.endDate) return false
+	if (!event.isAllDay && (!event.startTime || !event.endTime)) return false
+	if (!startsAt.value.isValid() || !endsAt.value.isValid()) return false
+	if (event.isAllDay) return !endsAt.value.isBefore(startsAt.value, 'day')
+	return endsAt.value.isAfter(startsAt.value)
+})
+
 const participants = computed(() =>
 	getReorderedParticipants(
 		event.participants,
 		event.organizer,
-		selectedEvent.calendarEvent?.participants,
+		selectedEvent?.calendarEvent?.participants,
 	),
 )
 
@@ -119,9 +135,7 @@ const eventParams = computed(() => {
 	const params: Record<string, any> = {
 		user: user.data.name,
 		organizer: event.organizer,
-		start: dayjs(`${event.startDate}T${event.isAllDay ? '00:00' : event.startTime}`).format(
-			'YYYY-MM-DD[T]HH:mm:ss',
-		),
+		start: startsAt.value.format('YYYY-MM-DD[T]HH:mm:ss'),
 		duration: duration.value,
 	}
 
@@ -198,6 +212,10 @@ const parseAlert = (a: any) => {
 const hasParticipantsOtherThanUser = (participants: any[]) =>
 	participants?.some((p) => identities.data.every((i) => i.email !== p.email)) ?? false
 
+const hasMeetLink = (ev: any) =>
+	(ev?.links || []).some((link: any) => link?.href?.includes('/meet/')) ||
+	!!ev?.description?.includes('/meet/')
+
 // --- Watchers ---
 
 watch(show, (val) => {
@@ -211,29 +229,6 @@ watch(showRepeatSettings, (val) => {
 	if (!val && !event.recurrence_rule?.frequency) event.repeat = false
 })
 
-// --- Participants ---
-
-const addParticipant = (email: string) => {
-	if (!email?.trim()) return
-	if (!/^\S+@\S+\.\S+$/.test(email)) return raiseToast(__('Invalid email address'), 'error')
-	if (event.participants.some((p) => p.email.toLowerCase() === email.toLowerCase())) return
-	event.participants.push({ email, participation_status: 'NEEDS-ACTION', expect_reply: true })
-}
-
-const handleParticipantEnter = (e: Event) => {
-	const value = (e.target as HTMLInputElement).value.trim()
-	if (!value) return
-	value
-		.split(',')
-		.map((s) => s.trim())
-		.filter(Boolean)
-		.forEach(addParticipant)
-	;(e.target as HTMLInputElement).value = ''
-}
-
-const removeParticipant = (email: string) =>
-	(event.participants = event.participants.filter((p) => p.email !== email))
-
 // --- Save logic ---
 
 const handleSuccess = () => {
@@ -242,9 +237,19 @@ const handleSuccess = () => {
 }
 
 const createEvent = createResource({
-	url: 'suite.client.doctype.calendar_event.calendar_event.add_calendar_event',
+	url: 'suite.mail.doctype.calendar_event.calendar_event.add_calendar_event',
 	makeParams: ({ sendEmail }: { sendEmail: boolean }) => ({
-		account: store.account,
+		account: store.accountId,
+		...eventParams.value,
+		send_scheduling_messages: sendEmail,
+	}),
+	onSuccess: handleSuccess,
+})
+
+const createMeetEvent = createResource({
+	url: 'suite.meet.api.schedule.create_scheduled_meeting',
+	makeParams: ({ sendEmail }: { sendEmail: boolean }) => ({
+		account: store.accountId,
 		...eventParams.value,
 		send_scheduling_messages: sendEmail,
 	}),
@@ -252,9 +257,9 @@ const createEvent = createResource({
 })
 
 const editEventInstance = createResource({
-	url: 'suite.client.doctype.calendar_event.calendar_event.update_calendar_event_instance',
+	url: 'suite.mail.doctype.calendar_event.calendar_event.update_calendar_event_instance',
 	makeParams: ({ sendEmail }: { sendEmail: boolean }) => ({
-		account: store.account,
+		account: store.accountId,
 		master_id: selectedEvent.calendarEvent.master_id,
 		recurrence_id: selectedEvent.calendarEvent.recurrence_id,
 		patch: patch.value,
@@ -264,10 +269,11 @@ const editEventInstance = createResource({
 })
 
 const editEvent = createResource({
-	url: 'suite.client.doctype.calendar_event.calendar_event.update_calendar_event',
+	url: 'suite.mail.doctype.calendar_event.calendar_event.update_calendar_event',
 	makeParams: ({ sendEmail }: { sendEmail: boolean }) => ({
-		account: store.account,
-		id: selectedEvent.calendarEvent.master_id,
+		account: store.accountId,
+		// master_id is only set on recurring events; fall back to the event's own id
+		id: selectedEvent.calendarEvent.master_id || selectedEvent.calendarEvent.id,
 		uid: selectedEvent.calendarEvent.uid,
 		...eventParams.value,
 		send_scheduling_messages: sendEmail,
@@ -279,7 +285,13 @@ const isUpdateInstance = ref(false)
 
 const submitEvent = (sendEmail: boolean) => {
 	const isInstance = isUpdateInstance.value && selectedEvent.calendarEvent?.recurrence_id
-	const resource = isNew.value ? createEvent : isInstance ? editEventInstance : editEvent
+	const resource = isNew.value
+		? event.addMeetLink
+			? createMeetEvent
+			: createEvent
+		: isInstance
+			? editEventInstance
+			: editEvent
 	const messages = isNew.value
 		? { loading: __('Creating event...'), success: __('Event created.') }
 		: { loading: __('Updating event...'), success: __('Event updated.') }
@@ -295,6 +307,11 @@ const showNotifyParticipantsModal = ref(false)
 const showRecurringEventModal = ref(false)
 
 const handleSave = () => {
+	if (!isDateTimeValid.value) {
+		toast.error(__('Enter a valid date and an end time after the start time.'))
+		return
+	}
+
 	const needsEmail =
 		hasParticipantsOtherThanUser(selectedEvent?.calendarEvent?.participants) ||
 		hasParticipantsOtherThanUser(event.participants)
@@ -341,23 +358,12 @@ const addAlertOptions = computed(() => [
 	},
 ])
 
-// --- Contacts search ---
-
-const mailContacts = createResource({
-	url: 'suite.mail.api.contacts.get_contacts',
-	makeParams: (text: string) => ({
-		account: store.account,
-		filter: { operator: 'OR', conditions: [{ text }, { email: text }] },
-	}),
-	transform: (data) => data.map((o) => o.email),
-})
-
-const debouncedSearch = useDebounceFn((text: string) => text && mailContacts.reload(text), 300)
-
 // --- Dialog options ---
 
 const disableSave = computed(() => {
 	if (createEvent.loading || editEvent.loading || editEventInstance.loading) return true
+	if (createMeetEvent.loading) return true
+	if (!isDateTimeValid.value) return true
 	if (!isNew.value && !Object.keys(patch.value).length) return true
 	return false
 })
@@ -533,6 +539,14 @@ const SHOW_RECURRING_EVENT_MODAL_OPTIONS = {
 						/>
 					</div>
 
+					<FormControl
+						v-if="isNew || hasMeetLink(selectedEvent?.calendarEvent)"
+						v-model="event.addMeetLink"
+						:label="__('Add Frappe Meet link')"
+						type="checkbox"
+						:disabled="!isNew && hasMeetLink(selectedEvent?.calendarEvent)"
+					/>
+
 					<!-- Description -->
 					<FormControl
 						v-model="event.description"
@@ -554,20 +568,11 @@ const SHOW_RECURRING_EVENT_MODAL_OPTIONS = {
 						/>
 					</template>
 
-					<!-- Participants -->
-					<h3 class="text-base-medium">{{ __('Participants') }}</h3>
-					<Combobox
-						:options="mailContacts?.data || []"
-						:placeholder="__('Enter participants')"
-						@input="debouncedSearch($event)"
-						@keyup.enter="handleParticipantEnter($event)"
+					<ParticipantSelector
+						v-model="event.participants"
+						:account="store.accountId"
+						:display-participants="participants"
 					/>
-					<div class="max-h-[32rem] space-y-4 overflow-y-auto">
-						<EventParticipantList
-							:participants
-							@remove-participant="removeParticipant"
-						/>
-					</div>
 				</div>
 			</div>
 		</template>

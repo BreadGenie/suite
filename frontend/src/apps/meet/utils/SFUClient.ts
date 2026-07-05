@@ -3,6 +3,8 @@
 
 import { frappeRequest } from "frappe-ui";
 import { normalizeCodecStrategy } from "./media/codecStrategy";
+import type { E2eeEpochEnvelope } from "./media/E2EEEpochSignaling";
+import { getE2EETransformCapability } from "./media/e2ee";
 import type { SignalChannel } from "./media/SignalChannel";
 
 interface ConnectionDetails {
@@ -13,6 +15,9 @@ interface ConnectionDetails {
 	sfuPort: string | null;
 	tokenExpiresAt: number | null;
 	codecStrategy: string;
+	e2eeRequired: boolean;
+	isHost: boolean;
+	isCohost: boolean;
 	userData?: Record<string, unknown>;
 }
 
@@ -38,18 +43,25 @@ interface SFUConnectionDetailsResponse {
 	user_data: Record<string, unknown>;
 	expires_in: number;
 	codec_strategy: string;
+	e2ee_required?: boolean;
+	is_host?: boolean;
+	is_cohost?: boolean;
 }
 
 interface SFUGuestConnectionDetailsResponse {
 	sfu_url: string;
 	sfu_port: string;
 	codec_strategy: string;
+	e2ee_required?: boolean;
+	is_host?: boolean;
+	is_cohost?: boolean;
 }
 
 interface SFUTokenRefreshResponse {
 	auth_token: string;
 	expires_in: number;
 	codec_strategy: string;
+	e2ee_required?: boolean;
 }
 
 interface SFURouterCapabilitiesResponse {
@@ -79,6 +91,7 @@ interface SFUConsumerResponse {
 	appData?: {
 		type?: string;
 	};
+	senderId?: number;
 	[key: string]: unknown;
 }
 
@@ -96,6 +109,7 @@ export class SFUClient {
 	eventHandlers: Map<string, SFUEventHandler>;
 	isRefreshingToken: boolean;
 	tokenRefreshTimer: ReturnType<typeof setTimeout> | null;
+	ownSenderId: number | null;
 
 	constructor(signalChannel: SignalChannel) {
 		this.signalChannel = signalChannel;
@@ -108,11 +122,23 @@ export class SFUClient {
 			sfuPort: null,
 			tokenExpiresAt: null,
 			codecStrategy: "svc",
+			e2eeRequired: false,
+			isHost: false,
+			isCohost: false,
 		};
 		this.eventHandlers = new Map();
 		this.isRefreshingToken = false;
 		this.tokenRefreshTimer = null;
+		this.ownSenderId = null;
 		this.setupDefaultHandlers();
+	}
+
+	getOwnSenderId(): number | null {
+		return this.ownSenderId;
+	}
+
+	setOwnSenderId(senderId: number | null): void {
+		this.ownSenderId = senderId;
 	}
 
 	// ==================== CONNECTION MANAGEMENT ====================
@@ -122,6 +148,13 @@ export class SFUClient {
 		guestAuthToken: string | null = null,
 	): Promise<boolean> {
 		if (this.connected) {
+			const connectionDetails = await this.getConnectionDetails(
+				meetingId,
+				guestAuthToken,
+			);
+			this.connectionDetails = connectionDetails;
+			this.signalChannel.updateAuth(connectionDetails.authToken ?? "");
+			this.scheduleTokenRefresh();
 			return true;
 		}
 
@@ -184,6 +217,9 @@ export class SFUClient {
 					},
 					tokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
 					codecStrategy: response.codec_strategy || "svc",
+					e2eeRequired: Boolean(response.e2ee_required),
+					isHost: Boolean(response.is_host),
+					isCohost: Boolean(response.is_cohost),
 				};
 			} catch (error) {
 				console.error("Failed to get guest SFU connection details:", error);
@@ -209,6 +245,9 @@ export class SFUClient {
 			userData: response.user_data,
 			tokenExpiresAt,
 			codecStrategy: normalizeCodecStrategy(response.codec_strategy),
+			e2eeRequired: Boolean(response.e2ee_required),
+			isHost: Boolean(response.is_host),
+			isCohost: Boolean(response.is_cohost),
 		};
 	}
 
@@ -246,6 +285,9 @@ export class SFUClient {
 			sfuPort: null,
 			tokenExpiresAt: null,
 			codecStrategy: "svc",
+			e2eeRequired: false,
+			isHost: false,
+			isCohost: false,
 		};
 		this.isRefreshingToken = false;
 	}
@@ -312,6 +354,8 @@ export class SFUClient {
 			this.connectionDetails.codecStrategy = normalizeCodecStrategy(
 				response.codec_strategy || this.connectionDetails.codecStrategy,
 			);
+			this.connectionDetails.e2eeRequired =
+				this.connectionDetails.e2eeRequired || Boolean(response.e2ee_required);
 
 			this.signalChannel.updateAuth(response.auth_token);
 
@@ -329,7 +373,7 @@ export class SFUClient {
 
 			return response.auth_token;
 		} catch (error) {
-			console.error("Token refresh failed:", error);
+			console.warn("Token refresh failed:", error);
 			throw error;
 		} finally {
 			this.isRefreshingToken = false;
@@ -440,6 +484,7 @@ export class SFUClient {
 		if (handler) {
 			this.signalChannel.off(event, handler);
 		}
+		this.eventHandlers.delete(event);
 	}
 
 	// ==================== WEBRTC OPERATIONS ====================
@@ -466,6 +511,7 @@ export class SFUClient {
 	}> {
 		const response = (await this.sendRequest("create_webrtc_transport", {
 			direction,
+			encryptionEnabled: this.connectionDetails.e2eeRequired,
 		})) as SFUWebRtcTransportResponse;
 		try {
 			const clean = JSON.parse(JSON.stringify(response));
@@ -530,8 +576,11 @@ export class SFUClient {
 		})) as SFUConsumerResponse;
 	}
 
-	async closeProducer(producerId: string): Promise<unknown> {
-		return this.sendRequest("close_producer", { producerId });
+	async closeProducer(
+		producerId: string,
+		metadata: Record<string, unknown> = {},
+	): Promise<unknown> {
+		return this.sendRequest("close_producer", { producerId, ...metadata });
 	}
 
 	async pauseProducer(producerId: string): Promise<unknown> {
@@ -544,6 +593,10 @@ export class SFUClient {
 
 	async closeConsumer(consumerId: string): Promise<unknown> {
 		return this.sendRequest("close_consumer", { consumerId });
+	}
+
+	async requestConsumerKeyFrame(consumerId: string): Promise<unknown> {
+		return this.sendRequest("request_consumer_keyframe", { consumerId });
 	}
 
 	async updateConsumerPreferences({
@@ -591,11 +644,42 @@ export class SFUClient {
 		userData: unknown,
 		mediaState: unknown,
 	): Promise<unknown> {
-		return this.sendRequest("join_room", {
+		const e2eeMode = this.getE2EEMode();
+		const e2eeShouldBeActive = this.isE2EERequired();
+		const result = (await this.sendRequest("join_room", {
 			roomId,
 			userData,
 			mediaState,
-		});
+			e2ee: {
+				enabled: e2eeShouldBeActive,
+				capability: {
+					supported: e2eeMode !== "none",
+					mode: e2eeMode,
+				},
+			},
+		})) as { success?: boolean; senderId?: number };
+		if (result && typeof result.senderId === "number") {
+			this.setOwnSenderId(result.senderId);
+		}
+		return result;
+	}
+
+	setE2EERequired(required: boolean): void {
+		this.connectionDetails.e2eeRequired = required;
+	}
+
+	isE2EERequired(): boolean {
+		return this.connectionDetails.e2eeRequired;
+	}
+
+	getE2EEMode(): "insertable-streams" | "rtp-script-transform" | "none" {
+		const capability = getE2EETransformCapability();
+		if (capability === "legacy-insertable-streams") return "insertable-streams";
+		return capability;
+	}
+
+	isInsertableStreamsSupported(): boolean {
+		return getE2EETransformCapability() !== "none";
 	}
 
 	// ==================== SIGNALING OPERATIONS ====================
@@ -610,6 +694,10 @@ export class SFUClient {
 
 	sendIceCandidate(targetUser: unknown, signalData: unknown): void {
 		this.sendEvent("ice_candidate", { targetUser, signalData });
+	}
+
+	sendE2EEEpochEnvelope(envelope: E2eeEpochEnvelope): void {
+		this.sendEvent("e2ee:epoch", envelope);
 	}
 
 	// ==================== MEDIA CONTROL ====================

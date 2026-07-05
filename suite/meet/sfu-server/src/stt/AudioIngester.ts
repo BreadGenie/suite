@@ -3,11 +3,13 @@ import dgram from 'node:dgram';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Consumer } from 'mediasoup/node/lib/ConsumerTypes';
-import type { PlainTransport } from 'mediasoup/node/lib/PlainTransportTypes';
-import type { Producer } from 'mediasoup/node/lib/ProducerTypes';
-import type { Router } from 'mediasoup/node/lib/RouterTypes';
-import type { RtpCapabilities } from 'mediasoup/node/lib/types';
+import type {
+	Consumer,
+	PlainTransport,
+	Producer,
+	Router,
+	RtpCapabilities,
+} from 'mediasoup/types';
 import { loggers } from '../utils/logger';
 import type { IWhisperClient } from './WhisperClient';
 

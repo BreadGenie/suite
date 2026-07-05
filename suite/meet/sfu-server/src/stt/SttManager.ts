@@ -1,4 +1,4 @@
-import type { Producer } from 'mediasoup/node/lib/ProducerTypes';
+import type { Producer, Router } from 'mediasoup/types';
 import type { TranscriptSegment } from '../types';
 import { loggers } from '../utils/logger';
 import { AudioIngester } from './AudioIngester';
@@ -23,11 +23,7 @@ export class SttManager {
 	private emitToRoom:
 		| ((roomId: string, event: string, data: unknown) => void)
 		| undefined;
-	private getRouter:
-		| ((
-				roomId: string,
-		  ) => import('mediasoup/node/lib/RouterTypes').Router | undefined)
-		| undefined;
+	private getRouter: ((roomId: string) => Router | undefined) | undefined;
 
 	constructor(options: SttManagerOptions) {
 		if (options.whisperServerUrl) {
@@ -50,11 +46,7 @@ export class SttManager {
 		this.emitToRoom = fn;
 	}
 
-	setGetRouter(
-		fn: (
-			roomId: string,
-		) => import('mediasoup/node/lib/RouterTypes').Router | undefined,
-	): void {
+	setGetRouter(fn: (roomId: string) => Router | undefined): void {
 		this.getRouter = fn;
 	}
 

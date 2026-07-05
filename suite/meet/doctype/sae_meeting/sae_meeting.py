@@ -29,6 +29,7 @@ class SaeMeeting(Document):
 		allow_guest: DF.Check
 		banned_users: DF.Table[SaeMeetingUser]
 		co_hosts: DF.Table[SaeMeetingUser]
+		e2ee_enabled: DF.Check
 		meeting_type: DF.Literal["open", "restricted"]
 		members: DF.Table[SaeMeetingUser]
 		waiting_room: DF.Table[SaeMeetingUser]
@@ -384,10 +385,49 @@ class SaeMeeting(Document):
 			frappe.throw(_("Guest is banned from this meeting"))
 
 	@frappe.whitelist()
-	def update_settings(self, allow_guest: int | None = None, meeting_type: str | None = None) -> None:
+	def enable_e2ee(self) -> bool:
+		"""Enable epoch-based E2EE for this meeting."""
+		if not self.is_host_or_cohost(frappe.session.user):
+			frappe.throw(_("Only hosts and co-hosts can convert meetings to E2EE"), frappe.PermissionError)
+
+		self.e2ee_enabled = True
+		self.save()
+
+		users_notified = set()
+		payload = {"meeting_id": self.name, "e2ee_enabled": True}
+		for member in self.members:
+			user = member.user
+			if not user or user in users_notified:
+				continue
+			users_notified.add(user)
+			if user.startswith("guest_"):
+				frappe.publish_realtime(
+					"meeting:e2ee_enabled",
+					payload,
+					room=f"guest:{user}",
+					after_commit=True,
+				)
+			else:
+				frappe.publish_realtime(
+					"meeting:e2ee_enabled",
+					payload,
+					user=user,
+					after_commit=True,
+				)
+
+		return True
+
+	@frappe.whitelist()
+	def update_settings(
+		self,
+		allow_guest: int | None = None,
+		meeting_type: str | None = None,
+		host_only_chat: int | None = None,
+	) -> None:
 		"""
 		Update meeting settings (host or co-host only)
 		"""
+
 		if not self.is_host_or_cohost(frappe.session.user):
 			frappe.throw(_("Only the meeting host or co-host can update settings"))
 
@@ -404,6 +444,10 @@ class SaeMeeting(Document):
 				frappe.throw(_("Invalid meeting type"))
 			self.meeting_type = meeting_type
 			updated_fields["meeting_type"] = self.meeting_type
+
+		if host_only_chat is not None:
+			self.host_only_chat = bool(host_only_chat)
+			updated_fields["host_only_chat"] = self.host_only_chat
 
 		if updated_fields:
 			self.save()

@@ -19,7 +19,7 @@
           v-if="i === 0"
           class="w-fit"
           v-model="thumbnail"
-          :buttons="[
+          :options="[
             {
               label: 'Grid',
               value: 'grid',
@@ -54,7 +54,7 @@
               >
                 <div class="overflow-hidden text-ellipsis whitespace-nowrap">
                   <div
-                    class="prose prose-sm prose-v2 pointer-events-none w-[200%] origin-top-left scale-[.55] prose-p:my-1 md:w-[250%] md:scale-[.39]"
+                    class="prose prose-sm prose-v3 pointer-events-none w-[200%] origin-top-left scale-[.55] prose-p:my-1 md:w-[250%] md:scale-[.39]"
                     v-html="row.html"
                   />
                 </div>
@@ -127,7 +127,7 @@
       class="flex flex-col items-center gap-2.5 my-10"
     >
       <div class="flex flex-col gap-1.5 items-center">
-        <LucideFileText class="size-8" />
+        <LucideFileText class="size-8 text-ink-gray-4" />
         <p class="text-base-medium text-ink-gray-6">
           {{ __('No documents yet.') }}
         </p>
@@ -149,7 +149,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, useTemplateRef } from 'vue'
 
-import { Avatar, TabButtons, Dropdown } from 'frappe-ui'
+import { Avatar, TabButtons } from 'frappe-ui'
 import { useInfiniteScroll } from '@vueuse/core'
 import LucideGrid from '~icons/lucide/grid'
 import LucideList from '~icons/lucide/list'

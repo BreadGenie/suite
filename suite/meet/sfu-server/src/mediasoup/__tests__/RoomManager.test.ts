@@ -1,9 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type {
-	AudioLevelObserver,
-	Router,
-	Worker,
-} from 'mediasoup/node/lib/types';
+import type { AudioLevelObserver, Router, Worker } from 'mediasoup/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { Room, RtpCodecCapability } from '../../types';
 import { RoomManager } from '../RoomManager';
@@ -55,9 +51,9 @@ describe('RoomManager', () => {
 		{
 			kind: 'audio',
 			mimeType: 'audio/opus',
-			preferredPayloadType: 111,
 			clockRate: 48000,
 			channels: 2,
+			preferredPayloadType: 111,
 		},
 	];
 

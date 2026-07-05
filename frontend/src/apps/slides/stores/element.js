@@ -33,6 +33,9 @@ const focusElementId = ref(null)
 const pairElementId = ref(null)
 const pendingShapeType = ref(null)
 
+// true once a gesture crosses the drag threshold
+const dragOccurred = ref(false)
+
 const activeElements = computed(() => {
 	let elements = []
 	currentSlide.value?.elements.forEach((element) => {
@@ -286,15 +289,13 @@ const addTextElement = async (text, position) => {
 	if (!position) {
 		const { elementWidth, elementHeight } = getTextElementDimensions(elementPresets)
 		position = getLeftTopForCenteredElement(elementWidth, elementHeight)
-		position.left += elementWidth / 2
-		position.top += elementHeight / 2
 	}
 
 	const element = {
 		id: generateUniqueId(),
 		zIndex: currentSlide.value.elements.length + 1,
-		transformOrigin: 'center center',
-		transform: 'translate(-50%, -50%)',
+		transformOrigin: 'top left',
+		transform: 'none',
 		left: position.left,
 		top: position.top,
 		type: 'text',
@@ -1006,6 +1007,7 @@ export {
 	focusElementId,
 	pairElementId,
 	pendingShapeType,
+	dragOccurred,
 	activeElements,
 	activeElement,
 	setActiveElements,

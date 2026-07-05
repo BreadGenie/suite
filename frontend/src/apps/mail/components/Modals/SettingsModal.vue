@@ -56,16 +56,16 @@ import {
 import { Button, Dialog } from 'frappe-ui'
 
 import { useSettings } from '@/apps/mail/utils/composables'
-import AccountSettings from '@/apps/mail/components/Settings/AccountSettings.vue'
+import Account from '@/apps/mail/components/Settings/Account.vue'
 import AdvancedSettings from '@/apps/mail/components/Settings/AdvancedSettings.vue'
 import AppearanceSettings from '@/apps/mail/components/Settings/AppearanceSettings.vue'
 import AutomationSettings from '@/apps/mail/components/Settings/AutomationSettings.vue'
-import BlockListSettings from '@/apps/mail/components/Settings/BlockListSettings.vue'
 import ExportSettings from '@/apps/mail/components/Settings/ExportSettings.vue'
 import FolderSettings from '@/apps/mail/components/Settings/FolderSettings.vue'
 import IdentitySettings from '@/apps/mail/components/Settings/IdentitySettings.vue'
 import ImportSettings from '@/apps/mail/components/Settings/ImportSettings.vue'
 import ProfileSettings from '@/apps/mail/components/Settings/ProfileSettings.vue'
+import ScreenedEmailAddressSettings from '@/apps/mail/components/Settings/ScreenedEmailAddressSettings.vue'
 import SignatureSettings from '@/apps/mail/components/Settings/SignatureSettings.vue'
 import VacationResponseSettings from '@/apps/mail/components/Settings/VacationResponseSettings.vue'
 
@@ -84,7 +84,7 @@ const tabs = computed(() => {
 		{
 			label: __('Account'),
 			icon: Mailbox,
-			component: markRaw(AccountSettings),
+			component: markRaw(Account),
 			condition: user.data.is_jmap_configured,
 		},
 		{
@@ -125,7 +125,7 @@ const tabs = computed(() => {
 		{
 			label: __('Screened Senders'),
 			icon: Ban,
-			component: markRaw(BlockListSettings),
+			component: markRaw(ScreenedEmailAddressSettings),
 			condition: user.data.is_jmap_configured,
 		},
 		{

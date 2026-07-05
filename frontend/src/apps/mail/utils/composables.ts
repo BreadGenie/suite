@@ -1,7 +1,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { createResource } from 'frappe-ui'
 
-import { raisePromiseToast, raiseToast } from '@/apps/mail/utils'
+import { matchesScreenedValue, raisePromiseToast, raiseToast } from '@/apps/mail/utils'
 import { userStore } from '@/apps/mail/stores/user'
 
 import type { COLOR_SCHEME, Identity, ScreenedAddress } from '@/apps/mail/types'
@@ -105,7 +105,7 @@ export const useUndo = () => {
 }
 
 // Shared state for the "Block sender?" prompt shown after marking/moving mail to Junk. A single
-// <BlockSenderModal> (rendered in MailboxView) reacts to this, so any view can open it.
+// <ScreenedEmailAddressModal> (rendered in MailboxView) reacts to this, so any view can open it.
 export interface BlockableSender {
 	name?: string
 	email: string
@@ -129,16 +129,16 @@ export const useBlockSender = () => {
 	// and de-duplicate by email (keeping the first occurrence's display name).
 	const blockableSenders = (senders: { name?: string; email?: string }[]) => {
 		const own = new Set((identities.data ?? []).map((i: Identity) => i.email))
-		// "Already blocked" = screened with the Reject action (their mail is discarded).
-		const blocked = new Set<string>(
-			(screenedAddresses.data ?? [])
-				.filter((a: ScreenedAddress) => a.action === 'Reject')
-				.map((a: ScreenedAddress) => a.email),
-		)
+		// "Already blocked" = screened with the Reject action (their mail is discarded), whether by their
+		// exact address or by a '@domain' entry covering them.
+		const blockedValues = (screenedAddresses.data ?? [])
+			.filter((a: ScreenedAddress) => a.action === 'Reject')
+			.map((a: ScreenedAddress) => a.email)
+		const isBlocked = (email: string) => blockedValues.some((v) => matchesScreenedValue(email, v))
 		const seen = new Set<string>()
 		const result: BlockableSender[] = []
 		for (const { name, email } of senders) {
-			if (!email || own.has(email) || blocked.has(email) || seen.has(email)) continue
+			if (!email || own.has(email) || isBlocked(email) || seen.has(email)) continue
 			seen.add(email)
 			result.push({ name, email })
 		}
@@ -148,7 +148,7 @@ export const useBlockSender = () => {
 	const blockResource = createResource({
 		url: 'suite.mail.api.mail.screen_email_addresses',
 		makeParams: ({ emails }: { emails: string[] }) => ({
-			account_id: store.accountId,
+			account: store.accountId,
 			emails,
 			action: 'Reject',
 		}),
@@ -158,7 +158,7 @@ export const useBlockSender = () => {
 	const junkResource = createResource({
 		url: 'suite.mail.api.mail.screen_email_addresses',
 		makeParams: ({ emails }: { emails: string[] }) => ({
-			account_id: store.accountId,
+			account: store.accountId,
 			emails,
 			action: 'Spam',
 		}),
@@ -168,7 +168,7 @@ export const useBlockSender = () => {
 	const unjunkResource = createResource({
 		url: 'suite.mail.api.mail.unscreen_email_addresses',
 		makeParams: ({ emails }: { emails: string[] }) => ({
-			account_id: store.accountId,
+			account: store.accountId,
 			emails,
 		}),
 		onSuccess: () => screenedAddresses.reload(),
@@ -177,7 +177,7 @@ export const useBlockSender = () => {
 	const unblockResource = createResource({
 		url: 'suite.mail.api.mail.unscreen_email_addresses',
 		makeParams: ({ emails }: { emails: string[] }) => ({
-			account_id: store.accountId,
+			account: store.accountId,
 			emails,
 		}),
 		onSuccess: () => screenedAddresses.reload(),

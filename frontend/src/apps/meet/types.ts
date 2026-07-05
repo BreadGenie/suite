@@ -64,3 +64,20 @@ export interface ParticipantLeftEvent {
 	roomId: string;
 	participantId: string;
 }
+
+export interface PollOption {
+	id: string;
+	text: string;
+	votes: number;
+}
+
+export interface PollPayloadFE {
+    pollId: string;
+    createdBy: string;
+    createdByName?: string;
+    question: string;
+    options: PollOption[];
+    isActive: boolean;
+    hasVoted?: boolean;
+    createdAt?: string;
+}

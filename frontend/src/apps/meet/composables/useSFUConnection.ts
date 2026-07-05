@@ -10,11 +10,17 @@ import { useRouter } from "vue-router";
 import { useSocket } from "../socket";
 import audioNotificationManager from "../utils/audioNotifications";
 import { getErrorMessage } from "../utils/error";
+import { waitForE2EEContextReady } from "../utils/media/E2EEContextReady";
 import { SocketIOSignalChannel } from "../utils/media/SignalChannel";
 import { SFUClient } from "../utils/SFUClient";
 import { SFUMeetingManager } from "../utils/SFUMeetingManager";
+import { useChatStore } from "./useChatStore";
 import type { ConnectionState } from "./useConnectionState";
 import type { CurrentUser } from "./useCurrentUser";
+import {
+	type E2EEConnectionHandshake,
+	useE2EEConnectionHandshake,
+} from "./useE2EEConnectionHandshake";
 import type { GridLayout } from "./useGridLayout";
 import type { LobbyStore } from "./useLobbyStore";
 import type { MediaState } from "./useMediaState";
@@ -82,12 +88,25 @@ export function useSFUConnection(deps: {
 	const router = useRouter();
 	const socket = useSocket();
 
+	const chatStore = useChatStore();
+
 	const signalChannel = new SocketIOSignalChannel();
 	const sfuClient = new SFUClient(signalChannel);
 	const sfuManager = shallowRef<SFUMeetingManager | null>(null);
 
 	const realtimeListenersSetup = shallowRef(false);
 	const joiningInProgress = shallowRef(false);
+	const hasShownE2EEKeyMismatchToast = shallowRef(false);
+	const isCurrentTabHost = shallowRef(false);
+
+	const e2eeHandshake: E2EEConnectionHandshake = useE2EEConnectionHandshake({
+		meetingId,
+		sfuClient,
+		sfuManager,
+		currentUser,
+		mediaState,
+		isCurrentTabHost,
+	});
 
 	const joinMeetingAPI = createResource({
 		url: "suite.meet.api.meeting.join_meeting",
@@ -113,31 +132,30 @@ export function useSFUConnection(deps: {
 			return;
 		}
 
+		const isRejoin = !!participantStore.participants[participantId];
+
 		participantStore.addParticipant(participant);
+
+		if (isRejoin || sfuManager.value?.initialSyncInProgress) {
+			return;
+		}
 
 		audioNotificationManager.playJoinNotification(
 			participant.participantId as string,
 		);
 
-		if (sfuManager.value?.initialSyncInProgress) {
-			return;
-		}
-
 		const LucideUserIcon = defineAsyncComponent(
 			() => import("~icons/lucide/user"),
 		);
 
-		toast.create({
-			message: `${participantName} joined the meeting`,
+		toast(`${participantName} joined the meeting`, {
 			icon: participant.avatar
 				? h("img", {
 						src: participant.avatar as string,
-						class: "rounded-full",
+						class: "h-5 w-5 rounded-full object-cover",
 					})
-				: h(LucideUserIcon, {
-						class: "text-white",
-					}),
-			duration: 3,
+				: h(LucideUserIcon),
+			duration: 3000,
 		});
 	};
 
@@ -161,17 +179,14 @@ export function useSFUConnection(deps: {
 			() => import("~icons/lucide/user"),
 		);
 
-		toast.create({
-			message: `${participantName} left the meeting`,
+		toast(`${participantName} left the meeting`, {
 			icon: participant?.avatar
 				? h("img", {
 						src: participant.avatar as string,
-						class: "rounded-full",
+						class: "h-4 w-4 rounded-full object-cover",
 					})
-				: h(LucideUserIcon, {
-						class: "text-white",
-					}),
-			duration: 3,
+				: h(LucideUserIcon),
+			duration: 3000,
 		});
 	};
 
@@ -279,9 +294,12 @@ export function useSFUConnection(deps: {
 
 	const setupSFUConnection = async (
 		guestName: string | null = null,
-		isHost = false,
-		isCohost = false,
+		initialIsHost = false,
+		initialIsCohost = false,
 	) => {
+		let isHost = initialIsHost;
+		let isCohost = initialIsCohost;
+		isCurrentTabHost.value = isHost;
 		if (connectionState.isSetupComplete) {
 			connectionState.isInPreview = false;
 			connectionState.isConnecting = false;
@@ -297,12 +315,28 @@ export function useSFUConnection(deps: {
 			});
 			sfuManager.value = manager;
 
-			if (!guestName) {
-				setupFrappeRealtimeEventListeners();
-			}
+			// Register SFU signaling handlers before connect/join. E2EE joiners can
+			// receive their host envelope immediately after sending their hello.
+			setupFrappeRealtimeEventListeners();
 
 			await manager.connect(connectionState.guestAuthToken);
 			connectionState.codecStrategy = sfuClient.getCodecStrategy() || "svc";
+			if (!guestName) {
+				const effectiveIsHost = sfuClient.connectionDetails.isHost || isHost;
+				const effectiveIsCohost =
+					sfuClient.connectionDetails.isCohost || isCohost;
+				isHost = effectiveIsHost;
+				isCohost = effectiveIsCohost;
+				isCurrentTabHost.value = isHost;
+			}
+
+			if (sfuClient.isE2EERequired()) {
+				if (!sfuClient.isInsertableStreamsSupported()) {
+					throw new Error(
+						"This meeting requires E2EE, but your browser does not support encoded insertable streams.",
+					);
+				}
+			}
 
 			let userData: Record<string, unknown>;
 			if (guestName) {
@@ -330,6 +364,9 @@ export function useSFUConnection(deps: {
 				audio_enabled: mediaState.isMicOn,
 				video_enabled: mediaState.isCameraOn,
 			});
+			if (sfuClient.isE2EERequired()) {
+				await waitForE2EEContextReady(0);
+			}
 
 			await manager.initializeDevice();
 			await manager.createReceiveTransport();
@@ -402,6 +439,7 @@ export function useSFUConnection(deps: {
 
 	const setupGuestApprovalListener = (guestName: string) => {
 		const guestId = sessionStorage.getItem("guest_id");
+
 		if (!guestId) {
 			console.error("No guest_id found for realtime listener");
 			return;
@@ -436,11 +474,17 @@ export function useSFUConnection(deps: {
 						guest_id: guestId,
 					},
 				});
-
 				if (
 					(response as Record<string, unknown>)?.status === "joined" &&
 					(response as Record<string, unknown>).auth_token
 				) {
+					if (
+						(response as Record<string, unknown>).host_only_chat !== undefined
+					) {
+						chatStore.hostOnlyChat = !!(response as Record<string, unknown>)
+							.host_only_chat;
+					}
+
 					connectionState.guestAuthToken = (response as Record<string, unknown>)
 						.auth_token as string;
 					connectionState.guestSfuUrl =
@@ -590,6 +634,11 @@ export function useSFUConnection(deps: {
 		socket.on("meeting_join_rejected", handleMeetingJoinRejected);
 		socket.on("meeting_user_approved", handleMeetingUserApproved);
 		socket.on("meeting_user_rejected", handleMeetingUserRejected);
+		socket.on("meeting:e2ee_enabled", e2eeHandshake.handleMeetingE2EEEnabled);
+
+		// SFU signal channel handlers and document listeners live in the
+		// E2EE handshake composable; see useE2EEConnectionHandshake.
+		e2eeHandshake.setupRealtimeEventListeners();
 
 		realtimeListenersSetup.value = true;
 	};
@@ -602,6 +651,10 @@ export function useSFUConnection(deps: {
 		socket.off("meeting_join_rejected", handleMeetingJoinRejected);
 		socket.off("meeting_user_approved", handleMeetingUserApproved);
 		socket.off("meeting_user_rejected", handleMeetingUserRejected);
+		socket.off("meeting:e2ee_enabled", e2eeHandshake.handleMeetingE2EEEnabled);
+
+		e2eeHandshake.teardownRealtimeEventListeners();
+		e2eeHandshake.teardownForDisconnect();
 	};
 
 	const handleGuestJoinResult = async (
@@ -627,6 +680,10 @@ export function useSFUConnection(deps: {
 				(joinResult.auth_token as string) || null;
 			connectionState.guestSfuUrl = (joinResult.sfu_url as string) || null;
 			connectionState.guestSfuPort = (joinResult.sfu_port as string) || null;
+
+			if (joinResult.host_only_chat !== undefined) {
+				chatStore.hostOnlyChat = !!joinResult.host_only_chat;
+			}
 
 			if (joinResult.status === "waiting_for_approval") {
 				lobbyStore.isWaitingForApproval = true;
@@ -663,8 +720,12 @@ export function useSFUConnection(deps: {
 			connectionState.guestSfuUrl = null;
 			connectionState.guestSfuPort = null;
 
-			const response = await joinMeetingAPI.fetch();
-			const joinResult = response as Record<string, unknown>;
+			const response = (await joinMeetingAPI.fetch()) as
+				| Record<string, unknown>
+				| { message?: Record<string, unknown> };
+			const joinResult = (
+				"message" in response && response.message ? response.message : response
+			) as Record<string, unknown>;
 
 			if (joinResult.status === "waiting_for_approval") {
 				lobbyStore.isWaitingForApproval = true;
@@ -679,6 +740,10 @@ export function useSFUConnection(deps: {
 				(joinResult?.is_host || false) as boolean,
 				(joinResult?.is_cohost || false) as boolean,
 			);
+
+			if (joinResult?.host_only_chat !== undefined) {
+				chatStore.hostOnlyChat = !!joinResult.host_only_chat;
+			}
 
 			setupFrappeRealtimeEventListeners();
 			connectionState.isInPreview = false;
@@ -704,7 +769,7 @@ export function useSFUConnection(deps: {
 			audioNotificationManager.playLeaveNotification(true);
 
 			if (sfuManager.value) {
-				sfuManager.value.cleanup();
+				await sfuManager.value.cleanup();
 			}
 
 			sfuManager.value = null;
@@ -716,7 +781,9 @@ export function useSFUConnection(deps: {
 		}
 	};
 
-	onUnmounted(() => {
+	onUnmounted(async () => {
+		hasShownE2EEKeyMismatchToast.value = false;
+
 		if (activeSpeakerTimeout.value) {
 			clearTimeout(activeSpeakerTimeout.value);
 			activeSpeakerTimeout.value = null;
@@ -730,7 +797,7 @@ export function useSFUConnection(deps: {
 		removeFrappeRealtimeEventListeners();
 
 		if (sfuManager.value) {
-			sfuManager.value.cleanup();
+			await sfuManager.value.cleanup();
 		}
 		sfuManager.value = null;
 

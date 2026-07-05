@@ -1,10 +1,14 @@
-import 'dotenv/config';
 import http from 'node:http';
+import { join } from 'node:path';
 import cors from 'cors';
 import express, { type Application } from 'express';
 import { Server } from 'socket.io';
 import { MediasoupManager } from './mediasoup/MediasoupManager';
 import { AuthManager } from './server/AuthManager';
+import { InMemoryE2eeCoordinatorPersistence } from './server/E2eeCoordinatorPersistence';
+import { InMemoryRosterPersistence } from './server/E2eeRosterPersistence';
+import { FileRosterPersistence } from './server/E2eeRosterPersistenceFile';
+import { E2eeRosterStore } from './server/E2eeRosterStore';
 import { RouteManager } from './server/RouteManager';
 import { SocketHandlerManager } from './server/SocketHandlerManager';
 import { SttManager } from './stt/SttManager';
@@ -54,32 +58,27 @@ export class SFUServer {
 
 		this.mediasoup = new MediasoupManager();
 		this.authManager = new AuthManager(this.config.jwtSecret);
-		this.routeManager = new RouteManager(this.app, this.mediasoup);
-
-		// Initialize STT manager
-		const sttUrl = process.env.WHISPER_SERVER_URL;
 		this.sttManager = new SttManager({
-			whisperServerUrl: sttUrl,
+			whisperServerUrl:
+				process.env.STT_SERVER_URL || process.env.WHISPER_SERVER_URL,
 			allowMockFallback: process.env.NODE_ENV === 'development',
 		});
-		this.sttManager.setEmitToRoom((roomId, event, data) => {
-			// Emit only to STT subscribers in the room
-			const socketIds = this.sttManager.getSubscribers(roomId);
-			if (!socketIds) return;
-			for (const socketId of socketIds) {
-				const socket = this.io.sockets.sockets.get(socketId);
-				if (socket) {
-					// biome-ignore lint/suspicious/noExplicitAny: Internal event emission
-					(socket as any).emit(event, data);
-				}
-			}
-		});
 		this.mediasoup.setSttManager(this.sttManager);
-
+		this.routeManager = new RouteManager(this.app, this.mediasoup);
+		const e2eeRoster = new E2eeRosterStore(
+			process.env.E2EE_ROSTER_PERSISTENCE_DIR
+				? new FileRosterPersistence(
+						join(process.env.E2EE_ROSTER_PERSISTENCE_DIR, 'roster.json'),
+					)
+				: new InMemoryRosterPersistence(),
+		);
+		const e2eeCoordinatorPersistence = new InMemoryE2eeCoordinatorPersistence();
 		this.socketHandlerManager = new SocketHandlerManager(
 			this.io,
 			this.mediasoup,
 			this.authManager,
+			e2eeRoster,
+			e2eeCoordinatorPersistence,
 			this.sttManager,
 		);
 
@@ -121,7 +120,6 @@ export class SFUServer {
 		try {
 			this.socketHandlerManager.stop();
 			await this.mediasoup.cleanup();
-			this.sttManager.destroy();
 
 			this.server.close(() => {
 				loggers.server.info('SFU Server stopped');

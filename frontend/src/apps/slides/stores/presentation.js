@@ -3,7 +3,7 @@ import { createResource, call, createDocumentResource } from 'frappe-ui'
 
 import { router } from '@/apps/slides/router'
 import { slides } from './slide'
-import { markClean } from './saving'
+import { markClean, markDirty, getPresentationFromLocalDB } from './saving'
 import { normalizeZIndices } from '@/apps/slides/stores/element'
 import { v4 as uuid4 } from 'uuid'
 import { commandHistory } from './historyMeta'
@@ -61,8 +61,15 @@ const getElementDimensions = async (el) => {
 	tempDiv.style.position = 'absolute'
 	tempDiv.style.visibility = 'hidden'
 	tempDiv.style.height = 'auto'
-	tempDiv.style.width = 'auto'
-	tempDiv.style.whiteSpace = 'pre'
+	tempDiv.style.lineHeight = el.lineHeight || '1.5'
+
+	if (el.width) {
+		tempDiv.style.width = `${el.width}px`
+		tempDiv.style.whiteSpace = 'pre-wrap'
+	} else {
+		tempDiv.style.width = 'auto'
+		tempDiv.style.whiteSpace = 'pre'
+	}
 
 	tempDiv.innerHTML = el.content || ''
 	document.body.appendChild(tempDiv)
@@ -81,23 +88,30 @@ const transformElements = async (elements) => {
 	const newEls = []
 
 	for (const el of elements) {
-		if ('transform' in el || el.type !== 'text') {
+		if (el.type !== 'text') {
 			newEls.push(el)
 			continue
 		}
 
-		const { width, height } = await getElementDimensions(el)
+		if (el.transform === 'translate(-50%, -50%)') {
+			const { width, height } = await getElementDimensions(el)
 
-		const newLeft = el.left + width / 2
-		const newTop = el.top + height / 2
-
-		newEls.push({
-			...el,
-			transform: 'translate(-50%, -50%)',
-			transformOrigin: 'center center',
-			left: newLeft,
-			top: newTop,
-		})
+			newEls.push({
+				...el,
+				transform: 'none',
+				transformOrigin: 'top left',
+				left: el.left - width / 2,
+				top: el.top - height / 2,
+			})
+		} else if (!('transform' in el)) {
+			newEls.push({
+				...el,
+				transform: 'none',
+				transformOrigin: 'top left',
+			})
+		} else {
+			newEls.push(el)
+		}
 	}
 
 	return newEls
@@ -133,9 +147,24 @@ const parseElements = (value) => {
 	return normalizeZIndices(parsed)
 }
 
+// Rescue decks saved with duplicate client_ids. Returns true if anything changed.
+const ensureUniqueClientIds = (slides) => {
+	const seen = new Set()
+	let repaired = false
+	for (const slide of slides) {
+		if (seen.has(slide.clientId)) {
+			slide.clientId = uuid4()
+			repaired = true
+		}
+		seen.add(slide.clientId)
+	}
+	return repaired
+}
+
 const slidesLength = ref(0)
 
 const getPresentationResource = (name) => {
+	let clientIdsRepaired = false
 	return createDocumentResource({
 		doctype: 'Presentation',
 		name: name,
@@ -152,15 +181,31 @@ const getPresentationResource = (name) => {
 				delete slide.fade_unmatched_elements
 				delete slide.client_id
 			}
+			clientIdsRepaired = ensureUniqueClientIds(doc.slides || [])
 		},
 		async onSuccess(doc) {
 			slidesLength.value = doc.slides?.length || 0
 			for (const slide of doc.slides || []) {
 				slide.elements = await transformElements(slide.elements)
 			}
-			slides.value = JSON.parse(JSON.stringify(doc.slides || []))
 			isPublicPresentation.value = Boolean(doc.is_public)
+
+			// restore unsynced local edits, but only if the server hasn't moved past them
+			const local = await getPresentationFromLocalDB(name)
+			if (local?.dirty && local.baseModified === doc.modified) {
+				const restored = JSON.parse(JSON.stringify(local.content))
+				// local content skips the transform's repair, so dedup it here too
+				ensureUniqueClientIds(restored)
+				slides.value = restored
+				slidesLength.value = slides.value.length
+				markDirty()
+				return
+			}
+
+			slides.value = JSON.parse(JSON.stringify(doc.slides || []))
 			markClean()
+			// persist the repair
+			if (clientIdsRepaired) markDirty()
 		},
 	})
 }
@@ -185,6 +230,7 @@ const getPublicPresentationResource = (name) => {
 				delete slide.fade_unmatched_elements
 				delete slide.client_id
 			}
+			ensureUniqueClientIds(doc.slides || [])
 		},
 		onSuccess(doc) {
 			slidesLength.value = doc.slides?.length || 0
@@ -215,6 +261,7 @@ const getCompositePresentationResource = (name) => {
 				delete slide.fade_unmatched_elements
 				delete slide.client_id
 			}
+			ensureUniqueClientIds(doc.slides || [])
 		},
 		onSuccess(doc) {
 			slidesLength.value = doc.slides?.length || 0
@@ -321,6 +368,7 @@ export {
 	applyReverseTransition,
 	createPresentationResource,
 	presentationDoc,
+	transformElements,
 	unsyncedPresentationRecord,
 	isPublicPresentation,
 	slidesLength,

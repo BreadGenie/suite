@@ -387,6 +387,7 @@ import {
 	getFormattedRecipients,
 	getGroupedRecipients,
 	hasHtmlContent,
+	matchesScreenedValue,
 	raiseToast,
 	shouldIgnoreKeypress,
 } from '@/apps/mail/utils'
@@ -449,10 +450,11 @@ const user = inject('$user')
 const store = userStore()
 const { mailboxes, mailboxIds, identities, screenedAddresses } = store
 
-// A sender is "blocked" when screened with the Reject action (their mail is discarded).
+// A sender is "blocked" when screened with the Reject action (their mail is discarded) — either by their
+// exact address or by an accepted/blocked '@domain' entry covering them.
 const isSenderBlocked = (email: string) =>
 	!!screenedAddresses.data?.some(
-		(a: ScreenedAddress) => a.email === email && a.action === 'Reject',
+		(a: ScreenedAddress) => a.action === 'Reject' && matchesScreenedValue(email, a.email),
 	)
 
 // Trusted senders — you, or anyone you've accepted — load images normally. For everyone else, the
@@ -465,7 +467,7 @@ const blockRemoteImagesEnabled = computed(
 const isScreenedIn = (email: string) =>
 	!!identities.data?.some((i: Identity) => i.email === email) ||
 	!!screenedAddresses.data?.some(
-		(a: ScreenedAddress) => a.email === email && a.action === 'Accepted',
+		(a: ScreenedAddress) => a.action === 'Accepted' && matchesScreenedValue(email, a.email),
 	)
 const shouldBlockImages = (mail: { from_email: string }) =>
 	blockRemoteImagesEnabled.value && !isScreenedIn(mail.from_email)
@@ -535,7 +537,7 @@ const thread = ref<Mail[]>([])
 
 const threadFallback = createResource({
 	url: 'suite.mail.api.mail.get_thread',
-	makeParams: () => ({ account_id: store.accountId, thread_id: threadID }),
+	makeParams: () => ({ account: store.accountId, thread_id: threadID }),
 	onSuccess: (mails: Mail[]) => {
 		// Thread no longer exists (e.g. deleted) — bail to the mailbox instead of a blank page.
 		if (!mails?.length) {
@@ -724,7 +726,7 @@ onMounted(() => loadThread())
 
 const unblockEmailAddress = createResource({
 	url: 'suite.mail.api.mail.unscreen_email_addresses',
-	makeParams: (email) => ({ account_id: store.accountId, emails: [email] }),
+	makeParams: (email) => ({ account: store.accountId, emails: [email] }),
 	onSuccess: () => {
 		raiseToast(__('Sender unblocked.'))
 		screenedAddresses.reload()
@@ -735,7 +737,7 @@ const unblockEmailAddress = createResource({
 const trustSender = createResource({
 	url: 'suite.mail.api.mail.screen_email_addresses',
 	makeParams: (email: string) => ({
-		account_id: store.accountId,
+		account: store.accountId,
 		emails: [email],
 		action: 'Accepted',
 	}),

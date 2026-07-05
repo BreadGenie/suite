@@ -5,6 +5,7 @@ import { session } from "@/boot/session";
 interface MeetingDocument {
 	allow_guest?: boolean;
 	meeting_type?: string;
+	e2ee_enabled?: boolean;
 	owner?: string;
 	title?: string;
 	name?: string;
@@ -20,6 +21,10 @@ interface DocumentResource {
 	reload(): Promise<void>;
 	updateSettings: {
 		submit(params: Record<string, unknown>): Promise<unknown>;
+		loading: boolean;
+	};
+	enableE2ee: {
+		submit(params?: Record<string, unknown>): Promise<unknown>;
 		loading: boolean;
 	};
 	get: {
@@ -38,6 +43,7 @@ interface UseMeetingDocReturn {
 	isCurrentUserHost: ComputedRef<boolean>;
 	meetingType: ComputedRef<string>;
 	allowGuest: ComputedRef<boolean>;
+	e2eeEnabled: ComputedRef<boolean>;
 	meetingCoHosts: ComputedRef<string[]>;
 	isCurrentUserCohost: ComputedRef<boolean>;
 }
@@ -57,6 +63,7 @@ export function useMeetingDoc(): UseMeetingDocReturn {
 			auto: session.isLoggedIn,
 			whitelistedMethods: {
 				updateSettings: "update_settings",
+				enableE2ee: "enable_e2ee",
 			},
 		});
 
@@ -110,6 +117,10 @@ export function useMeetingDoc(): UseMeetingDocReturn {
 		return Boolean(meetingDoc.value?.doc?.allow_guest);
 	});
 
+	const e2eeEnabled = computed((): boolean => {
+		return Boolean(meetingDoc.value?.doc?.e2ee_enabled);
+	});
+
 	return {
 		getMeetingDoc,
 		getCurrentMeetingDoc,
@@ -121,5 +132,6 @@ export function useMeetingDoc(): UseMeetingDocReturn {
 		isCurrentUserCohost,
 		meetingType,
 		allowGuest,
+		e2eeEnabled,
 	};
 }

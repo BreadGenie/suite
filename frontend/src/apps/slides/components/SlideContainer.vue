@@ -72,6 +72,7 @@ import {
 	activeElement,
 	focusElementId,
 	pairElementId,
+	dragOccurred,
 	addFixedWidthToElement,
 	setEditableState,
 	duplicateElements,
@@ -98,8 +99,8 @@ import {
 	getResizedLine,
 	getResizedTextBox,
 	getRotatedBoundingBox,
-	isAspectLocked,
 	getMinSizeForElement,
+	isAspectLocked,
 } from '@/apps/slides/utils/resize'
 
 const props = defineProps({
@@ -211,6 +212,7 @@ const triggerDrag = (e, id) => {
 	if (isMultiSelect && isNotInSelection) return
 
 	if (notEditable || isMultiSelect) {
+		dragOccurred.value = true
 		startDragging(e)
 
 		if (id && !isMultiSelect && activeElementIds.value[0] !== id) {
@@ -271,6 +273,8 @@ const handleMouseDown = (e, element) => {
 	e.stopPropagation()
 	e.preventDefault()
 
+	dragOccurred.value = false
+
 	if (e.altKey || e.ctrlKey) return duplicateAndDrag(e, id)
 
 	// start dragging once the pointer moves past a small threshold
@@ -293,33 +297,20 @@ const activeDiv = computed(() => {
 })
 
 useResizeObserver(activeDiv, (entries) => {
+	if (!activeElement.value) return
+
 	const entry = entries[0]
 	const { width, height } = entry.contentRect
 
 	// fires on any size change: resize gestures, and property updates like
-	// font size / line height / letter spacing
-
-	// shapes/images are layout-anchored: left/top derive from element state,
-	// no forced-layout read needed
-	if (['shape', 'image'].includes(activeElement.value?.type)) {
-		updateSelectionBounds({
-			width: width,
-			height: height,
-			left: activeElement.value.left + elementOffset.left,
-			top: activeElement.value.top + elementOffset.top,
-		})
-		return
-	}
-
-	// text elements are center-anchored (translate(-50%, -50%)): their visual
-	// left/top shift whenever the size changes, so read the rendered rect
-	const target = entry.target.getBoundingClientRect()
-
+	// font size / line height / letter spacing. every element type is
+	// layout-anchored — left/top derive from element state, so no
+	// forced-layout read is needed
 	updateSelectionBounds({
 		width: width,
 		height: height,
-		left: (target.left - slideBounds.left) / scale.value,
-		top: (target.top - slideBounds.top) / scale.value,
+		left: activeElement.value.left + elementOffset.left,
+		top: activeElement.value.top + elementOffset.top,
 	})
 })
 
@@ -407,15 +398,8 @@ const resizeLine = (cursorMovement) => {
 }
 
 const setOffsetFromTextBox = (box) => {
-	const minWidth = getMinSizeForElement(resizeStartBounds.type).width
-	const grabbingRight = currentResizer.value === 'text-right'
-
-	const fixedEdge = grabbingRight ? box.left : box.left + box.width
-	const width = Math.max(minWidth, box.width)
-	const centre = grabbingRight ? fixedEdge + width / 2 : fixedEdge - width / 2
-
-	elementOffset.width = width - resizeStartBounds.width
-	elementOffset.left = centre - (resizeStartBounds.left + resizeStartBounds.width / 2)
+	elementOffset.width = box.width - resizeStartBounds.width
+	elementOffset.left = box.left - resizeStartBounds.left
 }
 
 const resizeText = (cursorMovement) => {
@@ -423,6 +407,15 @@ const resizeText = (cursorMovement) => {
 
 	const box = getResizedTextBox(resizeStartBounds, currentResizer.value, cursorMovement)
 	const snappedBox = snapForResize(box, { axes: ['x'] })
+
+	const minWidth = getMinSizeForElement(resizeStartBounds.type).width
+	if (snappedBox.width < minWidth) {
+		if (currentResizer.value === 'text-left') {
+			snappedBox.left = snappedBox.left + snappedBox.width - minWidth
+		}
+		snappedBox.width = minWidth
+	}
+
 	setOffsetFromTextBox(snappedBox)
 }
 

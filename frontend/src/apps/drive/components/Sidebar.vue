@@ -70,7 +70,6 @@ const router = useRouter()
 const route = useRoute()
 notifCount.fetch()
 getTeams.fetch()
-apps.fetch()
 
 const teamExists = createResource({
   url: 'suite.drive.utils.get_default_team',
@@ -201,7 +200,7 @@ const sidebarItems = computed(() => {
           to: { name: 'drive-Inbox' },
           isActive: active('drive-Inbox'),
           accessKey: 'i',
-          suffix: notifCount.data,
+          suffix: notifCount.data ? String(notifCount.data) : undefined,
         },
       ],
     },

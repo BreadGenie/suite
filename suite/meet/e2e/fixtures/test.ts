@@ -14,6 +14,11 @@ import { clearMeetingCreateRateLimit, createMeetingViaApi, type MeetingType } fr
 const isCI = !!process.env.CI;
 const previewTimeout = isCI ? 45_000 : 20_000;
 const meetingReadyTimeout = isCI ? 60_000 : 20_000;
+const baseURL = process.env.BASE_URL ?? "http://localhost:8098";
+
+function appUrl(pathname: string): string {
+	return new URL(pathname, baseURL).toString();
+}
 
 function readMeetingsState(): MeetingsState {
 	const raw = fs.readFileSync(MEETINGS_STATE_FILE, "utf-8");
@@ -57,10 +62,7 @@ async function joinFromPreview(page: Page): Promise<void> {
 	const meetingLayout = page.getByTestId("meeting-layout");
 	const joinButton = page.getByTestId("join-meeting-preview-button");
 
-	await Promise.race([
-		preview.waitFor({ state: "visible", timeout: previewTimeout }),
-		meetingLayout.waitFor({ state: "visible", timeout: previewTimeout }),
-	]);
+	await expect(preview.or(meetingLayout)).toBeVisible({ timeout: previewTimeout });
 
 	if (
 		!(await meetingLayout.isVisible().catch(() => false)) &&
@@ -70,6 +72,8 @@ async function joinFromPreview(page: Page): Promise<void> {
 		await expect(joinButton).toBeEnabled({ timeout: previewTimeout });
 		try {
 			await joinButton.click({ timeout: previewTimeout });
+			await waitForMeetingReady(page);
+			return;
 		} catch (error) {
 			const previewStillVisible = await preview.isVisible().catch(() => false);
 			const layoutVisible = await meetingLayout.isVisible().catch(() => false);
@@ -89,10 +93,9 @@ async function createMeetingViaUi(
 	await page.getByTestId("home-page").waitFor({ state: "visible", timeout: 20_000 });
 
 	if (meetingType === "open") {
-		await page.getByTestId("create-open-meeting-button").click();
+		await page.getByRole("button", { name: "Instant meet" }).click();
 	} else {
-		await page.getByTestId("create-meeting-options").click();
-		await page.getByRole("menuitem", { name: "Create a restricted meeting" }).click();
+		await page.getByRole("button", { name: "Restricted meet" }).click();
 	}
 
 	await page.waitForURL(/\/meet\/[a-z0-9-]+$/);
@@ -115,10 +118,11 @@ async function buildParticipant(browser: Browser): Promise<Participant> {
 		context,
 		page,
 		async joinMeeting(meetingId: string) {
-			await page.goto(`/meet/${meetingId}`);
+			await page.goto(appUrl(`/meet/${meetingId}`));
+			await joinFromPreview(page);
 		},
 		async joinAsGuest(meetingId: string, guestName: string) {
-			await page.goto(`/meet/${meetingId}`);
+			await page.goto(appUrl(`/meet/${meetingId}`));
 			await expect(page.getByTestId("meeting-preview")).toBeVisible({
 				timeout: previewTimeout,
 			});
@@ -132,8 +136,8 @@ async function buildParticipant(browser: Browser): Promise<Participant> {
 		},
 		async joinAsHost(meetingId: string) {
 			await loginViaApi(context.request);
-			await page.goto("/meet/");
-			await page.goto(`/meet/${meetingId}`);
+			await page.goto(appUrl("/meet/"));
+			await page.goto(appUrl(`/meet/${meetingId}`));
 			await joinFromPreview(page);
 		},
 		async endCall() {
@@ -149,7 +153,7 @@ export const test = base.extend<TestFixtures>({
 		await prepareContext(context);
 		await loginViaApi(context.request);
 		const page = await context.newPage();
-		await page.goto("/meet/");
+		await page.goto(appUrl("/meet/"));
 		await use(page);
 		await context.close();
 	},
@@ -194,3 +198,4 @@ test.beforeEach(async ({ hostPage }) => {
 });
 
 export { expect, joinFromPreview };
+export { appUrl };

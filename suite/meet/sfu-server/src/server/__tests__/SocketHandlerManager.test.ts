@@ -3,7 +3,6 @@ import {
 	createManager,
 	createMockSocket,
 	type MockSocket,
-	type TypedSocket,
 } from './test-helpers';
 
 function connectFullSocket(
@@ -25,6 +24,7 @@ function emitJoin(
 		isGuest?: boolean;
 		audioEnabled?: boolean;
 		videoEnabled?: boolean;
+		e2ee?: { enabled?: boolean; capability?: { supported?: boolean } };
 	} = {},
 ): void {
 	socket.fire(
@@ -41,6 +41,7 @@ function emitJoin(
 				audio_enabled: opts.audioEnabled ?? true,
 				video_enabled: opts.videoEnabled ?? true,
 			},
+			e2ee: opts.e2ee,
 		},
 		() => {},
 	);
@@ -140,6 +141,214 @@ describe('SocketHandlerManager characterization', () => {
 		);
 	});
 
+	it('join_room does not add pending encrypted non-host joiners to the e2ee roster', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			id: 'sock-joiner',
+			userId: 'joiner-1',
+			e2eeRequired: true,
+			isHost: false,
+		});
+
+		emitJoin(socket, {
+			userId: 'joiner-1',
+			e2ee: { enabled: true, capability: { supported: true } },
+		});
+		await new Promise((r) => setImmediate(r));
+
+		expect(socket.senderId).toBeTypeOf('number');
+		expect(await harness.roster.get('room-1', socket.senderId ?? -1)).toBe(
+			undefined,
+		);
+	});
+
+	it('join_room reports e2ee admission failures after the join callback succeeds', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			id: 'sock-failed-e2ee-admission',
+			userId: 'failed-admission-member',
+			e2eeRequired: true,
+			isHost: false,
+		});
+		vi.spyOn(harness.roster, 'list').mockRejectedValueOnce(
+			new Error('roster unavailable'),
+		);
+
+		const callback = vi.fn();
+		socket.fire(
+			'join_room',
+			{
+				roomId: 'room-1',
+				userData: {
+					name: 'Failed Admission',
+					userId: 'failed-admission-member',
+					avatar: '',
+					is_guest: false,
+				},
+				mediaState: {
+					audio_enabled: true,
+					video_enabled: true,
+				},
+				e2ee: { enabled: true, capability: { supported: true } },
+			},
+			callback,
+		);
+		await new Promise((r) => setImmediate(r));
+		await new Promise((r) => setImmediate(r));
+
+		expect(callback).toHaveBeenCalledWith({
+			success: true,
+			senderId: socket.senderId,
+		});
+		expect(socket.emitCalls).toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'join-status',
+				status: 'failed',
+				message:
+					'Could not set up encryption for this meeting. Please leave and try again.',
+			}),
+		});
+	});
+
+	it('join_room tells a lone encrypted non-host to wait for the host', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			id: 'sock-returning-member',
+			userId: 'returning-member',
+			e2eeRequired: true,
+			isHost: false,
+		});
+
+		emitJoin(socket, {
+			userId: 'returning-member',
+			e2ee: { enabled: true, capability: { supported: true } },
+		});
+		await new Promise((r) => setImmediate(r));
+
+		expect(socket.emitCalls).toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'join-status',
+				status: 'pending',
+				reason: 'waiting-for-host',
+				message:
+					'This encrypted meeting needs the host to join before others can enter.',
+			}),
+		});
+	});
+
+	it('join_room asks a lone encrypted host to start encryption with genesis', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			id: 'sock-returning-host',
+			userId: 'host-1',
+			e2eeRequired: true,
+			isHost: true,
+		});
+
+		emitJoin(socket, {
+			userId: 'host-1',
+			e2ee: { enabled: true, capability: { supported: true } },
+		});
+		await new Promise((r) => setImmediate(r));
+
+		expect(socket.emitCalls).toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'genesis-request',
+				epochNumber: 1,
+				message: 'Starting encryption for this meeting.',
+			}),
+		});
+	});
+
+	it('join_room lets the host start encryption after a non-host is already waiting', async () => {
+		const harness = createManager();
+		const nonHost = connectFullSocket(harness, {
+			id: 'sock-waiting-member',
+			userId: 'waiting-member',
+			e2eeRequired: true,
+			isHost: false,
+		});
+		emitJoin(nonHost, {
+			userId: 'waiting-member',
+			e2ee: { enabled: true, capability: { supported: true } },
+		});
+		await new Promise((r) => setImmediate(r));
+
+		nonHost.emitCalls.length = 0;
+		const host = connectFullSocket(harness, {
+			id: 'sock-returning-host-after-member',
+			userId: 'host-1',
+			e2eeRequired: true,
+			isHost: true,
+		});
+		emitJoin(host, {
+			userId: 'host-1',
+			e2ee: { enabled: true, capability: { supported: true } },
+		});
+		await new Promise((r) => setImmediate(r));
+
+		expect(host.emitCalls).toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'genesis-request',
+				epochNumber: 1,
+			}),
+		});
+		expect(host.emitCalls).not.toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({ type: 'key-package-request' }),
+		});
+		expect(nonHost.emitCalls).toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'key-package-request',
+				epochNumber: 1,
+				reason: 'join',
+			}),
+		});
+	});
+
+	it('join_room admits a returning encrypted host through the normal join flow when members are already admitted', async () => {
+		const harness = createManager();
+		await harness.roster.add('room-1', {
+			participantId: 'member-1',
+			senderId: 9,
+			isHost: false,
+			joinedAt: 1,
+		});
+		const host = connectFullSocket(harness, {
+			id: 'sock-returning-host-with-members',
+			userId: 'host-1',
+			e2eeRequired: true,
+			isHost: true,
+		});
+
+		emitJoin(host, {
+			userId: 'host-1',
+			e2ee: { enabled: true, capability: { supported: true } },
+		});
+		await new Promise((r) => setImmediate(r));
+
+		expect(host.emitCalls).toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'key-package-request',
+				epochNumber: 1,
+				reason: 'join',
+			}),
+		});
+		expect(host.emitCalls).not.toContainEqual({
+			event: 'e2ee:epoch',
+			data: expect.objectContaining({
+				type: 'key-package-request',
+				reason: 'enable',
+			}),
+		});
+	});
+
 	it('join_room returns an authentication error when socket identity fields are missing', async () => {
 		const harness = createManager();
 		const socket = connectFullSocket(harness, {
@@ -217,6 +426,66 @@ describe('SocketHandlerManager characterization', () => {
 			'room-1',
 			'stay-1',
 		);
+		expect(harness.mediasoup.closeRoom).toHaveBeenCalledWith('room-1');
+	});
+
+	it('disconnect of an older duplicate full-access socket does not remove the current peer', async () => {
+		const harness = createManager();
+
+		const older = connectFullSocket(harness, {
+			id: 'sock-old',
+			userId: 'user-1',
+		});
+		emitJoin(older);
+		await new Promise((r) => setImmediate(r));
+
+		const current = connectFullSocket(harness, {
+			id: 'sock-current',
+			userId: 'user-1',
+		});
+		emitJoin(current);
+		await new Promise((r) => setImmediate(r));
+
+		(harness.mediasoup.removePeer as ReturnType<typeof vi.fn>).mockClear();
+		older.fire('disconnect');
+		await new Promise((r) => setImmediate(r));
+
+		expect(harness.mediasoup.removePeer).not.toHaveBeenCalled();
+
+		current.fire('disconnect');
+		await new Promise((r) => setImmediate(r));
+
+		expect(harness.mediasoup.removePeer).toHaveBeenCalledWith(
+			'room-1',
+			'user-1',
+		);
+	});
+
+	it('leave_room from an older duplicate socket still closes an empty room', async () => {
+		const harness = createManager();
+
+		const older = connectFullSocket(harness, {
+			id: 'sock-old',
+			userId: 'user-1',
+		});
+		emitJoin(older);
+		await new Promise((r) => setImmediate(r));
+
+		const current = connectFullSocket(harness, {
+			id: 'sock-current',
+			userId: 'user-1',
+		});
+		emitJoin(current);
+		await new Promise((r) => setImmediate(r));
+
+		current.leave('room-1:full');
+		(harness.mediasoup.removePeer as ReturnType<typeof vi.fn>).mockClear();
+		(harness.mediasoup.closeRoom as ReturnType<typeof vi.fn>).mockClear();
+
+		older.fire('leave_room');
+		await new Promise((r) => setImmediate(r));
+
+		expect(harness.mediasoup.removePeer).not.toHaveBeenCalled();
 		expect(harness.mediasoup.closeRoom).toHaveBeenCalledWith('room-1');
 	});
 
@@ -304,6 +573,112 @@ describe('SocketHandlerManager characterization', () => {
 		expect(
 			anotherTarget.emitCalls.some((c) => c.event === 'host_control_update'),
 		).toBe(false);
+	});
+
+	it('create_producer broadcasts screen producers to existing full-access participants', async () => {
+		const harness = createManager();
+
+		const sharer = connectFullSocket(harness, {
+			id: 'sock-sharer',
+			userId: 'sharer-1',
+		});
+		emitJoin(sharer, { userId: 'sharer-1', name: 'Sharer' });
+		await new Promise((r) => setImmediate(r));
+
+		const viewer = connectFullSocket(harness, {
+			id: 'sock-viewer',
+			userId: 'viewer-1',
+		});
+		emitJoin(viewer, { userId: 'viewer-1', name: 'Viewer' });
+		await new Promise((r) => setImmediate(r));
+
+		viewer.emitCalls.length = 0;
+		const callback = vi.fn();
+
+		sharer.fire(
+			'create_producer',
+			{
+				transportId: 'transport-1',
+				rtpParameters: {},
+				kind: 'video',
+				appData: { type: 'screen' },
+			},
+			callback,
+		);
+		await new Promise((r) => setImmediate(r));
+
+		expect(callback).toHaveBeenCalledWith(
+			expect.objectContaining({ success: true, isScreen: true }),
+		);
+		expect(viewer.emitCalls).toContainEqual({
+			event: 'producer_created',
+			data: expect.objectContaining({
+				participantId: 'sharer-1',
+				producerId: 'producer-1',
+				kind: 'video',
+				isScreen: true,
+			}),
+		});
+	});
+
+	it('allows an encrypted WebRTC transport to connect when E2EE is required', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			id: 'sock-e2ee',
+			userId: 'e2ee-user',
+			e2eeRequired: true,
+			e2eeReady: true,
+		});
+
+		const createCallback = vi.fn();
+		socket.fire(
+			'create_webrtc_transport',
+			{ direction: 'send', encryptionEnabled: true },
+			createCallback,
+		);
+		await new Promise((r) => setImmediate(r));
+
+		expect(createCallback).toHaveBeenCalledWith(
+			expect.objectContaining({ success: true, id: 'transport-1' }),
+		);
+
+		const connectCallback = vi.fn();
+		socket.fire(
+			'connect_webrtc_transport',
+			{ transportId: 'transport-1', dtlsParameters: {} },
+			connectCallback,
+		);
+		await new Promise((r) => setImmediate(r));
+
+		expect(connectCallback).toHaveBeenCalledWith({ success: true });
+		expect(harness.mediasoup.connectWebRtcTransport).toHaveBeenCalledWith(
+			'transport-1',
+			{},
+		);
+	});
+
+	it('rejects an untracked WebRTC transport connect when E2EE is required', async () => {
+		const harness = createManager();
+		const socket = connectFullSocket(harness, {
+			id: 'sock-e2ee-plain',
+			userId: 'e2ee-plain-user',
+			e2eeRequired: true,
+			e2eeReady: true,
+		});
+		const callback = vi.fn();
+
+		socket.fire(
+			'connect_webrtc_transport',
+			{ transportId: 'transport-plain', dtlsParameters: {} },
+			callback,
+		);
+		await new Promise((r) => setImmediate(r));
+
+		expect(callback).toHaveBeenCalledWith({
+			success: false,
+			error: 'Plain transport is not allowed when E2EE is required',
+		});
+		expect(harness.mediasoup.connectWebRtcTransport).not.toHaveBeenCalled();
 	});
 
 	it('chat:send broadcasts to other full-access participants in the same room and not back to the sender', async () => {
@@ -441,7 +816,10 @@ describe('SocketHandlerManager characterization', () => {
 			expiredSocket.tokenExpiresAt = Date.now() - 1000;
 			freshSocket.tokenExpiresAt = Date.now() + 60_000;
 
-			harness.manager['sweepExpiredSockets']();
+			const manager = harness.manager as unknown as {
+				sweepExpiredSockets(): void;
+			};
+			manager.sweepExpiredSockets();
 
 			expect(harness.authManager.triggerTokenExpiry).toHaveBeenCalledWith(
 				expired,

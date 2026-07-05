@@ -77,7 +77,7 @@ const contacts = createResource({
 	url: 'suite.mail.api.contacts.get_contact_cards',
 	auto: true,
 	makeParams: () => ({
-		account_id: store.accountId,
+		account: store.accountId,
 		filter: { text: search.value },
 		limit: limit.value,
 	}),
@@ -114,9 +114,9 @@ const loadMoreContacts = useDebounceFn((e) => {
 }, 500)
 
 const deleteContacts = createResource({
-	url: 'suite.client.doctype.contact_card.contact_card.delete_contact_cards',
+	url: 'suite.mail.doctype.contact_card.contact_card.delete_contact_cards',
 	makeParams: () => ({
-		account_id: store.accountId,
+		account: store.accountId,
 		ids: Array.from(listView.value?.selections),
 	}),
 	onSuccess: () => {

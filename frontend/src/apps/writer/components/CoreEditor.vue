@@ -1,39 +1,34 @@
 <template>
   <div class="flex flex-col w-full bg-surface-base">
-    <TextEditorFixedMenu v-if="editable && editor"
+    <TextEditorFixedMenu v-if="editable"
       class="w-full max-w-[100vw] py-1.5 !px-4 md:px-0 overflow-x-auto flex shrink-0 border-b border-outline-elevation-2"
-      :buttons="menuButtons" />
+      :editor="editor" :items="menuButtons" />
     <div class="flex flex-1 overflow-auto">
       <ToC v-if="editor" :editor :anchors />
       <div id="editor-scroll-container" class="flex w-full overflow-y-auto relative">
-        <div class="h-full flex flex-col flex-grow" @click="onBackgroundClick">
-          <FTextEditor ref="textEditor" class="min-h-full flex flex-col"
-            editor-class="overflow-x-auto pt-10 pb-24 px-5"
-            :upload-function="uploadFunction" :autofocus="true" :content="rawContent"
-            :mentions="{ mentions: allUsers.data, selectable: false }" placeholder="Start thinking..."
-            :extensions="editorExtensions" :bubble-menu="bubbleMenuButtons"
-            :bubble-menu-options="bubbleMenuOpts"
-            :editable
-            :starterkit-options="starterkitOptions"
-            @change="(val) => emit('editor-change', val)"
-            @keydown="onEditorKeydown">
-            <template #editor="{ editor }">
-              <EditorContent :editor="editor"
-                class="md:mx-auto bg-surface-base prose prose-sm prose-v2 prose-table:table-fixed prose-td:p-2 prose-th:p-2 prose-td:border prose-th:border prose-td:relative prose-th:relative prose-th:bg-surface-gray-2"
-                :class="[
-                  settings?.wide
-                    ? 'md:min-w-[100ch] md:max-w-[100ch]'
-                    : 'md:min-w-[48rem] md:max-w-[48rem]',
-                  isPainting && 'cursor-crosshair',
-                ]"
-                :style="editorStyle" />
+        <div class="h-full flex flex-col flex-grow min-h-full" @click="onBackgroundClick" @keydown="onEditorKeydown">
+          <FTextEditor ref="textEditor" :upload-function="uploadFunction"
+            :autofocus="true" v-model="localContent" placeholder="Start thinking..." :extensions="editorExtensions"
+            :editable @change="(val) => emit('editor-change', val)">
+            <template #default="{ editor }">
+              <EditorBubbleMenu :editor :items="bubbleMenuButtons" :options="bubbleMenuOpts" />
+              <EditorTableMenu :editor />
+              <EditorDropZone :editor :disabled="!editable">
+                <EditorContent :editor
+                  class="md:mx-auto bg-surface-base overflow-x-auto pt-10 pb-24 px-5 prose prose-sm prose-v3 prose-table:table-fixed prose-td:p-2 prose-th:p-2 prose-td:border prose-th:border prose-td:relative prose-th:relative prose-th:bg-surface-gray-2"
+                  :class="[
+                    settings?.wide
+                      ? 'md:min-w-[100ch] md:max-w-[100ch]'
+                      : 'md:min-w-[48rem] md:max-w-[48rem]',
+                    isPainting && 'cursor-crosshair',
+                  ]" :style="editorStyle" />
+              </EditorDropZone>
             </template>
           </FTextEditor>
         </div>
 
-        <FloatingComments v-if="commentsPainted" v-model:active-comment="activeComment"
-          :y-comments="comments" :file :show-comments :show-resolved :show-unanchored :editor
-          @save="saveComments">
+        <FloatingComments v-if="commentsPainted" v-model:active-comment="activeComment" :y-comments="comments" :file
+          :show-comments :show-resolved :show-unanchored :editor @save="saveComments">
           <div v-if="comments._map.size" class="sticky self-end top-4 right-4 z-10">
             <Dropdown :options="commentFilterOptions" placement="right">
               <Button :icon="LucideMessageSquareQuote" variant="outline" />
@@ -57,7 +52,6 @@ import {
   ref,
   watch,
 } from 'vue'
-import { EditorContent } from '@tiptap/vue-3'
 import { TextSelection } from '@tiptap/pm/state'
 import { CharacterCount, Selection } from '@tiptap/extensions'
 import {
@@ -65,18 +59,22 @@ import {
   getHierarchicalIndexes,
 } from '@tiptap/extension-table-of-contents'
 import {
-  TextEditor as FTextEditor,
-  Button,
-  TextEditorFixedMenu,
-  toast,
-  useFileUpload,
-  Dropdown,
-} from 'frappe-ui'
+  Editor as FTextEditor,
+  EditorFixedMenu as TextEditorFixedMenu,
+  EditorBubbleMenu,
+  EditorTableMenu,
+  EditorDropZone,
+  EditorContent,
+  RichTextKit,
+} from 'frappe-ui/editor'
+import { Button, toast, useFileUpload, Dropdown } from 'frappe-ui'
 import { rename, allUsers } from '@/apps/drive/ui/drive/js/resources'
 import { onKeyDown } from '@vueuse/core'
 import { v4 as uuidv4 } from 'uuid'
 
 import FloatingComments from './FloatingComments.vue'
+import ToC from './ToC.vue'
+import ToCMobile from './ToCMobile.vue'
 import { buildMenuButtons } from './core-editor/menu-buttons'
 import { bubbleMenuOptions } from './core-editor/bubble-menu'
 
@@ -100,7 +98,6 @@ import {
 } from '@/apps/writer/utils'
 
 import LucideMessageSquareQuote from '~icons/lucide/message-square-quote'
-import LucideMessageSquarePlus from '~icons/lucide/message-square-plus'
 
 const AUTOVERSION_INTERVAL_MS = 10 * 60 * 1000
 
@@ -120,6 +117,13 @@ const emit = defineEmits(['save', 'editor-change', 'cleanup'])
 
 const showSettings = defineModel('showSettings')
 const edited = defineModel('edited')
+
+const localContent = ref(props.rawContent ?? '')
+watch(
+  () => props.rawContent,
+  (val) => { if (val) localContent.value = val },
+  { once: true },
+)
 
 const textEditor = ref(null)
 const editor = computed(() => textEditor.value?.editor)
@@ -168,19 +172,19 @@ const commentFilterOptions = computed(() => {
       onClick: () => (showComments.value = !showComments.value),
     },
     hasResolved &&
-      showComments.value && {
-        label: 'Resolved',
-        switch: true,
-        switchValue: showResolved.value,
-        onClick: () => (showResolved.value = !showResolved.value),
-      },
+    showComments.value && {
+      label: 'Resolved',
+      switch: true,
+      switchValue: showResolved.value,
+      onClick: () => (showResolved.value = !showResolved.value),
+    },
     showUnanchoredButton.value &&
-      showComments.value && {
-        label: 'Outdated',
-        switch: true,
-        switchValue: showUnanchored.value,
-        onClick: () => (showUnanchored.value = !showUnanchored.value),
-      },
+    showComments.value && {
+      label: 'Outdated',
+      switch: true,
+      switchValue: showUnanchored.value,
+      onClick: () => (showUnanchored.value = !showUnanchored.value),
+    },
   ].filter(Boolean)
 })
 
@@ -200,7 +204,18 @@ const onCommentActivated = (id) => {
   }
 }
 
+const hasCollaboration = props.extensions?.some((ext) => ext?.name === 'collaboration')
+
 const editorExtensions = [
+  RichTextKit.configure({
+    starterKit: {
+      trailingNode: { node: 'paragraph', notAfter: 'tab' },
+      paragraph: false,
+      gapcursor: false,
+      ...(hasCollaboration && { undoRedo: false }),
+    },
+    mention: { items: () => allUsers.data ?? [] },
+  }),
   ...COMMON_EXTENSIONS,
   CoreEditorExtension,
   PageBreakExtension,
@@ -235,12 +250,6 @@ const editorExtensions = [
   ...props.extensions,
 ]
 
-const starterkitOptions = {
-  trailingNode: { node: 'paragraph', notAfter: 'tab' },
-  paragraph: false,
-  gapcursor: false,
-}
-
 const menuButtons = computed(() =>
   buildMenuButtons({
     editor,
@@ -253,7 +262,7 @@ const menuButtons = computed(() =>
 const bubbleMenuButtons = [
   {
     label: 'Comment',
-    icon: LucideMessageSquarePlus,
+    icon: 'lucide-message-square-plus',
     action: () => addComment(),
   },
 ]
@@ -265,8 +274,8 @@ const bubbleMenuOpts = computed(() =>
 const editorStyle = computed(() => ({
   fontFamily:
     props.settings?.font_family && `var(--font-${props.settings.font_family})`,
-  fontSize: `${props.settings?.font_size || 15}px`,
-  lineHeight: props.settings?.line_height || 1.5,
+  '--editor-font-size': `${props.settings?.font_size || 15}px`,
+  '--editor-line-height': props.settings?.line_height || 1.5,
   '--paragraph-spacing-before': `${props.settings?.paragraph_spacing_before || 0}px`,
   '--paragraph-spacing-after': `${props.settings?.paragraph_spacing_after || 0}px`,
 }))
@@ -294,7 +303,7 @@ const onEditorKeydown = async (e) => {
 
 const autoversion = async () => {
   if (!edited.value) return
-  const html = editor.value.getHTML()
+  const html = editor.value.getHTML()?.trim()
   if (!html || html === '<p></p>') return
   await props.document.newVersion.submit({ data: html })
   const err = props.document.newVersion.error
@@ -376,7 +385,7 @@ onKeyDown('p', (e) => {
 onKeyDown('s', (e) => {
   if (!props.editable || !isModKey(e) || e.shiftKey) return
   e.preventDefault()
-  manualSave(() => toast.success('Saved document', { duration: 0.75 }))
+  manualSave(() => toast.success('Saved document'))
 })
 
 onKeyDown('Enter', autorename)
@@ -406,11 +415,11 @@ iframe {
   border: 1px solid var(--surface-gray-4) !important;
 }
 
-.prose-v2 p + p {
+.prose-v3 p+p {
   margin-top: var(--paragraph-spacing-before, 0);
 }
 
-.prose-v2 p {
+.prose-v3 p {
   margin-bottom: var(--paragraph-spacing-after, 0);
 }
 </style>
