@@ -8,10 +8,7 @@ Real-time captions are powered by an on-premise NVIDIA Nemotron ASR backend.
 
 ### Local Development
 
-```bash
-# Start SFU + STT service
-./start.sh --with-stt
-```
+Set `STT_SERVER_URL` to a running STT service that implements `/health` and `/transcribe-pcm`.
 
 ### Docker Compose
 

@@ -385,10 +385,8 @@ export class AudioIngester {
 			this.chunkSumSq = 0;
 			this.lastDraftCheck = 0;
 		} else {
-			// Draft flush: keep accumulating audio for the final flush.
-			this.pcmChunks = [];
-			this.pcmChunkBytes = 0;
-			this.chunkSumSq = 0;
+			// Draft flush: keep accumulated audio so the final segment still contains
+			// the whole utterance. The frontend replaces this participant's draft line.
 			this.lastDraftCheck = this.speechCheckCount;
 		}
 
