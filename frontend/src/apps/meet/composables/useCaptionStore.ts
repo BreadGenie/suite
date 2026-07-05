@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 interface CaptionLine {
+	id: string;
 	participantId: string;
 	participantName: string;
 	text: string;
@@ -18,41 +19,40 @@ interface CaptionSegment {
 }
 
 export const useCaptionStore = defineStore("caption", () => {
+	const maxLines = 2;
 	const isCaptionsEnabled = ref(false);
 	const captionLines = ref<CaptionLine[]>([]);
+	let nextCaptionId = 0;
 
 	function addCaptionLine(segment: CaptionSegment) {
-		const maxLines = 2;
 		const text = segment.text?.trim() || "";
-
-		const existingIndex = captionLines.value.findIndex(
-			(l) => l.participantId === segment.participantId && !l.isFinal,
+		const draftIndex = captionLines.value.findIndex(
+			(line) => line.participantId === segment.participantId && !line.isFinal,
 		);
 
 		if (segment.isFinal && !text) {
-			const idx = captionLines.value.findIndex(
-				(l) => l.participantId === segment.participantId,
-			);
-			if (idx >= 0) {
-				captionLines.value.splice(idx, 1);
+			if (draftIndex >= 0) {
+				captionLines.value.splice(draftIndex, 1);
 			}
 			return;
 		}
+		if (!text) return;
 
 		const line: CaptionLine = {
+			id: `caption-${nextCaptionId++}`,
 			participantId: segment.participantId,
 			participantName: segment.participantName || segment.participantId,
-			text: segment.text,
+			text,
 			timestamp: segment.timestamp,
+			isFinal: segment.isFinal,
 		};
 
-		if (existingIndex >= 0) {
-			captionLines.value.splice(existingIndex, 1, {
-				...line,
-				isFinal: segment.isFinal,
-			});
+		if (draftIndex >= 0) {
+			captionLines.value.splice(draftIndex, 1, line);
+		} else if (!segment.isFinal) {
+			captionLines.value.push(line);
 		} else {
-			captionLines.value.push({ ...line, isFinal: segment.isFinal });
+			captionLines.value.push(line);
 		}
 
 		if (captionLines.value.length > maxLines) {
@@ -71,6 +71,7 @@ export const useCaptionStore = defineStore("caption", () => {
 	function $reset() {
 		isCaptionsEnabled.value = false;
 		captionLines.value = [];
+		nextCaptionId = 0;
 	}
 
 	return {

@@ -18,6 +18,7 @@ interface Breakpoints {
 
 interface UseResponsiveGridReturn {
 	windowWidth: Ref<number>;
+	isMobile: ComputedRef<boolean>;
 	maxColumns: ComputedRef<number>;
 	sidebarMaxColumns: ComputedRef<number>;
 	avatarSizeTier: ComputedRef<AvatarSizeTier>;
@@ -49,6 +50,8 @@ export function useResponsiveGrid(): UseResponsiveGridReturn {
 	onUnmounted(() => {
 		window.removeEventListener("resize", updateWidth);
 	});
+
+	const isMobile = computed<boolean>(() => windowWidth.value < BREAKPOINTS.md);
 
 	// Mobile: min 2 columns, Tablet: max 3 columns, Desktop: max 4 columns
 	const maxColumns = computed<number>(() => {
@@ -88,6 +91,7 @@ export function useResponsiveGrid(): UseResponsiveGridReturn {
 
 	return {
 		windowWidth,
+		isMobile,
 		maxColumns,
 		sidebarMaxColumns,
 		avatarSizeTier,

@@ -103,6 +103,8 @@
 							<CaptionOverlay
 								:is-captions-enabled="captionStore.isCaptionsEnabled"
 								:lines="captionStore.captionLines"
+								:participants="participantStore.participants"
+								:current-user="currentUser.currentUser.value"
 							/>
 						</div>
 					</div>

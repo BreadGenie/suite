@@ -4,7 +4,7 @@ Mediasoup-based Selective Forwarding Unit (SFU) for Frappe Meet.
 
 ## Speech-to-Text (Captions)
 
-Real-time captions are powered by an on-premise [faster-whisper](https://github.com/SYSTRAN/faster-whisper) backend.
+Real-time captions are powered by an on-premise NVIDIA Nemotron ASR backend.
 
 ### Local Development
 
@@ -21,9 +21,11 @@ The STT backend is included in the runtime image and started automatically as a 
 
 | Variable | Description | Default |
 |---|---|---|
-| `WHISPER_MODEL` | Model size: `tiny`, `base`, `small`, `medium` | `small` |
-| `WHISPER_COMPUTE_TYPE` | Quantization: `int8`, `float16` | `int8` |
-| `WHISPER_CPU_THREADS` | CPU threads | `4` |
+| `STT_SERVER_URL` | SFU URL for the STT service | — |
+| `NEMOTRON_MODEL` | Hugging Face model ID | `nvidia/nemotron-3.5-asr-streaming-0.6b` |
+| `NEMOTRON_LANGUAGE` | Locale prompt, or `auto` | `en-US` |
+| `NEMOTRON_LOOKAHEAD_TOKENS` | Streaming lookahead tokens | `6` |
+| `NEMOTRON_KEEP_LANG_TAGS` | Preserve detected language tags | `false` |
 | `STT_VAD_THRESHOLD` | Speech detection sensitivity (0.0–1.0) | `0.012` |
 | `HF_TOKEN` | Hugging Face token (optional, avoids rate limits) | — |
 

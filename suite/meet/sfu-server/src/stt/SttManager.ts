@@ -2,21 +2,17 @@ import type { Producer, Router } from 'mediasoup/types';
 import type { TranscriptSegment } from '../types';
 import { loggers } from '../utils/logger';
 import { AudioIngester } from './AudioIngester';
-import {
-	type IWhisperClient,
-	MockWhisperClient,
-	WhisperClient,
-} from './WhisperClient';
+import { type ISttClient, MockSttClient, SttClient } from './SttClient';
 
 interface SttManagerOptions {
 	/** URL of the STT server (e.g. http://127.0.0.1:8080) */
-	whisperServerUrl?: string;
+	sttServerUrl?: string;
 	/** Use mock client in development when no STT server is configured */
 	allowMockFallback?: boolean;
 }
 
 export class SttManager {
-	private whisperClient: IWhisperClient;
+	private sttClient: ISttClient;
 	private activeSessions = new Map<string, AudioIngester>();
 	private roomSubscribers = new Map<string, Set<string>>();
 	private roomActiveSpeakers = new Map<string, Set<string>>();
@@ -26,17 +22,17 @@ export class SttManager {
 	private getRouter: ((roomId: string) => Router | undefined) | undefined;
 
 	constructor(options: SttManagerOptions) {
-		if (options.whisperServerUrl) {
-			const url = options.whisperServerUrl.trim();
+		if (options.sttServerUrl) {
+			const url = options.sttServerUrl.trim();
 			loggers.stt.info('Using STT server: %s', url);
-			this.whisperClient = new WhisperClient(url);
+			this.sttClient = new SttClient(url);
 		} else if (options.allowMockFallback) {
 			loggers.stt.warn('No STT server URL configured. Using mock client.');
-			this.whisperClient = new MockWhisperClient();
+			this.sttClient = new MockSttClient();
 		} else {
 			loggers.stt.warn('STT disabled: no server URL and mock fallback is off.');
-			this.whisperClient = new MockWhisperClient();
-			(this.whisperClient as MockWhisperClient).isAvailable = () => false;
+			this.sttClient = new MockSttClient();
+			(this.sttClient as MockSttClient).isAvailable = () => false;
 		}
 	}
 
@@ -118,7 +114,7 @@ export class SttManager {
 			return;
 		}
 
-		if (!this.whisperClient.isAvailable()) {
+		if (!this.sttClient.isAvailable()) {
 			loggers.stt.warn('STT server unavailable, cannot start transcription');
 			return;
 		}
@@ -135,7 +131,7 @@ export class SttManager {
 			participantName,
 			producer,
 			router,
-			whisperClient: this.whisperClient,
+			sttClient: this.sttClient,
 			isActiveSpeaker: () => this.isActiveSpeaker(roomId, participantId),
 			onTranscript: (text, isFinal, durationMs) => {
 				this.handleTranscript(
@@ -191,8 +187,8 @@ export class SttManager {
 	}
 
 	destroy(): void {
-		if (typeof (this.whisperClient as WhisperClient).destroy === 'function') {
-			(this.whisperClient as WhisperClient).destroy();
+		if (typeof (this.sttClient as SttClient).destroy === 'function') {
+			(this.sttClient as SttClient).destroy();
 		}
 	}
 

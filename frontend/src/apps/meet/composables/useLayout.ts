@@ -447,7 +447,7 @@ export function useLayout(
 			display: "flex",
 			"flex-wrap": "wrap",
 			"justify-content": "center",
-			"align-content": "start",
+			"align-content": "center",
 			gap: "0.5rem",
 			overflow: "hidden",
 		};
@@ -455,7 +455,7 @@ export function useLayout(
 
 	const containerClass = computed<string>(() => {
 		if (mode.value === "sidebar") return sidebarContainerClass.value;
-		return "call-grid";
+		return "call-grid h-full";
 	});
 
 	// In sidebar mode tiles fill their CSS grid cells so no explicit sizing needed.

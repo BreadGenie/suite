@@ -9,23 +9,34 @@
 	>
 		<div
 			v-show="isCaptionsEnabled && lines.length > 0"
-			class="pointer-events-none absolute inset-x-0 bottom-0 z-[100] flex justify-center px-4 pb-8"
+			class="pointer-events-none z-[40] flex shrink-0 justify-center px-2 pb-2 pt-1"
 		>
-			<div class="max-w-[90%] space-y-1">
+			<div class="flex w-full max-w-[min(90vw,56rem)] flex-col items-center gap-1">
 				<div
 					v-for="line in visibleLines"
 					:key="line.id"
 					:class="[
-						'block w-fit mx-auto rounded-sm px-2 py-0.5 text-center text-base font-medium text-white',
+						'flex max-w-full items-start gap-2 rounded-md px-2.5 py-1 text-left text-sm font-medium leading-snug text-white shadow-lg sm:text-base',
 						{ 'opacity-60 italic': line.text === '...' },
 					]"
 					style="
 						background-color: rgba(0, 0, 0, 0.65);
 						text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-						line-height: 1.5;
+						overflow-wrap: anywhere;
 					"
 				>
-					{{ line.text }}
+					<Avatar
+						size="sm"
+						:image="line.avatar"
+						:label="line.participantName"
+						class="mt-0.5 shrink-0 ring-1 ring-white/20"
+					/>
+					<div class="min-w-0">
+						<div class="text-xs font-semibold leading-tight text-white/75">
+							{{ line.participantName }}
+						</div>
+						<div>{{ line.text }}</div>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -33,6 +44,7 @@
 </template>
 
 <script setup>
+import { Avatar } from "frappe-ui";
 import { computed } from "vue";
 
 const props = defineProps({
@@ -41,12 +53,39 @@ const props = defineProps({
 		type: Array,
 		default: () => [],
 	},
+	participants: {
+		type: Object,
+		default: () => ({}),
+	},
+	currentUser: {
+		type: Object,
+		default: null,
+	},
 });
 
-const visibleLines = computed(() => {
-	return props.lines.map((line) => ({
-		...line,
-		id: `${line.participantId}-${line.timestamp}`,
-	}));
-});
+const getParticipant = (participantId) => {
+	if (props.currentUser?.user_id === participantId) {
+		return {
+			name: props.currentUser.full_name || props.currentUser.name || "You",
+			avatar: props.currentUser.avatar || "",
+		};
+	}
+
+	const participant = props.participants?.[participantId];
+	return {
+		name: participant?.user_name || participant?.full_name || participantId,
+		avatar: participant?.avatar || "",
+	};
+};
+
+const visibleLines = computed(() =>
+	props.lines.slice(-2).map((line) => {
+		const participant = getParticipant(line.participantId);
+		return {
+			...line,
+			participantName: participant.name || line.participantName,
+			avatar: participant.avatar,
+		};
+	}),
+);
 </script>

@@ -11,7 +11,7 @@ import type {
 	RtpCapabilities,
 } from 'mediasoup/types';
 import { loggers } from '../utils/logger';
-import type { IWhisperClient } from './WhisperClient';
+import type { ISttClient } from './SttClient';
 
 interface AudioIngesterOptions {
 	roomId: string;
@@ -19,7 +19,7 @@ interface AudioIngesterOptions {
 	participantName?: string;
 	producer: Producer;
 	router: Router;
-	whisperClient: IWhisperClient;
+	sttClient: ISttClient;
 	/** Called before each flush; if false, audio is discarded (active-speaker-only mode) */
 	isActiveSpeaker?: () => boolean;
 	onTranscript: (text: string, isFinal: boolean, durationMs: number) => void;
@@ -61,7 +61,7 @@ const TRANSCRIBE_TIMEOUT_MS = Number.parseInt(
 /**
  * Captures audio from a Mediasoup Producer via PlainTransport,
  * decodes Opus→PCM via ffmpeg, buffers audio, and flushes to
- * Whisper when the speaker pauses (VAD) or after a max duration.
+ * STT when the speaker pauses (VAD) or after a max duration.
  */
 export class AudioIngester {
 	private roomId: string;
@@ -69,7 +69,7 @@ export class AudioIngester {
 	private participantName?: string;
 	private producer: Producer;
 	private router: Router;
-	private whisperClient: IWhisperClient;
+	private sttClient: ISttClient;
 	private isActiveSpeaker?: () => boolean;
 	private onTranscript: (
 		text: string,
@@ -102,7 +102,7 @@ export class AudioIngester {
 		this.participantName = options.participantName;
 		this.producer = options.producer;
 		this.router = options.router;
-		this.whisperClient = options.whisperClient;
+		this.sttClient = options.sttClient;
 		this.isActiveSpeaker = options.isActiveSpeaker;
 		this.onTranscript = options.onTranscript;
 	}
@@ -422,8 +422,7 @@ export class AudioIngester {
 			// Normalize audio to target RMS (-20 dBFS) so quiet speakers
 			// are boosted and loud speakers are attenuated.
 			const normalized = this.normalizeAudio(chunk, -20, chunkRms);
-			// Pass onTranscript as per-segment callback so segments
-			// stream to the frontend incrementally as Whisper decodes them
+			// Pass onTranscript as per-segment callback so segments stream to the frontend.
 			const result = await this.transcribeWithTimeout(
 				normalized,
 				TRANSCRIBE_TIMEOUT_MS,
@@ -473,7 +472,7 @@ export class AudioIngester {
 				reject(new Error(`Transcription timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
 
-			this.whisperClient
+			this.sttClient
 				.transcribe(pcmBuffer, SAMPLE_RATE, onSegment)
 				.then((result) => {
 					clearTimeout(timer);
@@ -527,8 +526,7 @@ export class AudioIngester {
 
 	/**
 	 * Normalize PCM audio to a target dBFS level.
-	 * Whisper was trained on normalized audio; feeding it unnormalized
-	 * quiet/loud audio severely degrades accuracy.
+	 * Unnormalized quiet/loud audio severely degrades ASR accuracy.
 	 */
 	private normalizeAudio(
 		buffer: Buffer,
@@ -564,7 +562,7 @@ export class AudioIngester {
 
 	/**
 	 * Text post-processing for live captions.
-	 * - Filters common Whisper hallucinations on silence
+	 * - Filters common ASR hallucinations on silence
 	 * - Deduplicates repeated words
 	 * - Capitalizes first letter
 	 */

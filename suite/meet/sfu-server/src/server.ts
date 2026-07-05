@@ -59,8 +59,7 @@ export class SFUServer {
 		this.mediasoup = new MediasoupManager();
 		this.authManager = new AuthManager(this.config.jwtSecret);
 		this.sttManager = new SttManager({
-			whisperServerUrl:
-				process.env.STT_SERVER_URL || process.env.WHISPER_SERVER_URL,
+			sttServerUrl: process.env.STT_SERVER_URL,
 			allowMockFallback: process.env.NODE_ENV === 'development',
 		});
 		this.mediasoup.setSttManager(this.sttManager);

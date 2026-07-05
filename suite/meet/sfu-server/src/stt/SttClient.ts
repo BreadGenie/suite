@@ -1,6 +1,6 @@
 import { loggers } from '../utils/logger';
 
-export interface WhisperTranscription {
+export interface SttTranscription {
 	text: string;
 	segments?: Array<{
 		text: string;
@@ -9,32 +9,24 @@ export interface WhisperTranscription {
 	}>;
 }
 
-export interface IWhisperClient {
+export interface ISttClient {
 	transcribe(
 		pcmBuffer: Buffer,
 		sampleRate?: number,
 		onSegment?: (text: string) => void,
-	): Promise<WhisperTranscription>;
+	): Promise<SttTranscription>;
 	isAvailable(): boolean;
 }
 
-/**
- * HTTP client for the faster-whisper STT server.
- * Keeps a rolling prompt context so short chunks are
- * interpreted in context rather than in isolation.
- */
-export class WhisperClient implements IWhisperClient {
+export class SttClient implements ISttClient {
 	private serverUrl: string;
 	private available = false;
-	private context = '';
-	private readonly maxContextLength = 80;
-
 	private queue: Array<{
 		pcmBuffer: Buffer;
 		sampleRate: number;
 		createdAt: number;
 		onSegment?: (text: string) => void;
-		resolve: (result: WhisperTranscription) => void;
+		resolve: (result: SttTranscription) => void;
 		reject: (error: Error) => void;
 	}> = [];
 	private processing = false;
@@ -43,11 +35,10 @@ export class WhisperClient implements IWhisperClient {
 	private readonly maxQueueAgeMs = 3_000;
 
 	private healthCheckTimer: NodeJS.Timeout | null = null;
-	private readonly healthCheckIntervalMs = 10_000; // retry every 10s until available
+	private readonly healthCheckIntervalMs = 10_000;
 
 	constructor(serverUrl: string) {
 		this.serverUrl = serverUrl.replace(/\/$/, '');
-
 		this.checkHealth();
 		this.startHealthCheckLoop();
 	}
@@ -98,9 +89,8 @@ export class WhisperClient implements IWhisperClient {
 		pcmBuffer: Buffer,
 		sampleRate = 16000,
 		onSegment?: (text: string) => void,
-	): Promise<WhisperTranscription> {
+	): Promise<SttTranscription> {
 		return new Promise((resolve, reject) => {
-			// Cap queue length to prevent unbounded backlog
 			while (this.queue.length >= this.maxQueueLength) {
 				const dropped = this.queue.shift()!;
 				loggers.stt.debug(
@@ -125,7 +115,6 @@ export class WhisperClient implements IWhisperClient {
 		if (this.processing || this.queue.length === 0) return;
 		this.processing = true;
 
-		// Drop stale jobs before processing
 		while (this.queue.length > 0) {
 			const front = this.queue[0];
 			if (Date.now() - front.createdAt > this.maxQueueAgeMs) {
@@ -161,7 +150,7 @@ export class WhisperClient implements IWhisperClient {
 	private async doTranscribe(
 		pcmBuffer: Buffer,
 		onSegment?: (text: string) => void,
-	): Promise<WhisperTranscription> {
+	): Promise<SttTranscription> {
 		const response = await fetch(`${this.serverUrl}/transcribe-pcm`, {
 			method: 'POST',
 			headers: {
@@ -175,7 +164,6 @@ export class WhisperClient implements IWhisperClient {
 			throw new Error(`STT server error ${response.status}: ${errorText}`);
 		}
 
-		// Parse SSE stream: data: {"text": "...", "isFinal": true}
 		const texts: string[] = [];
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error('No response body');
@@ -189,7 +177,7 @@ export class WhisperClient implements IWhisperClient {
 
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split('\n');
-			buffer = lines.pop() || ''; // keep incomplete line in buffer
+			buffer = lines.pop() || '';
 
 			for (const line of lines) {
 				if (!line.startsWith('data: ')) continue;
@@ -210,21 +198,14 @@ export class WhisperClient implements IWhisperClient {
 		}
 
 		const fullText = texts.join(' ');
-		this.updateContext(fullText);
 		return {
 			text: fullText,
 			segments: texts.map((t) => ({ text: t, start: 0, end: 0 })),
 		};
 	}
-
-	private updateContext(newText: string): void {
-		const trimmed = newText.trim();
-		if (!trimmed) return;
-		this.context = `${this.context} ${trimmed}`.slice(-this.maxContextLength);
-	}
 }
 
-export class MockWhisperClient implements IWhisperClient {
+export class MockSttClient implements ISttClient {
 	private callCount = 0;
 	private available = true;
 
@@ -236,11 +217,11 @@ export class MockWhisperClient implements IWhisperClient {
 		pcmBuffer: Buffer,
 		_sampleRate = 16000,
 		_onSegment?: (text: string) => void,
-	): Promise<WhisperTranscription> {
+	): Promise<SttTranscription> {
 		this.callCount++;
 		const duration = pcmBuffer.length / 2 / 16000;
 		loggers.stt.info(
-			'[MockWhisper] Would transcribe %d bytes (~%ds audio). Call #%d',
+			'[MockSTT] Would transcribe %d bytes (~%ds audio). Call #%d',
 			pcmBuffer.length,
 			duration.toFixed(1),
 			this.callCount,
