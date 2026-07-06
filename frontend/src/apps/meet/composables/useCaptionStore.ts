@@ -19,7 +19,7 @@ interface CaptionSegment {
 }
 
 export const useCaptionStore = defineStore("caption", () => {
-	const maxLines = 2;
+	const maxLines = 50;
 	const isCaptionsEnabled = ref(false);
 	const captionLines = ref<CaptionLine[]>([]);
 	let nextCaptionId = 0;
