@@ -8,7 +8,7 @@ Real-time captions are powered by an on-premise NVIDIA Nemotron ASR backend.
 
 ### Local Development
 
-Set `STT_SERVER_URL` to a running STT service that implements `/health` and `/transcribe-pcm`.
+Set `STT_SERVER_URL` to a running STT service that implements `/health` and `/stream`.
 
 ### Docker Compose
 
@@ -20,9 +20,13 @@ The STT backend is included in the runtime image and started automatically as a 
 |---|---|---|
 | `STT_SERVER_URL` | SFU URL for the STT service | — |
 | `NEMOTRON_MODEL` | Hugging Face model ID | `nvidia/nemotron-3.5-asr-streaming-0.6b` |
-| `NEMOTRON_LANGUAGE` | Locale prompt, or `auto` | `en-US` |
-| `NEMOTRON_LOOKAHEAD_TOKENS` | Streaming lookahead tokens | `6` |
-| `NEMOTRON_KEEP_LANG_TAGS` | Preserve detected language tags | `false` |
+| `NEMOTRON_LANGUAGE` | Locale prompt such as `en-US`, or `auto` for multilingual rooms | `en-US` |
+| `NEMOTRON_ATT_CONTEXT_SIZE` | NeMo streaming attention context, `left,right` | `56,3` |
+| `NEMOTRON_FINAL_SILENCE_MS` | Silence padding appended before final decode | `600` |
+| `STT_SILENCE_MS` | Silence duration before finalizing an utterance | `500` |
+| `STT_MIN_SPEECH_MS` | Minimum speech duration before normal silence final | `600` |
+| `STT_MIN_TAIL_MS` | Minimum speech duration for short utterance final | `200` |
+| `STT_SHORT_UTTERANCE_SILENCE_MS` | Silence duration before finalizing short utterances | `700` |
 | `STT_VAD_THRESHOLD` | Speech detection sensitivity (0.0–1.0) | `0.012` |
 | `HF_TOKEN` | Hugging Face token (optional, avoids rate limits) | — |
 

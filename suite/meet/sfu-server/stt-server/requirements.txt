@@ -1,8 +1,9 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
+setuptools<82
 torch>=2.4.0
-accelerate>=0.33.0
+numpy>=1.24.0
 librosa>=0.10.0
-# Use source until Nemotron3_5Asr lands in a stable Transformers release.
-git+https://github.com/huggingface/transformers.git
+# Nemotron 3.5 ASR requires prompt-aware RNNT classes that may not be in PyPI NeMo yet.
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git
