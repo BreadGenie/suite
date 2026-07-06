@@ -108,7 +108,7 @@ export class SttManager {
 			return;
 		}
 
-		const sessionKey = `${roomId}:${participantId}`;
+		const sessionKey = this.getSessionKey(roomId, participantId, producer.id);
 		if (this.activeSessions.has(sessionKey)) {
 			loggers.stt.debug('Transcription already active for %s', sessionKey);
 			return;
@@ -157,13 +157,26 @@ export class SttManager {
 	async stopTranscription(
 		roomId: string,
 		participantId: string,
+		producerId?: string,
 	): Promise<void> {
-		const sessionKey = `${roomId}:${participantId}`;
-		const ingester = this.activeSessions.get(sessionKey);
-		if (!ingester) return;
+		if (producerId) {
+			const sessionKey = this.getSessionKey(roomId, participantId, producerId);
+			const ingester = this.activeSessions.get(sessionKey);
+			if (!ingester) return;
 
-		await ingester.stop();
-		this.activeSessions.delete(sessionKey);
+			await ingester.stop();
+			this.activeSessions.delete(sessionKey);
+			return;
+		}
+
+		const stops: Promise<void>[] = [];
+		for (const [key, ingester] of this.activeSessions) {
+			if (key.startsWith(`${roomId}:${participantId}:`)) {
+				this.activeSessions.delete(key);
+				stops.push(ingester.stop());
+			}
+		}
+		await Promise.all(stops);
 	}
 
 	async stopRoom(roomId: string): Promise<void> {
@@ -214,5 +227,13 @@ export class SttManager {
 		if (this.emitToRoom) {
 			this.emitToRoom(roomId, 'stt:segment', { roomId, segment });
 		}
+	}
+
+	private getSessionKey(
+		roomId: string,
+		participantId: string,
+		producerId: string,
+	): string {
+		return `${roomId}:${participantId}:${producerId}`;
 	}
 }

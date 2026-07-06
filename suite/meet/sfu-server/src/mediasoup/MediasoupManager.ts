@@ -85,7 +85,7 @@ export class MediasoupManager {
 				roomId: string,
 				peerId: string,
 				kind: 'audio' | 'video',
-				_producerId: string,
+				producerId: string,
 			) => {
 				const peerState = this.peerScores.get(peerId);
 				if (peerState) {
@@ -93,12 +93,14 @@ export class MediasoupManager {
 					this.evaluateAndEmitNetworkQuality(roomId, peerId);
 				}
 				if (this.sttManager && kind === 'audio') {
-					this.sttManager.stopTranscription(roomId, peerId).catch((error) => {
-						loggers.mediasoupManager.warn(
-							'STT stop error on producer close: %s',
-							(error as Error).message,
-						);
-					});
+					this.sttManager
+						.stopTranscription(roomId, peerId, producerId)
+						.catch((error) => {
+							loggers.mediasoupManager.warn(
+								'STT stop error on producer close: %s',
+								(error as Error).message,
+							);
+						});
 				}
 			},
 		);

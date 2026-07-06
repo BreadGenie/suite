@@ -1,39 +1,52 @@
+import WebSocket from 'ws';
 import { loggers } from '../utils/logger';
 
-export interface SttTranscription {
+export interface SttStreamMetadata {
+	sessionId: string;
+	roomId: string;
+	participantId: string;
+	producerId: string;
+	participantName?: string;
+	sampleRate: number;
+	language?: string;
+}
+
+export interface SttTranscriptEvent {
 	text: string;
-	segments?: Array<{
-		text: string;
-		start: number;
-		end: number;
-	}>;
+	isFinal: boolean;
+	durationMs: number;
+	sequence: number;
+}
+
+export interface ISttStream {
+	sendAudio(frame: Buffer): void;
+	markFinal(durationMs: number): void;
+	close(): Promise<void>;
 }
 
 export interface ISttClient {
-	transcribe(
-		pcmBuffer: Buffer,
-		sampleRate?: number,
-		onSegment?: (text: string) => void,
-	): Promise<SttTranscription>;
+	createStream(
+		metadata: SttStreamMetadata,
+		onTranscript: (event: SttTranscriptEvent) => void,
+	): Promise<ISttStream>;
 	isAvailable(): boolean;
+}
+
+interface SttServerMessage {
+	type?: string;
+	sessionId?: string;
+	roomId?: string;
+	participantId?: string;
+	producerId?: string;
+	text?: string;
+	isFinal?: boolean;
+	durationMs?: number;
+	sequence?: number;
 }
 
 export class SttClient implements ISttClient {
 	private serverUrl: string;
 	private available = false;
-	private queue: Array<{
-		pcmBuffer: Buffer;
-		sampleRate: number;
-		createdAt: number;
-		onSegment?: (text: string) => void;
-		resolve: (result: SttTranscription) => void;
-		reject: (error: Error) => void;
-	}> = [];
-	private processing = false;
-
-	private readonly maxQueueLength = 2;
-	private readonly maxQueueAgeMs = 3_000;
-
 	private healthCheckTimer: NodeJS.Timeout | null = null;
 	private readonly healthCheckIntervalMs = 10_000;
 
@@ -85,149 +98,186 @@ export class SttClient implements ISttClient {
 		return this.available;
 	}
 
-	async transcribe(
-		pcmBuffer: Buffer,
-		sampleRate = 16000,
-		onSegment?: (text: string) => void,
-	): Promise<SttTranscription> {
-		return new Promise((resolve, reject) => {
-			while (this.queue.length >= this.maxQueueLength) {
-				const dropped = this.queue.shift()!;
-				loggers.stt.debug(
-					'Dropping oldest queue item (age %dms)',
-					Date.now() - dropped.createdAt,
-				);
-				dropped.reject(new Error('Dropped: queue full'));
-			}
-			this.queue.push({
-				pcmBuffer,
-				sampleRate,
-				createdAt: Date.now(),
-				onSegment,
-				resolve,
-				reject,
+	async createStream(
+		metadata: SttStreamMetadata,
+		onTranscript: (event: SttTranscriptEvent) => void,
+	): Promise<ISttStream> {
+		const socket = new WebSocket(this.getStreamUrl());
+
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				reject(new Error('Timed out connecting to STT stream'));
+			}, 5000);
+
+			socket.once('open', () => {
+				clearTimeout(timer);
+				resolve();
 			});
-			this.processQueue();
+			socket.once('error', (error) => {
+				clearTimeout(timer);
+				reject(error);
+			});
 		});
-	}
 
-	private async processQueue(): Promise<void> {
-		if (this.processing || this.queue.length === 0) return;
-		this.processing = true;
+		socket.send(
+			JSON.stringify({
+				type: 'start',
+				...metadata,
+			}),
+		);
 
-		while (this.queue.length > 0) {
-			const front = this.queue[0];
-			if (Date.now() - front.createdAt > this.maxQueueAgeMs) {
-				const stale = this.queue.shift()!;
+		socket.on('message', (data) => {
+			let message: SttServerMessage;
+			try {
+				message = JSON.parse(data.toString()) as SttServerMessage;
+			} catch {
+				loggers.stt.warn('Dropping malformed STT stream message');
+				return;
+			}
+
+			if (message.type !== 'transcript') return;
+			if (!this.messageMatchesSession(message, metadata)) {
 				loggers.stt.warn(
-					'Dropping stale transcription job (age %dms, %d bytes)',
-					Date.now() - stale.createdAt,
-					stale.pcmBuffer.length,
+					'Dropping cross-session STT message for session %s',
+					metadata.sessionId,
 				);
-				stale.reject(new Error('Dropped: transcription too stale'));
-			} else {
-				break;
+				return;
 			}
-		}
 
-		if (this.queue.length === 0) {
-			this.processing = false;
-			return;
-		}
-
-		const { pcmBuffer, onSegment, resolve, reject } = this.queue.shift()!;
-		try {
-			const result = await this.doTranscribe(pcmBuffer, onSegment);
-			resolve(result);
-		} catch (error) {
-			reject(error as Error);
-		} finally {
-			this.processing = false;
-			this.processQueue();
-		}
-	}
-
-	private async doTranscribe(
-		pcmBuffer: Buffer,
-		onSegment?: (text: string) => void,
-	): Promise<SttTranscription> {
-		const response = await fetch(`${this.serverUrl}/transcribe-pcm`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/octet-stream',
-			},
-			body: pcmBuffer,
+			const text = typeof message.text === 'string' ? message.text.trim() : '';
+			if (!text && !message.isFinal) return;
+			onTranscript({
+				text,
+				isFinal: Boolean(message.isFinal),
+				durationMs:
+					typeof message.durationMs === 'number' ? message.durationMs : 0,
+				sequence: typeof message.sequence === 'number' ? message.sequence : 0,
+			});
 		});
 
-		if (!response.ok) {
-			const errorText = await response.text().catch(() => 'Unknown error');
-			throw new Error(`STT server error ${response.status}: ${errorText}`);
-		}
+		socket.on('close', (code, reason) => {
+			loggers.stt.debug(
+				'STT stream closed for %s (code=%d, reason=%s)',
+				metadata.sessionId,
+				code,
+				reason.toString(),
+			);
+		});
 
-		const texts: string[] = [];
-		const reader = response.body?.getReader();
-		if (!reader) throw new Error('No response body');
+		return new SttStream(socket, metadata.sessionId);
+	}
 
-		const decoder = new TextDecoder();
-		let buffer = '';
+	private getStreamUrl(): string {
+		const wsBase = this.serverUrl
+			.replace(/^http:/, 'ws:')
+			.replace(/^https:/, 'wss:');
+		return `${wsBase}/stream`;
+	}
 
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
+	private messageMatchesSession(
+		message: SttServerMessage,
+		metadata: SttStreamMetadata,
+	): boolean {
+		return (
+			message.sessionId === metadata.sessionId &&
+			message.roomId === metadata.roomId &&
+			message.participantId === metadata.participantId &&
+			message.producerId === metadata.producerId
+		);
+	}
+}
 
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split('\n');
-			buffer = lines.pop() || '';
+class SttStream implements ISttStream {
+	constructor(
+		private socket: WebSocket,
+		private sessionId: string,
+	) {}
 
-			for (const line of lines) {
-				if (!line.startsWith('data: ')) continue;
-				const jsonStr = line.slice(6).trim();
-				if (!jsonStr) continue;
+	sendAudio(frame: Buffer): void {
+		if (this.socket.readyState !== WebSocket.OPEN) return;
+		this.socket.send(frame);
+	}
 
-				try {
-					const data = JSON.parse(jsonStr) as Record<string, unknown>;
-					const text = typeof data.text === 'string' ? data.text.trim() : '';
-					if (text) {
-						texts.push(text);
-						if (onSegment) onSegment(text);
-					}
-				} catch {
-					// skip malformed JSON
-				}
+	markFinal(durationMs: number): void {
+		if (this.socket.readyState !== WebSocket.OPEN) return;
+		this.socket.send(
+			JSON.stringify({
+				type: 'final',
+				sessionId: this.sessionId,
+				durationMs,
+			}),
+		);
+	}
+
+	close(): Promise<void> {
+		return new Promise((resolve) => {
+			if (this.socket.readyState === WebSocket.CLOSED) {
+				resolve();
+				return;
 			}
-		}
-
-		const fullText = texts.join(' ');
-		return {
-			text: fullText,
-			segments: texts.map((t) => ({ text: t, start: 0, end: 0 })),
-		};
+			this.socket.once('close', () => resolve());
+			if (this.socket.readyState === WebSocket.OPEN) {
+				this.socket.send(
+					JSON.stringify({ type: 'end', sessionId: this.sessionId }),
+				);
+			}
+			this.socket.close();
+		});
 	}
 }
 
 export class MockSttClient implements ISttClient {
-	private callCount = 0;
 	private available = true;
 
 	isAvailable(): boolean {
 		return this.available;
 	}
 
-	async transcribe(
-		pcmBuffer: Buffer,
-		_sampleRate = 16000,
-		_onSegment?: (text: string) => void,
-	): Promise<SttTranscription> {
-		this.callCount++;
-		const duration = pcmBuffer.length / 2 / 16000;
+	async createStream(
+		metadata: SttStreamMetadata,
+		onTranscript: (event: SttTranscriptEvent) => void,
+	): Promise<ISttStream> {
+		return new MockSttStream(metadata, onTranscript);
+	}
+}
+
+class MockSttStream implements ISttStream {
+	private chunks: Buffer[] = [];
+	private bytes = 0;
+	private sequence = 0;
+
+	constructor(
+		private metadata: SttStreamMetadata,
+		private onTranscript: (event: SttTranscriptEvent) => void,
+	) {}
+
+	sendAudio(frame: Buffer): void {
+		this.chunks.push(frame);
+		this.bytes += frame.length;
+	}
+
+	markFinal(durationMs: number): void {
+		if (this.bytes === 0) return;
+		this.sequence++;
+		const seconds = this.bytes / 2 / this.metadata.sampleRate;
 		loggers.stt.info(
-			'[MockSTT] Would transcribe %d bytes (~%ds audio). Call #%d',
-			pcmBuffer.length,
-			duration.toFixed(1),
-			this.callCount,
+			'[MockSTT] Would transcribe %d bytes (~%ds audio) for session %s',
+			this.bytes,
+			seconds.toFixed(1),
+			this.metadata.sessionId,
 		);
-		return {
-			text: `[Mock #${this.callCount}: ~${duration.toFixed(1)}s]`,
-		};
+		this.onTranscript({
+			text: `[Mock #${this.sequence}: ~${seconds.toFixed(1)}s]`,
+			isFinal: true,
+			durationMs,
+			sequence: this.sequence,
+		});
+		this.chunks = [];
+		this.bytes = 0;
+	}
+
+	async close(): Promise<void> {
+		this.chunks = [];
+		this.bytes = 0;
 	}
 }

@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,7 +12,7 @@ import type {
 	RtpCapabilities,
 } from 'mediasoup/types';
 import { loggers } from '../utils/logger';
-import type { ISttClient } from './SttClient';
+import type { ISttClient, ISttStream } from './SttClient';
 
 interface AudioIngesterOptions {
 	roomId: string;
@@ -28,21 +29,42 @@ interface AudioIngesterOptions {
 // ── VAD / Streaming Config ───────────────────────────────────────────────────
 const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2; // s16le
+const OUTPUT_CHANNELS = 1; // ASR input is mono; Meet still publishes stereo Opus.
 
 /** How often we check audio energy (ms) */
 const VAD_CHECK_MS = 100;
 /** Bytes of audio per VAD check */
 const BYTES_PER_CHECK = (SAMPLE_RATE * BYTES_PER_SAMPLE * VAD_CHECK_MS) / 1000;
 
-/** Consecutive silent checks before we flush (300 ms pause) */
-const SILENCE_CHECKS_TO_FLUSH = 3;
-/** Minimum speech checks before we consider it worth flushing (1.5 s). */
-const MIN_SPEECH_CHECKS = 15;
-/** Min checks for tail-end catch-up flush (500 ms) */
-const MIN_TAIL_CHECKS = 5;
-/** How often to send a draft update during continuous speech (2 s) */
-const DRAFT_INTERVAL_CHECKS = 20;
-
+/** Consecutive silent checks before we flush (500 ms pause by default) */
+const SILENCE_CHECKS_TO_FLUSH = Math.max(
+	1,
+	Math.ceil(
+		Number.parseInt(process.env.STT_SILENCE_MS || '500', 10) / VAD_CHECK_MS,
+	),
+);
+/** Minimum speech before a normal silence final (600 ms by default). */
+const MIN_SPEECH_CHECKS = Math.max(
+	1,
+	Math.ceil(
+		Number.parseInt(process.env.STT_MIN_SPEECH_MS || '600', 10) / VAD_CHECK_MS,
+	),
+);
+/** Min speech for short utterance / tail-end catch-up flush (200 ms by default). */
+const MIN_TAIL_CHECKS = Math.max(
+	1,
+	Math.ceil(
+		Number.parseInt(process.env.STT_MIN_TAIL_MS || '200', 10) / VAD_CHECK_MS,
+	),
+);
+/** Silence before finalizing a short utterance (700 ms by default). */
+const SHORT_UTTERANCE_SILENCE_CHECKS = Math.max(
+	SILENCE_CHECKS_TO_FLUSH,
+	Math.ceil(
+		Number.parseInt(process.env.STT_SHORT_UTTERANCE_SILENCE_MS || '700', 10) /
+			VAD_CHECK_MS,
+	),
+);
 /**
  * Normalized RMS threshold for speech vs silence.
  * 0.0 = absolute silence, 1.0 = full-scale square wave.
@@ -50,12 +72,6 @@ const DRAFT_INTERVAL_CHECKS = 20;
  */
 const SPEECH_RMS_THRESHOLD = Number.parseFloat(
 	process.env.STT_VAD_THRESHOLD || '0.012',
-);
-
-/** Max time one transcription can block the pipeline (ms) */
-const TRANSCRIBE_TIMEOUT_MS = Number.parseInt(
-	process.env.STT_TRANSCRIBE_TIMEOUT || '5000',
-	10,
 );
 
 /**
@@ -70,6 +86,8 @@ export class AudioIngester {
 	private producer: Producer;
 	private router: Router;
 	private sttClient: ISttClient;
+	private sttStream: ISttStream | null = null;
+	private sessionId = randomUUID();
 	private isActiveSpeaker?: () => boolean;
 	private onTranscript: (
 		text: string,
@@ -85,16 +103,13 @@ export class AudioIngester {
 	private running = false;
 
 	// ── VAD state ──────────────────────────────────────────────────────────────
-	private pcmChunks: Buffer[] = [];
-	private pcmChunkBytes = 0;
 	private vadQueue: Buffer[] = [];
 	private vadQueueBytes = 0;
 	private speechCheckCount = 0;
 	private silenceCheckCount = 0;
 	private isInSpeech = false;
 	private vadTimer: NodeJS.Timeout | null = null;
-	private chunkSumSq = 0;
-	private lastDraftCheck = 0;
+	private streamedBytes = 0;
 
 	constructor(options: AudioIngesterOptions) {
 		this.roomId = options.roomId;
@@ -119,17 +134,33 @@ export class AudioIngester {
 				ip: '127.0.0.1',
 				port: this.ffmpegPort,
 			});
+			this.sttStream = await this.sttClient.createStream(
+				{
+					sessionId: this.sessionId,
+					roomId: this.roomId,
+					participantId: this.participantId,
+					producerId: this.producer.id,
+					participantName: this.participantName,
+					sampleRate: SAMPLE_RATE,
+					language: process.env.NEMOTRON_LANGUAGE || 'en-US',
+				},
+				(event) => {
+					this.onTranscript(event.text, event.isFinal, event.durationMs);
+				},
+			);
 			this.startVadLoop();
 
 			loggers.stt.info(
-				'AudioIngester started for %s in room %s (ffmpeg port %d, vadThreshold=%.4f)',
+				'AudioIngester started for %s in room %s (producer %s, session %s, ffmpeg port %d, vadThreshold=%.4f)',
 				this.participantId,
 				this.roomId,
+				this.producer.id,
+				this.sessionId,
 				this.ffmpegPort,
 				SPEECH_RMS_THRESHOLD,
 			);
 		} catch (error) {
-			this.running = false;
+			await this.stop();
 			loggers.stt.error(
 				'Failed to start AudioIngester for %s: %s',
 				this.participantId,
@@ -148,9 +179,13 @@ export class AudioIngester {
 			this.vadTimer = null;
 		}
 
-		// Flush any remaining speech
-		if (this.pcmChunkBytes > 0 && this.speechCheckCount >= MIN_TAIL_CHECKS) {
-			await this.flushBuffer(true);
+		if (this.streamedBytes > 0 && this.speechCheckCount >= MIN_TAIL_CHECKS) {
+			this.markFinal();
+		}
+
+		if (this.sttStream) {
+			await this.sttStream.close();
+			this.sttStream = null;
 		}
 
 		if (this.consumer) {
@@ -243,7 +278,7 @@ export class AudioIngester {
 			'-ar',
 			String(SAMPLE_RATE),
 			'-ac',
-			'1',
+			String(OUTPUT_CHANNELS),
 			'pipe:1',
 		];
 
@@ -316,21 +351,16 @@ export class AudioIngester {
 			this.silenceCheckCount = 0;
 			this.speechCheckCount++;
 			this.isInSpeech = true;
-			this.pcmChunks.push(frame);
-			this.pcmChunkBytes += frame.length;
-			this.chunkSumSq += frameSumSq;
+			this.sendFrame(frame);
 		} else {
 			this.silenceCheckCount++;
 			if (this.isInSpeech) {
-				this.pcmChunks.push(frame);
-				this.pcmChunkBytes += frame.length;
+				this.sendFrame(frame);
 			}
 		}
 
 		if (this.shouldFlush()) {
-			this.flushBuffer(true).catch(() => {});
-		} else if (this.shouldDraft()) {
-			this.flushDraft().catch(() => {});
+			this.markFinal();
 		}
 	}
 
@@ -347,7 +377,7 @@ export class AudioIngester {
 		// Catches trailing words that didn't reach MIN_SPEECH_CHECKS.
 		if (
 			this.isInSpeech &&
-			this.silenceCheckCount >= SILENCE_CHECKS_TO_FLUSH * 4 &&
+			this.silenceCheckCount >= SHORT_UTTERANCE_SILENCE_CHECKS &&
 			this.speechCheckCount >= MIN_TAIL_CHECKS
 		) {
 			return true;
@@ -355,132 +385,41 @@ export class AudioIngester {
 		return false;
 	}
 
-	private shouldDraft(): boolean {
-		return (
-			this.isInSpeech &&
-			this.speechCheckCount >= MIN_SPEECH_CHECKS &&
-			this.speechCheckCount - this.lastDraftCheck >= DRAFT_INTERVAL_CHECKS
-		);
-	}
-
-	private async flushBuffer(isFinal: boolean): Promise<void> {
-		// Concatenate accumulated chunks once
-		const chunk =
-			this.pcmChunks.length === 1
-				? this.pcmChunks[0]
-				: Buffer.concat(this.pcmChunks);
-		const speechChecks = this.speechCheckCount;
-		const chunkRms =
-			this.chunkSumSq > 0
-				? Math.sqrt(this.chunkSumSq / (chunk.length / BYTES_PER_SAMPLE)) / 32768
-				: 0;
-
-		if (isFinal) {
-			// Final flush: reset state, transcript starts fresh after this
-			this.pcmChunks = [];
-			this.pcmChunkBytes = 0;
-			this.speechCheckCount = 0;
-			this.silenceCheckCount = 0;
-			this.isInSpeech = false;
-			this.chunkSumSq = 0;
-			this.lastDraftCheck = 0;
-		} else {
-			// Draft flush: keep accumulated audio so the final segment still contains
-			// the whole utterance. The frontend replaces this participant's draft line.
-			this.lastDraftCheck = this.speechCheckCount;
-		}
-
-		const durationMs = (chunk.length / BYTES_PER_SAMPLE / SAMPLE_RATE) * 1000;
-
-		loggers.stt.debug(
-			'%s %d ms (%d checks) for %s',
-			isFinal ? 'Flushing' : 'Draft',
-			durationMs.toFixed(0),
-			speechChecks,
-			this.participantId,
-		);
-
-		// Active-speaker-only mode: discard audio from non-active speakers
+	private sendFrame(frame: Buffer): void {
 		if (this.isActiveSpeaker && !this.isActiveSpeaker()) {
 			loggers.stt.debug(
-				'Speaker %s not active, discarding %d ms chunk',
+				'Speaker %s not active, discarding frame',
 				this.participantId,
-				durationMs.toFixed(0),
 			);
 			return;
 		}
+		this.sttStream?.sendAudio(frame);
+		this.streamedBytes += frame.length;
+	}
 
-		// Skip chunks that are too short to transcribe meaningfully
-		if (chunk.length < BYTES_PER_CHECK * MIN_TAIL_CHECKS) {
-			loggers.stt.debug('Chunk too short, skipping');
+	private markFinal(): void {
+		if (this.streamedBytes < BYTES_PER_CHECK * MIN_TAIL_CHECKS) {
+			this.resetVadState();
 			return;
 		}
-
-		try {
-			// Normalize audio to target RMS (-20 dBFS) so quiet speakers
-			// are boosted and loud speakers are attenuated.
-			const normalized = this.normalizeAudio(chunk, -20, chunkRms);
-			// Pass onTranscript as per-segment callback so segments stream to the frontend.
-			const result = await this.transcribeWithTimeout(
-				normalized,
-				TRANSCRIBE_TIMEOUT_MS,
-				(segText: string) => {
-					this.onTranscript(segText, false, durationMs);
-				},
-			);
-			const rawText = result.text?.trim();
-			if (rawText) {
-				const polished = this.postProcessText(rawText);
-				this.onTranscript(polished, isFinal, durationMs);
-			} else if (isFinal) {
-				// Clear placeholder on final flush when nothing transcribed
-				this.onTranscript('', true, 0);
-			}
-		} catch (error) {
-			loggers.stt.error(
-				'Transcription failed for %s: %s',
-				this.participantId,
-				(error as Error).message,
-			);
-			if (isFinal) {
-				this.onTranscript('', true, 0);
-			}
-		} finally {
-			// Catch-up flush: if audio accumulated during transcription,
-			// flush it even if MIN_SPEECH_CHECKS isn't met.
-			if (isFinal && this.pcmChunkBytes >= BYTES_PER_CHECK * MIN_TAIL_CHECKS) {
-				this.flushBuffer(true).catch(() => {});
-			}
-		}
+		const durationMs =
+			(this.streamedBytes / BYTES_PER_SAMPLE / SAMPLE_RATE) * 1000;
+		loggers.stt.debug(
+			'Marking final %d ms (%d checks) for %s session %s',
+			durationMs.toFixed(0),
+			this.speechCheckCount,
+			this.participantId,
+			this.sessionId,
+		);
+		this.sttStream?.markFinal(durationMs);
+		this.resetVadState();
 	}
 
-	private flushDraft(): Promise<void> {
-		// Fire-and-forget: transcription continues in background,
-		// audio keeps accumulating for the final flush.
-		return this.flushBuffer(false).catch(() => {});
-	}
-
-	private async transcribeWithTimeout(
-		pcmBuffer: Buffer,
-		timeoutMs: number,
-		onSegment?: (text: string) => void,
-	): Promise<{ text?: string }> {
-		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
-				reject(new Error(`Transcription timed out after ${timeoutMs}ms`));
-			}, timeoutMs);
-
-			this.sttClient
-				.transcribe(pcmBuffer, SAMPLE_RATE, onSegment)
-				.then((result) => {
-					clearTimeout(timer);
-					resolve(result);
-				})
-				.catch((error) => {
-					clearTimeout(timer);
-					reject(error);
-				});
-		});
+	private resetVadState(): void {
+		this.speechCheckCount = 0;
+		this.silenceCheckCount = 0;
+		this.isInSpeech = false;
+		this.streamedBytes = 0;
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────────
@@ -520,72 +459,6 @@ export class AudioIngester {
 		}
 
 		return out;
-	}
-
-	/**
-	 * Normalize PCM audio to a target dBFS level.
-	 * Unnormalized quiet/loud audio severely degrades ASR accuracy.
-	 */
-	private normalizeAudio(
-		buffer: Buffer,
-		targetDbFs: number,
-		precomputedRms?: number,
-	): Buffer {
-		const targetRms = 32768 * 10 ** (targetDbFs / 20);
-		const currentRms =
-			precomputedRms !== undefined
-				? precomputedRms * 32768
-				: (() => {
-						let currentSum = 0;
-						for (let i = 0; i < buffer.length; i += BYTES_PER_SAMPLE) {
-							currentSum += buffer.readInt16LE(i) ** 2;
-						}
-						return Math.sqrt(currentSum / (buffer.length / BYTES_PER_SAMPLE));
-					})();
-
-		if (currentRms === 0) return buffer;
-
-		let gain = targetRms / currentRms;
-		// Hard limit to prevent clipping
-		gain = Math.min(gain, 10);
-
-		const out = Buffer.alloc(buffer.length);
-		for (let i = 0; i < buffer.length; i += BYTES_PER_SAMPLE) {
-			let sample = buffer.readInt16LE(i);
-			sample = Math.max(-32768, Math.min(32767, Math.round(sample * gain)));
-			out.writeInt16LE(sample, i);
-		}
-		return out;
-	}
-
-	/**
-	 * Text post-processing for live captions.
-	 * - Filters common ASR hallucinations on silence
-	 * - Deduplicates repeated words
-	 * - Capitalizes first letter
-	 */
-	private postProcessText(text: string): string {
-		let t = text.trim();
-		if (!t) return t;
-
-		// Filter common hallucinations when chunk is very short or low energy
-		const lower = t.toLowerCase();
-		if (
-			lower === 'thank you.' ||
-			lower === 'thank you' ||
-			lower === 'thanks for watching.' ||
-			lower === 'thanks for watching'
-		) {
-			return '';
-		}
-
-		// Deduplicate repeated words (e.g., "hello hello" → "hello")
-		t = t.replace(/\b(\w+)\s+\1\b/gi, '$1');
-
-		// Capitalize first letter
-		t = t.charAt(0).toUpperCase() + t.slice(1);
-
-		return t;
 	}
 
 	private buildSdp(port: number, payloadType: number): string {
