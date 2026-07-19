@@ -12,7 +12,7 @@ Set `STT_SERVER_URL` to a running STT service that implements `/health` and `/st
 
 ### Docker Compose
 
-The STT backend is included in the runtime image and started automatically as a sidecar container.
+Set `STT_SERVER_URL` to an externally managed STT backend. The SFU deployment does not start an STT sidecar.
 
 ### Environment Variables
 

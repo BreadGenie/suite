@@ -351,7 +351,6 @@ export interface Room {
 	webRtcServer: WebRtcServer;
 	audioLevelObserver: AudioLevelObserver;
 	peers: Map<string, Peer>;
-	producerToPeerId: Map<string, string>;
 	created: Date;
 }
 

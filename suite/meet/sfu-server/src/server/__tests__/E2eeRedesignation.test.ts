@@ -352,7 +352,7 @@ async function main(): Promise<void> {
 		`expected stale roster host to be pruned and live host to receive commit-request, got ${(sent as { length: number }).length}`,
 	);
 	assert(
-		(sent[0].target as string) === 'host-1',
+		sent[0].target === 'host-1',
 		`expected commit-request to target live host-1 after pruning stale-host, got ${sent[0].target}`,
 	);
 	assert(

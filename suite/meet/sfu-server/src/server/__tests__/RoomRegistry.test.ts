@@ -186,9 +186,9 @@ describe('RoomRegistry', () => {
 			name: 'Alice',
 			userId: 'u-1',
 			avatar: 'a.png',
+			is_guest: false,
 			audio_enabled: true,
 			video_enabled: true,
-			is_guest: false,
 		};
 
 		it('participant_joined sends full userData to full sockets and a stripped payload to preview sockets', () => {
