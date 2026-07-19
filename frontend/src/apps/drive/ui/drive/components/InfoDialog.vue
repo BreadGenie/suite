@@ -123,8 +123,8 @@
 import {
   Dialog,
   Button,
-  createResource,
   Skeleton,
+  createResource,
 } from 'frappe-ui'
 import { ref, inject } from 'vue'
 import { onKeyDown } from '@vueuse/core'

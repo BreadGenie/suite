@@ -127,8 +127,8 @@ import {
   Dropdown,
   Tree,
   Input,
-  toast,
   Skeleton,
+  toast,
 } from 'frappe-ui'
 import { move, getTeams } from '../js/resources'
 
