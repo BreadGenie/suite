@@ -23,44 +23,48 @@
         icon-left="check-circle"
         @click="markAllRead"
       >
-        Mark all as Read
+        Mark all as read
       </Button>
     </div>
   </div>
+  <DriveListSkeleton v-if="!notifications.data" />
   <ListView
-    v-if="notifications.data?.length"
+    v-else-if="notifications.data.length"
     class="px-5 pt-5"
     :columns="columns"
     :options="options"
     :rows="notifications.data"
     row-key="name"
   />
-  <div
+  <NoFilesSection
     v-else
-    class="flex flex-col items-center justify-center m-auto min-h-full overflow-auto"
-    style="transform: translate(0, -42px)"
-  >
-    <LucideInbox class="w-14 h-auto text-ink-gray-4 pb-4" />
-    <span class="text-base-medium text-ink-gray-5">No Notifications</span>
-  </div>
+    :icon="LucideInbox"
+    title="No notifications"
+    description="Updates about your files will show up here."
+  />
 </template>
 <script setup>
 import { ref, h, watch } from 'vue'
 import { formatTimeAgo } from '@vueuse/core'
 import { createResource, Avatar, ListView, TabButtons, Button} from 'frappe-ui'
 import { notifCount } from '@/apps/drive/resources/permissions'
+import NoFilesSection from '@/apps/drive/components/NoFilesSection.vue'
+import DriveListSkeleton from '@/apps/drive/components/DriveListSkeleton.vue'
 import { formatDate } from '@/apps/drive/utils/format'
 import emitter from '@/apps/drive/emitter'
 import LucideInbox from '~icons/lucide/inbox'
 
 const onlyUnread = ref(true)
 const options = {
-  getRowRoute: (row) => ({
-    name: row.entity_type,
-    params: { entityName: row.notif_doctype_name },
-  }),
+  getRowRoute: (row) =>
+    row.entity_type
+      ? {
+          name: 'drive-' + row.entity_type,
+          params: { entityName: row.notif_doctype_name },
+        }
+      : null,
   onRowClick: (row) => {
-    if (row.type === 'Team') emitter.emit('showSettings', 1)
+    if (row.type === 'Team') emitter.emit('showSettings', 'teams')
     if (onlyUnread.value) {
       markAsRead.submit({ name: row.name })
       if (notifCount.data > 0) notifCount.setData(notifCount.data - 1)

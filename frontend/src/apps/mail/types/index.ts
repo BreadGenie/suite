@@ -18,6 +18,20 @@ export interface ScreenedAddress {
 	modified: string
 }
 
+// A JMAP push subscription (virtual doctype: Push Subscription). Each one registers a device/client
+// with the JMAP server so it receives StateChange notifications. `name` is `user|id` and is the row
+// key used by bulk_delete. `types` is a JSON string of the data types the client subscribes to.
+export interface PushSubscription {
+	user: string
+	id: string
+	name: string
+	device_client_id: string
+	expires: string | null
+	types: string
+	creation: string
+	modified: string
+}
+
 // A row in the Screener: one unique sender in the Screening folder, summarised by their latest mail.
 export interface ScreeningSender {
 	from_email: string
@@ -142,6 +156,13 @@ export interface ComposeMailData {
 export interface Thread {
 	name: string
 	account: string
+	// Populated by the cross-account views (All Inboxes' get_all_inbox_threads and search's
+	// search_mails): the owning account's display name and its Inbox/Archive/Trash mailbox ids, so a
+	// merged row can be opened in / acted on within the correct JMAP account.
+	account_name?: string
+	inbox?: string
+	archive?: string
+	trash?: string
 	id: string
 	thread_id: string
 	from_name: string

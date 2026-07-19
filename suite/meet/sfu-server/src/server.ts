@@ -15,6 +15,11 @@ import { SttManager } from './stt/SttManager';
 import type { ServerConfig } from './types';
 import { loggers } from './utils/logger';
 
+function socketTimeout(envName: string, fallback: number): number {
+	const value = Number.parseInt(process.env[envName] || '', 10);
+	return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export class SFUServer {
 	private app: Application;
 	private server: http.Server;
@@ -52,8 +57,8 @@ export class SFUServer {
 				allowedHeaders: ['*'],
 				credentials: false,
 			},
-			pingTimeout: 60000,
-			pingInterval: 25000,
+			pingTimeout: socketTimeout('SOCKET_PING_TIMEOUT', 60000),
+			pingInterval: socketTimeout('SOCKET_PING_INTERVAL', 25000),
 		});
 
 		this.mediasoup = new MediasoupManager();

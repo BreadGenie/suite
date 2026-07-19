@@ -4,22 +4,13 @@ import suiteRouter from "@/router";
 import { userResource } from "@/boot/session";
 
 /**
- * Meet router compat + guard.
+ * Meet-local guard on the shared suite router: the `requiresAdmin` role check
+ * (audio-test, restricted to System Manager / Administrator). Early-returns
+ * for any route whose name doesn't start with `meet-`; auth itself is the
+ * suite router's `beforeEach` (redirects guests unless `meta.allowGuest`,
+ * which `meet-meeting` carries so guests can join).
  *
- * The standalone Meet app had its own `createRouter` with a global `beforeEach`
- * implementing: auth redirect to /login, `requiresAdmin` (audio-test, restricted
- * to System Manager / Administrator), and `allowGuest` (the Meeting route is
- * reachable by guests). In the suite there is ONE router; the suite router's own
- * `beforeEach` already redirects guests to /login UNLESS the route is marked
- * `meta.isPublic` (we mark `meet-meeting` public so guests can join).
- *
- * So only the meet-SPECIFIC `requiresAdmin` role check is ported here as a
- * meet-local guard that early-returns for any route whose name doesn't start
- * with `meet-`. Login state comes from the shared session store via the suite
- * guard; here we only use meet's `userResource` for the admin role check.
- *
- * Re-exports the single suite router instance as `router` so meet pages/
- * composables can keep importing it, mirroring the calendar/slides ports.
+ * Re-exports the suite router instance as `router` for meet pages/composables.
  */
 export const router = suiteRouter;
 

@@ -166,6 +166,7 @@ export class MediasoupManager {
 		await this.workerManager.initialize(
 			mediasoupConfig.numWorkers,
 			mediasoupConfig.worker,
+			mediasoupConfig.webRtcServer,
 		);
 
 		loggers.mediasoupManager.info('Mediasoup initialized successfully');
@@ -175,10 +176,11 @@ export class MediasoupManager {
 		roomId: string,
 		onActiveSpeaker?: (roomId: string, participantIds: string[]) => void,
 	): Promise<Room> {
-		const worker = this.workerManager.getNextWorker();
+		const { worker, webRtcServer } = this.workerManager.getNextWorker();
 		return this.roomManager.createRoom(
 			roomId,
 			worker,
+			webRtcServer,
 			mediasoupConfig.router.mediaCodecs as RtpCodecCapability[],
 			onActiveSpeaker,
 		);
@@ -253,6 +255,7 @@ export class MediasoupManager {
 			roomId,
 			peerId,
 			room.router,
+			room.webRtcServer,
 			direction,
 			mediasoupConfig.webRtcTransport,
 		);
@@ -291,8 +294,7 @@ export class MediasoupManager {
 			throw new Error(`Peer ${peerId} not found in room ${roomId}`);
 		}
 
-		const listenIp =
-			mediasoupConfig.webRtcTransport.listenIps[0]?.ip || '0.0.0.0';
+		const listenIp = mediasoupConfig.webRtcServer.listenIp || '0.0.0.0';
 		return this.transportManager.createPlainTransport(
 			roomId,
 			peerId,

@@ -7,24 +7,6 @@ from werkzeug.exceptions import Forbidden, NotFound
 from werkzeug.wrappers import Response
 
 
-@frappe.whitelist()
-def create_drive_file(name: str, parent: str | None = None, title: str | None = "Untitled") -> str:
-	"""
-	Creates a corresponding Drive File for a Slides Presentation.
-	"""
-	from suite.drive.utils import create_file
-
-	file = create_file(
-		title=title,
-		parent=parent,
-		mime_type="frappe/slides",
-		file_type="Presentation",
-		content_doctype="Presentation",
-		content_docname=name,
-	)
-	return file.name
-
-
 def get_file_size(file_path: str) -> int:
 	"""
 	Returns the size of the file at the given path.
@@ -114,23 +96,31 @@ def get_media_response(src: str) -> Response:
 	return response
 
 
-def validate_media_file(src, public) -> None:
-	# check for existence and permissions of the file
-	file_doc = frappe.get_doc("File", {"file_url": src})
-
-	if not file_doc:
+def validate_media_file(src) -> None:
+	file_name = frappe.db.exists("File", {"file_url": src})
+	if not file_name:
 		raise NotFound
 
-	# check if the user has read permission on the file
-	if not public and not frappe.has_permission("File", "read", file_doc):
-		raise Forbidden(_("You don't have permission to access this file"))
+	file_doc = frappe.get_doc("File", file_name)
+	if frappe.has_permission("File", "read", file_doc):
+		return
+
+	# File role perms exclude Guest, so check the attached presentation directly
+	if file_doc.attached_to_doctype == "Presentation" and frappe.has_permission(
+		"Presentation", "read", file_doc.attached_to_name
+	):
+		return
+
+	raise Forbidden(_("You don't have permission to access this file"))
 
 
 @frappe.whitelist(allow_guest=True)
-def get_media_file(src: str, public: str) -> Response:
+def get_media_file(src: str, public: str | None = None) -> Response:
 	"""
 	Fetches permitted video file and returns a response.
+
+	`public` is deprecated and ignored; access is determined server-side.
 	"""
-	validate_media_file(src, public)
+	validate_media_file(src)
 
 	return get_media_response(src)

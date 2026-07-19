@@ -341,7 +341,7 @@ class DataStore(BaseStore):
 
 		self._write(_delete_all)
 
-	def scan(self, entity: Entity, prefix: str = "") -> dict[str, Any]:
+	def scan(self, entity: Entity, prefix: str = "", limit: int | None = None) -> dict[str, Any]:
 		"""Scan for all key-value pairs that start with a given prefix, returning a dictionary of results."""
 
 		full_prefix = self._make_key(entity, prefix)
@@ -356,6 +356,9 @@ class DataStore(BaseStore):
 
 					subkey = self._normalize_scan_key(key.decode())
 					result[subkey] = self._deserialize(value)
+
+					if limit is not None and len(result) >= limit:
+						break
 
 		return result
 

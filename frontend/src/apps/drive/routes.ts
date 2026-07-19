@@ -14,16 +14,15 @@ import { setupTheme } from '@/apps/drive/utils/setupTheme'
  *
  * Paths are RELATIVE to '/drive' (no leading slash; the empty-path child '' is
  * the app index). Route names are namespaced `drive-*` to avoid collisions in
- * the single suite router. Backend method paths preserved as-is.
+ * the single suite router.
  *
- * All routes nest under DriveLayout (was the standalone App.vue): it provides
+ * All routes nest under DriveLayout: it provides
  * the `emitter` and `socket` injections, the `inIframe` flag, renders the
  * sidebar / file-uploader / dialogs chrome, and wires global keyboard
  * shortcuts.
  *
  * Auth: the suite router's own `beforeEach` redirects guests to /login unless
- * the route is `meta.isPublic`. The standalone app used `meta.allowGuest` for
- * publicly-shared files/folders/teams — those become `meta.isPublic` here.
+ * the route is `meta.allowGuest` (publicly-shared files/folders/teams).
  * Drive-specific guard behaviour (recentTeam, clearing active entity) lives in
  * router.ts.
  */
@@ -63,7 +62,7 @@ export const routes: RouteRecordRaw[] = [
         beforeEnter: () => {
           if (useSessionStore().isLoggedIn) return { name: 'drive-Home' }
         },
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
       },
       {
         path: 'setup',
@@ -134,7 +133,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'g/:entityName/',
         component: () => import('@/apps/drive/pages/Dummy.vue'),
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         beforeEnter: async (to) => {
           const entity = createResource({
             url: '/api/method/suite.drive.api.files.get_entity_type',
@@ -161,13 +160,13 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/apps/drive/pages/Team.vue'),
         beforeEnter: [setRootBreadCrumb],
         props: true,
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
       },
       {
         path: 'f/:entityName/:slug?',
         name: 'drive-File',
         component: () => import('@/apps/drive/pages/File.vue'),
-        meta: { isPublic: true, filePage: true },
+        meta: { allowGuest: true, filePage: true },
         beforeEnter: [manageBreadcrumbs],
         props: true,
       },
@@ -175,14 +174,14 @@ export const routes: RouteRecordRaw[] = [
         path: 'd/:entityName/:slug?',
         name: 'drive-Folder',
         component: () => import('@/apps/drive/pages/Folder.vue'),
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         beforeEnter: [manageBreadcrumbs],
         props: true,
       },
       {
         path: 'w/:entityName/:slug?',
         name: 'drive-Document',
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         component: () => import('@/apps/drive/pages/Dummy.vue'),
         beforeEnter: (props) => {
           window.location.href = '/writer/w/' + props.params.entityName
@@ -191,7 +190,7 @@ export const routes: RouteRecordRaw[] = [
       // old redirects
       {
         path: 'folder/:entityName',
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         component: () => import('@/apps/drive/pages/Dummy.vue'),
         beforeEnter: async (to) => {
           await translate.fetch({ old_name: to.params.entityName })
@@ -206,7 +205,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'document/:entityName',
         component: () => import('@/apps/drive/pages/Dummy.vue'),
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         beforeEnter: async (to) => {
           await translate.fetch({ old_name: to.params.entityName })
           return {
@@ -220,7 +219,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'file/:entityName',
         component: () => import('@/apps/drive/pages/Dummy.vue'),
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         beforeEnter: async (to) => {
           await translate.fetch({ old_name: to.params.entityName })
           return {
@@ -234,7 +233,7 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 't/:team/:letter/:entityName/:slug?',
         component: () => import('@/apps/drive/pages/Dummy.vue'),
-        meta: { isPublic: true },
+        meta: { allowGuest: true },
         beforeEnter: async (to) => {
           return {
             path: `/drive/g/${to.params.entityName}`,
@@ -248,12 +247,11 @@ export const routes: RouteRecordRaw[] = [
 export default routes
 
 /* -------------------------------------------------------------------------- */
-/* Boot side-effects (ran in the standalone main.ts; the suite main.ts does    */
-/* not run them, so trigger them on drive module load).                        */
+/* Boot side-effects the suite main.ts does not run, so trigger them on drive  */
+/* module load.                                                                */
 /* -------------------------------------------------------------------------- */
 
-// Apply the persisted theme (was `setupTheme().then(app.mount)` — can't gate
-// the shared mount, so fire-and-forget here).
+// Apply the persisted theme (can't gate the shared mount, so fire-and-forget).
 setupTheme()
 
 // The suite installs ONE global translation plugin so bare `__()` works. We

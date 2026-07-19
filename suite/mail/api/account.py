@@ -11,14 +11,27 @@ from suite.mail.api.mail import normalize_filter
 from suite.mail.api.utils import get_avatar_url
 from suite.mail.doctype.identity.identity import fetch_identities
 from suite.mail.doctype.mail_settings.mail_settings import get_signup_domains
-from suite.mail.utils import convert_html_to_text, user_context
+from suite.mail.stalwart import get_domains
+from suite.mail.utils import is_stalwart_configured, log_mail_error
+from suite.mail.utils.dns import parse_dns_zone_file
 from suite.mail.utils.rate_limiter import dynamic_rate_limit
 from suite.mail.utils.user import (
 	has_user_settings,
 	is_jmap_configured,
 	is_mail_admin,
-	is_system_manager,
 )
+from suite.utils import convert_html_to_text, user_context
+from suite.utils.user import is_system_manager
+
+# SRV service label -> (protocol, connection security). See RFC 6186.
+_SRV_SERVICE_MAP = {
+	"_submissions": ("SMTP", "SSL/TLS"),
+	"_submission": ("SMTP", "STARTTLS"),
+	"_imaps": ("IMAP", "SSL/TLS"),
+	"_imap": ("IMAP", "STARTTLS"),
+	"_pop3s": ("POP3", "SSL/TLS"),
+	"_pop3": ("POP3", "STARTTLS"),
+}
 
 
 @frappe.whitelist(allow_guest=True)
@@ -190,6 +203,86 @@ def get_user_info() -> dict | None:
 	return data
 
 
+@frappe.whitelist()
+def get_mail_client_config() -> list[dict]:
+	"""Returns the SMTP/IMAP/POP endpoints for connecting third-party mail clients.
+
+	Resolution order:
+	1. Master switch off -> nothing.
+	2. Endpoints entered by the admin in Mail Settings.
+	3. Fallback: parse the user's domain DNS SRV records (if Stalwart is configured).
+	"""
+
+	settings = frappe.get_cached_doc("Mail Settings")
+	if not settings.show_mail_client_config:
+		return []
+
+	if settings.mail_client_configurations:
+		return [
+			{
+				"protocol": row.protocol,
+				"hostname": row.hostname,
+				"port": row.port,
+				"connection_security": row.connection_security,
+			}
+			for row in settings.mail_client_configurations
+		]
+
+	if is_stalwart_configured():
+		return _get_client_config_from_dns()
+
+	return []
+
+
+def _get_client_config_from_dns() -> list[dict]:
+	"""Derives mail-client endpoints from the domain DNS SRV records.
+
+	Best-effort: on any failure (Stalwart unreachable, malformed zone file) the error is
+	logged and an empty list is returned so the Advanced tab degrades gracefully.
+	"""
+
+	try:
+		domains = get_domains()
+		if not domains:
+			return []
+
+		config = []
+
+		# Every domain on the cluster points at the same mail server, so their SRV records
+		# resolve to identical client endpoints. Any one domain's zone is enough.
+		domain = domains[0]
+
+		for record in parse_dns_zone_file(domain["dnsZoneFile"]):
+			if record["type"] != "SRV":
+				continue
+
+			mapping = _SRV_SERVICE_MAP.get(record["name"].split(".")[0])
+			if not mapping:
+				continue
+
+			# SRV rdata: <priority> <weight> <port> <target>. "." target means not offered.
+			parts = record["value"].split()
+			if len(parts) < 4 or parts[3] == ".":
+				continue
+
+			protocol, connection_security = mapping
+			config.append(
+				{
+					"protocol": protocol,
+					"hostname": parts[3].rstrip("."),
+					"port": cint(parts[2]),
+					"connection_security": connection_security,
+				}
+			)
+
+		return config
+	except Exception:
+		log_mail_error(
+			title=_("Failed to derive mail client config from DNS"), message=frappe.get_traceback()
+		)
+		return []
+
+
 def get_backup_email(user: str) -> str:
 	"""Return backup email for a user or the user's email if backup doesn't exist"""
 
@@ -353,7 +446,7 @@ def create_calendar_export(
 def normalize_calendar_filter(filter: dict) -> dict:
 	"""Normalize a calendar export filter into a JMAP CalendarEvent/query FilterCondition."""
 
-	from suite.mail.utils.dt import convert_to_utc
+	from suite.utils.dt import convert_to_utc
 
 	normalized = {}
 	if title := filter.get("title"):
@@ -363,6 +456,68 @@ def normalize_calendar_filter(filter: dict) -> dict:
 	for key in ("after", "before"):
 		if value := filter.get(key):
 			normalized[key] = convert_to_utc(value, naive=True).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+	return normalized
+
+
+@frappe.whitelist()
+def create_contacts_import(
+	account: str,
+	format: Literal["vcf", "jmap"],
+	file: str,
+	address_book: str | None = None,
+) -> None:
+	"""Creates contacts exchange of operation import"""
+
+	doc = frappe.new_doc("Contacts Exchange")
+	doc.user = frappe.session.user
+	doc.account = account
+	doc.operation = "Import"
+	doc.import_format = format
+	doc.import_file = file
+	if address_book:
+		doc.import_metadata = json.dumps({"addressBookIds": {address_book: True}})
+	doc.insert()
+	doc.submit()
+
+
+@frappe.whitelist()
+def create_contacts_export(
+	account: str,
+	format: Literal["jmap", "vcf"],
+	archive_type: Literal[".zip", ".tgz", ".tar.gz"],
+	limit: int | None = None,
+	filter: dict | None = None,
+) -> None:
+	"""Creates contacts exchange of operation export"""
+
+	doc = frappe.new_doc("Contacts Exchange")
+	doc.user = frappe.session.user
+	doc.account = account
+	doc.operation = "Export"
+	doc.export_format = format
+	doc.export_archive_type = archive_type
+	doc.export_limit = limit
+	if filter:
+		filter = {k: v for k, v in filter.items() if v}
+		if normalized := normalize_contacts_filter(filter):
+			doc.export_filter = json.dumps(normalized)
+	doc.insert()
+	doc.submit()
+
+
+def normalize_contacts_filter(filter: dict) -> dict:
+	"""Normalize a contacts export filter into a JMAP ContactCard/query FilterCondition."""
+
+	normalized = {}
+	if text := filter.get("text"):
+		normalized["text"] = text
+	if name := filter.get("name"):
+		normalized["name"] = name
+	if email := filter.get("email"):
+		normalized["email"] = email
+	if in_address_book := filter.get("inAddressBook"):
+		normalized["inAddressBook"] = in_address_book
 
 	return normalized
 

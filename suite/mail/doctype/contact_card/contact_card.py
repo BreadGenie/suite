@@ -12,11 +12,12 @@ from frappe.utils import cint, today
 from suite.mail.doctype.address_book.address_book import validate_address_book_name_format
 from suite.mail.doctype.user_account.user_account import get_user_for_jmap_account
 from suite.mail.jmap import get_contact_card_service
+from suite.mail.search import get_email_address_index
 from suite.mail.storage import get_data_store
 from suite.mail.storage.data_store import Entity
-from suite.mail.utils import parse_filters
-from suite.mail.utils.dt import parse_iso_datetime
-from suite.mail.utils.user import get_account_user
+from suite.mail.utils import log_mail_error
+from suite.utils import parse_filters
+from suite.utils.dt import parse_iso_datetime
 
 
 class ContactCard(Document):
@@ -494,17 +495,41 @@ def _get_cached_contact_cards(account: str, ids: list[str]) -> dict[str, dict | 
 
 
 def _cache_contact_cards(account: str, contact_cards: dict[str, dict]) -> None:
-	"""Caches contact cards for the given account."""
+	"""Caches contact cards for the given account, and indexes their addresses for search."""
 
 	store = get_data_store(account)
 	store.set_many(Entity.CONTACT_CARD, items=contact_cards)
 
+	# Feed contact addresses into the shared address index; never let indexing break caching.
+	try:
+		get_email_address_index(account).index_addresses(_contact_addresses(contact_cards.values()))
+	except Exception:
+		log_mail_error(
+			_("Failed to index contact addresses for search"), frappe.get_traceback(with_context=True)
+		)
+
 
 def _remove_cached_contact_cards(account: str, ids: list[str]) -> None:
-	"""Removes cached contact cards for the given account and IDs."""
+	"""Removes cached contact cards for the given account and IDs.
+
+	Addresses are left in the search index on purpose: it is cumulative, and an address from a
+	removed contact is almost always still valid elsewhere.
+	"""
 
 	store = get_data_store(account)
 	store.delete_many(Entity.CONTACT_CARD, subkeys=ids)
+
+
+def _contact_addresses(contact_cards: list[dict]) -> list[dict]:
+	"""Flatten cached contact cards into {name, email} address dicts, one per email address."""
+
+	addresses = []
+	for contact_card in contact_cards:
+		name = contact_card.get("full_name")
+		for email in contact_card.get("emails") or []:
+			addresses.append({"name": name, "email": email.get("address")})
+
+	return addresses
 
 
 def format_contact_card(account: str, address_book_map: dict, contact_card: dict) -> dict:

@@ -1,7 +1,7 @@
 <template>
   <Dialog v-model:open="open" @close="dialogType = ''">
     <template #title>
-      <h3 class="text-4xl-semibold leading-6 text-ink-gray-9 cursor-pointer pr-2" @click="emitter.emit('rename')">
+      <h3 class="text-2xl-semibold leading-6 text-ink-gray-9 cursor-pointer pr-2" @click="emitter.emit('rename')">
         {{ entity.file_name }}
       </h3>
     </template>

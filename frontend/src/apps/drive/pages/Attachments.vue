@@ -2,9 +2,9 @@
   <GenericPage
     :get-entities="getAttachments"
     :empty="{
-      icon: LucideStar,
-      title: 'No favourites yet',
-      description: 'You can save your favourites here.',
+      icon: LucidePaperclip,
+      title: 'No attachments yet',
+      description: 'Files attached to documents will show up here.',
     }"
   />
 </template>
@@ -12,7 +12,7 @@
 <script setup>
 import GenericPage from '@/apps/drive/components/GenericPage.vue'
 import { getAttachments } from '@/apps/drive/resources/files'
-import LucideStar from '~icons/lucide/star'
+import LucidePaperclip from '~icons/lucide/paperclip'
 import { watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { setPageBreadcrumbs } from '@/apps/drive/data/breadcrumbs'

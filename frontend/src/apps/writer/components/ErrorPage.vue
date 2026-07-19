@@ -17,7 +17,7 @@
         }}
       </template>
     </p>
-    <div class="w-50 flex gap-8 my-12">
+    <div class="flex gap-8 my-12">
       <Button
         v-if="$router.options.history.state.back"
         variant="outline"

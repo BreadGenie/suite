@@ -9,7 +9,7 @@
       :action-items="actionItems" :selections="selectedEntitities" :get-entities="getEntities || { data: [] }" />
 
     <DriveListSkeleton v-if="!props.getEntities.data" />
-    <NoFilesSection v-else-if="!props.getEntities.data?.length" :icon="icon" v-bind="empty" />
+    <NoFilesSection v-else-if="!props.getEntities.data?.length" v-bind="empty" />
     <ListView v-else-if="view === 'list'" v-model="selections" :folder-contents="rows && grouper(rows)"
       :action-items="actionItems" :root-entity="verify?.data" @dropped="onDrop" />
     <GridView v-else v-model="selections" :folder-contents="rows" :action-items="actionItems" @dropped="onDrop" />
@@ -84,7 +84,6 @@ const props = defineProps({
   grouper: { type: Function, default: (d) => d },
   showSort: { type: Boolean, default: true },
   verify: { type: Object, default: null },
-  icon: [Function, Object],
   empty: Object,
   getEntities: Object,
 })

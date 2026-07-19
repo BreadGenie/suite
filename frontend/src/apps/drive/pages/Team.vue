@@ -1,8 +1,8 @@
 <template>
   <GenericPage
     :get-entities="getTeam"
-    :icon="LucideBuilding2"
     :empty="{
+      icon: LucideBuilding2,
       title: 'This team is empty',
       description: 'Add files by dropping them here.',
     }"

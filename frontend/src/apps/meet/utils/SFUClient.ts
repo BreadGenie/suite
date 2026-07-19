@@ -7,7 +7,7 @@ import type { E2eeEpochEnvelope } from "./media/E2EEEpochSignaling";
 import { getE2EETransformCapability } from "./media/e2ee";
 import type { SignalChannel } from "./media/SignalChannel";
 
-interface ConnectionDetails {
+export interface ConnectionDetails {
 	authToken: string | null;
 	meetingId: string | null;
 	userId: string | null;
@@ -19,6 +19,100 @@ interface ConnectionDetails {
 	isHost: boolean;
 	isCohost: boolean;
 	userData?: Record<string, unknown>;
+}
+
+/**
+ * Map a join/API payload that already includes SFU fields into ConnectionDetails.
+ * Prefer this over a second Frappe round-trip when join_meeting already returned
+ * auth_token + sfu_url. Lobby-only payloads (lobby_token / waiting) return null.
+ */
+export function connectionDetailsFromJoinPayload(
+	payload: Record<string, unknown>,
+	options: {
+		guestAuthToken?: string | null;
+		guestId?: string | null;
+		guestName?: string | null;
+		expectedMeetingId?: string | null;
+	} = {},
+): ConnectionDetails | null {
+	if (payload.lobby_token && !payload.auth_token && !options.guestAuthToken) {
+		return null;
+	}
+	if (payload.status === "waiting_for_approval") {
+		return null;
+	}
+
+	const authToken =
+		(typeof payload.auth_token === "string" && payload.auth_token) ||
+		(typeof options.guestAuthToken === "string" && options.guestAuthToken) ||
+		null;
+	const sfuUrl =
+		typeof payload.sfu_url === "string" && payload.sfu_url
+			? payload.sfu_url
+			: null;
+	if (!authToken || !sfuUrl) {
+		return null;
+	}
+
+	const meetingId =
+		typeof payload.meeting_id === "string" ? payload.meeting_id : null;
+	if (
+		options.expectedMeetingId &&
+		meetingId &&
+		meetingId !== options.expectedMeetingId
+	) {
+		return null;
+	}
+
+	const expiresInSeconds =
+		typeof payload.expires_in === "number" && payload.expires_in > 0
+			? payload.expires_in
+			: 3600;
+
+	const isGuest = Boolean(
+		options.guestId ||
+			options.guestAuthToken ||
+			payload.guest_id ||
+			(payload.user_data as Record<string, unknown> | undefined)?.is_guest,
+	);
+
+	if (options.guestId) {
+		const payloadGuestId =
+			typeof payload.guest_id === "string" ? payload.guest_id : null;
+		if (payloadGuestId && payloadGuestId !== options.guestId) {
+			return null;
+		}
+	}
+
+	const userId = options.guestId
+		? options.guestId
+		: (typeof payload.user_id === "string" && payload.user_id) || null;
+
+	return {
+		authToken,
+		meetingId: meetingId || options.expectedMeetingId || null,
+		userId,
+		sfuUrl,
+		sfuPort:
+			payload.sfu_port != null && payload.sfu_port !== ""
+				? String(payload.sfu_port)
+				: null,
+		userData:
+			(payload.user_data as Record<string, unknown> | undefined) ||
+			(isGuest
+				? {
+						name: options.guestName || payload.guest_name || "Guest",
+						is_guest: true,
+					}
+				: undefined),
+		tokenExpiresAt: Date.now() + expiresInSeconds * 1000,
+		codecStrategy: normalizeCodecStrategy(
+			(payload.codec_strategy as string) || "svc",
+		),
+		e2eeRequired: Boolean(payload.e2ee_required),
+		isHost: Boolean(payload.is_host),
+		isCohost: Boolean(payload.is_cohost),
+	};
 }
 
 interface ConnectionStatus {
@@ -102,14 +196,30 @@ interface SFUParticipantsResponse {
 
 type SFUEventHandler = (...args: unknown[]) => void;
 
+export type SFURequestErrorCode = "DISCONNECTED" | "TIMEOUT";
+
+export class SFURequestError extends Error {
+	readonly code: SFURequestErrorCode;
+
+	constructor(code: SFURequestErrorCode, message: string) {
+		super(message);
+		this.name = "SFURequestError";
+		this.code = code;
+	}
+}
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+
 export class SFUClient {
 	signalChannel: SignalChannel;
 	connected: boolean;
 	connectionDetails: ConnectionDetails;
 	eventHandlers: Map<string, SFUEventHandler>;
+	private eventListeners: Map<string, Set<SFUEventHandler>>;
 	isRefreshingToken: boolean;
 	tokenRefreshTimer: ReturnType<typeof setTimeout> | null;
 	ownSenderId: number | null;
+	private pendingRequestRejectors: Set<(error: SFURequestError) => void>;
 
 	constructor(signalChannel: SignalChannel) {
 		this.signalChannel = signalChannel;
@@ -127,9 +237,11 @@ export class SFUClient {
 			isCohost: false,
 		};
 		this.eventHandlers = new Map();
+		this.eventListeners = new Map();
 		this.isRefreshingToken = false;
 		this.tokenRefreshTimer = null;
 		this.ownSenderId = null;
+		this.pendingRequestRejectors = new Set();
 		this.setupDefaultHandlers();
 	}
 
@@ -146,11 +258,13 @@ export class SFUClient {
 	async connect(
 		meetingId: string,
 		guestAuthToken: string | null = null,
+		prefetchedDetails: ConnectionDetails | null = null,
 	): Promise<boolean> {
 		if (this.connected) {
 			const connectionDetails = await this.getConnectionDetails(
 				meetingId,
 				guestAuthToken,
+				prefetchedDetails,
 			);
 			this.connectionDetails = connectionDetails;
 			this.signalChannel.updateAuth(connectionDetails.authToken ?? "");
@@ -162,6 +276,7 @@ export class SFUClient {
 			const connectionDetails = await this.getConnectionDetails(
 				meetingId,
 				guestAuthToken,
+				prefetchedDetails,
 			);
 			this.connectionDetails = connectionDetails;
 			this.scheduleTokenRefresh();
@@ -186,7 +301,20 @@ export class SFUClient {
 	async getConnectionDetails(
 		meetingId: string,
 		guestAuthToken: string | null = null,
+		prefetchedDetails: ConnectionDetails | null = null,
 	): Promise<ConnectionDetails> {
+		if (
+			prefetchedDetails?.authToken &&
+			prefetchedDetails?.sfuUrl &&
+			(!prefetchedDetails.meetingId ||
+				prefetchedDetails.meetingId === meetingId)
+		) {
+			return {
+				...prefetchedDetails,
+				meetingId,
+			};
+		}
+
 		if (guestAuthToken) {
 			const guestId = sessionStorage.getItem("guest_id");
 			const guestName = sessionStorage.getItem("guest_name");
@@ -274,6 +402,9 @@ export class SFUClient {
 	}
 
 	disconnect(): void {
+		this.rejectPendingRequests(
+			new SFURequestError("DISCONNECTED", "Disconnected from SFU"),
+		);
 		this.signalChannel.disconnect();
 		this.clearTokenRefreshTimer();
 		this.connected = false;
@@ -464,7 +595,7 @@ export class SFUClient {
 		};
 
 		for (const [event, handler] of Object.entries(defaultHandlers)) {
-			this.eventHandlers.set(event, handler);
+			this.addEventListener(event, handler);
 		}
 	}
 
@@ -475,16 +606,42 @@ export class SFUClient {
 	}
 
 	on(event: string, handler: SFUEventHandler): void {
-		this.eventHandlers.set(event, handler);
-		this.signalChannel.on(event, handler);
+		const hadDispatcher = this.eventHandlers.has(event);
+		this.addEventListener(event, handler);
+		if (this.connected && !hadDispatcher) {
+			this.signalChannel.on(event, this.eventHandlers.get(event) as SFUEventHandler);
+		}
 	}
 
-	off(event: string): void {
-		const handler = this.eventHandlers.get(event);
+	off(event: string, handler?: SFUEventHandler): void {
 		if (handler) {
-			this.signalChannel.off(event, handler);
+			const listeners = this.eventListeners.get(event);
+			listeners?.delete(handler);
+			if (listeners?.size) return;
+		}
+
+		const dispatcher = this.eventHandlers.get(event);
+		if (dispatcher) {
+			this.signalChannel.off(event, dispatcher);
 		}
 		this.eventHandlers.delete(event);
+		this.eventListeners.delete(event);
+	}
+
+	private addEventListener(event: string, handler: SFUEventHandler): void {
+		let listeners = this.eventListeners.get(event);
+		if (!listeners) {
+			listeners = new Set();
+			this.eventListeners.set(event, listeners);
+		}
+		listeners.add(handler);
+
+		if (this.eventHandlers.has(event)) return;
+		this.eventHandlers.set(event, (...args: unknown[]) => {
+			for (const listener of this.eventListeners.get(event) || []) {
+				listener(...args);
+			}
+		});
 	}
 
 	// ==================== WEBRTC OPERATIONS ====================
@@ -737,45 +894,71 @@ export class SFUClient {
 
 	sendRaiseHand(raised: boolean): Promise<unknown> {
 		if (!this.connected) {
-			throw new Error("Not connected to SFU");
+			throw new SFURequestError("DISCONNECTED", "Not connected to SFU");
 		}
-
-		return new Promise((resolve, reject) => {
-			this.signalChannel.emit(
-				"raise_hand",
-				{ raised },
-				(response: Record<string, unknown>) => {
-					if (response?.success) {
-						resolve(response);
-					} else {
-						reject(
-							new Error((response?.error as string) || "Failed to raise hand"),
-						);
-					}
-				},
-			);
-		});
+		return this.sendRequest("raise_hand", { raised });
 	}
 
 	// ==================== UTILITY METHODS ====================
 
-	async sendRequest(event: string, data: unknown): Promise<unknown> {
+	async sendRequest(
+		event: string,
+		data: unknown,
+		timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+	): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			if (!this.connected) {
-				reject(new Error("Not connected to SFU"));
+				reject(new SFURequestError("DISCONNECTED", "Not connected to SFU"));
 				return;
 			}
 
-			this.signalChannel.emit(event, data, (response: SFUResponse) => {
-				if (response.success) {
-					resolve(response);
-				} else {
-					const error = new Error(response.error || `Request failed: ${event}`);
-					console.error(`SFU request failed (${event}):`, response.error);
-					reject(error);
-				}
-			});
+			let settled = false;
+			const finish = (callback: () => void) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				this.pendingRequestRejectors.delete(rejectPending);
+				callback();
+			};
+			const rejectPending = (error: SFURequestError) => {
+				finish(() => reject(error));
+			};
+			const timeout = setTimeout(() => {
+				rejectPending(
+					new SFURequestError(
+						"TIMEOUT",
+						`SFU request timed out: ${event}`,
+					),
+				);
+			}, timeoutMs);
+			this.pendingRequestRejectors.add(rejectPending);
+
+			try {
+				this.signalChannel.emit(event, data, (response: SFUResponse) => {
+					finish(() => {
+						if (response.success) {
+							resolve(response);
+						} else {
+							const error = new Error(
+								response.error || `Request failed: ${event}`,
+							);
+							console.error(`SFU request failed (${event}):`, response.error);
+							reject(error);
+						}
+					});
+				});
+			} catch (error) {
+				finish(() => reject(error));
+			}
 		});
+	}
+
+	private rejectPendingRequests(error: SFURequestError): void {
+		const pending = Array.from(this.pendingRequestRejectors);
+		this.pendingRequestRejectors.clear();
+		for (const reject of pending) {
+			reject(error);
+		}
 	}
 
 	sendEvent(event: string, data: unknown): void {

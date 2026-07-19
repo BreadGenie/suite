@@ -9,7 +9,7 @@ import editorStyle from '@/apps/writer/styles/editor.css?inline'
 import globalStyle from '@/apps/writer/styles/index.css?inline'
 import slugify from 'slugify'
 import { useFileUpload, toast as nToast, createResource } from 'frappe-ui'
-import { getTeams } from '@/apps/drive/ui/drive/js/resources'
+import { getTeams } from '@/apps/drive/sdk'
 import emitter from '@/apps/writer/emitter'
 import { createLowlight, common } from 'lowlight'
 import { toHtml } from 'hast-util-to-html'
@@ -627,7 +627,12 @@ export function toast(obj) {
   })
 }
 
-export const COMMON_EXTENSIONS = [EmbedExtension, ExtendedParagraph]
+export const COMMON_EXTENSIONS = [
+  FontSize,
+  FontFamily,
+  EmbedExtension,
+  ExtendedParagraph,
+]
 
 export async function downloadMD(editor, foldername) {
   let html = editor.value.getHTML()

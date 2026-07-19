@@ -27,7 +27,7 @@
   <ShareDialog
     v-else-if="dialog === 's'"
     v-model="dialog"
-    :entity="entities[0]"
+    :file="entities[0]"
     @success="() => props.list?.fetch?.(props.list.params)"
   />
   <MoveDialog

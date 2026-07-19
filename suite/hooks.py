@@ -64,7 +64,6 @@ website_route_rules = [
 
 # mail — website redirects
 website_redirects = [
-	{"source": "/", "target": "/suite"},
 	{
 		"source": "/auth/validate",
 		"target": "/api/method/suite.mail.api.auth.validate",
@@ -112,11 +111,15 @@ website_redirects = [
 	},
 ]
 
+# Framework File permission logic is fully replaced by Drive's
+ignore_file_permissions = True
+
 # ============================================================================
 # Permissions — permission_query_conditions (deep-merged union; no key clashes)
 # ============================================================================
 permission_query_conditions = {
 	# drive
+	"File": "suite.drive.utils.overrides.filter_file",
 	"Drive Team": "suite.drive.utils.overrides.filter_drive_team",
 	"Drive Permission": "suite.drive.utils.overrides.filter_drive_permission",
 	"Drive Favourite": "suite.drive.utils.overrides.filter_drive_favourite",
@@ -129,10 +132,13 @@ permission_query_conditions = {
 	# sheets
 	"Sheet Op Log": "suite.sheets.permissions.sheet_op_log_query",
 	"Sheet Snapshot": "suite.sheets.permissions.sheet_snapshot_query",
+	# meet
+	"Meet Room": "suite.meet.doctype.meet_room.meet_room.get_permission_query_conditions",
 	# mail
 	"JMAP Account": "suite.mail.doctype.jmap_account.jmap_account.get_permission_query_condition",
 	"Blocked Email Address": "suite.mail.doctype.blocked_email_address.blocked_email_address.get_permission_query_condition",
 	"Calendar Exchange": "suite.mail.doctype.calendar_exchange.calendar_exchange.get_permission_query_condition",
+	"Contacts Exchange": "suite.mail.doctype.contacts_exchange.contacts_exchange.get_permission_query_condition",
 	"Junk Email Address": "suite.mail.doctype.junk_email_address.junk_email_address.get_permission_query_condition",
 	"Mail Exchange": "suite.mail.doctype.mail_exchange.mail_exchange.get_permission_query_condition",
 	"Mail Queue": "suite.mail.doctype.mail_queue.mail_queue.get_permission_query_condition",
@@ -151,10 +157,12 @@ has_permission = {
 	# slides
 	"Presentation": "suite.slides.doctype.presentation.presentation.has_permission",
 	# writer
-	"Writer Document": "suite.writer.perms.has_permission",
+	"Writer Document": "suite.drive.overrides.file.content_has_permission",
 	# sheets
 	"Sheet Op Log": "suite.sheets.permissions.sheet_op_log_has_permission",
 	"Sheet Snapshot": "suite.sheets.permissions.sheet_snapshot_has_permission",
+	# meet
+	"Meet Room": "suite.meet.doctype.meet_room.meet_room.has_permission",
 	# mail
 	"JMAP Account": "suite.mail.doctype.jmap_account.jmap_account.has_permission",
 	"Address Book": "suite.mail.doctype.address_book.address_book.has_permission",
@@ -163,6 +171,7 @@ has_permission = {
 	"Calendar Event": "suite.mail.doctype.calendar_event.calendar_event.has_permission",
 	"Calendar Exchange": "suite.mail.doctype.calendar_exchange.calendar_exchange.has_permission",
 	"Contact Card": "suite.mail.doctype.contact_card.contact_card.has_permission",
+	"Contacts Exchange": "suite.mail.doctype.contacts_exchange.contacts_exchange.has_permission",
 	"Event Notification": "suite.mail.doctype.event_notification.event_notification.has_permission",
 	"Identity": "suite.mail.doctype.identity.identity.has_permission",
 	"Junk Email Address": "suite.mail.doctype.junk_email_address.junk_email_address.has_permission",
@@ -205,6 +214,8 @@ override_whitelisted_methods = {
 	# SpamD
 	"mail.api.spamd.scan": "suite.mail.api.spamd.scan",
 	"mail.api.spamd.get_spam_score": "suite.mail.api.spamd.get_spam_score",
+	# writer — embed URLs baked into documents created by the standalone app
+	"writer.api.embed.get": "suite.writer.api.embed.get",
 }
 
 # ============================================================================
@@ -212,8 +223,8 @@ override_whitelisted_methods = {
 # ============================================================================
 doc_events = {
 	"Presentation": {
-		"on_update": ["suite.drive.api.integration.presentation"],
-		"on_trash": ["suite.drive.api.integration.presentation"],
+		"on_update": ["suite.drive.overrides.file.sync_content_file"],
+		"on_trash": ["suite.drive.overrides.file.sync_content_file"],
 	},
 	"User": {
 		"after_insert": [
@@ -223,6 +234,9 @@ doc_events = {
 		],
 		"on_update": [
 			"suite.mail.events.update_account_password",
+			"suite.mail.events.clear_sessions_on_disable",
+			"suite.mail.events.apply_disabled_account_role",
+			"suite.mail.events.remove_disabled_account_role",
 		],
 		"on_trash": [
 			"suite.mail.events.delete_account",
@@ -246,12 +260,15 @@ scheduler_events = {
 		# mail
 		"suite.mail.doctype.jmap_account.jmap_account.delete_orphaned_jmap_accounts",
 		"suite.mail.doctype.mail_exchange.mail_exchange.clean_import_export_directories",
+		"suite.mail.doctype.push_subscription.push_subscription.renew_expiring_push_subscriptions",
 		"suite.mail.doctype.calendar_exchange.calendar_exchange.clean_calendar_import_export_directories",
+		"suite.mail.doctype.contacts_exchange.contacts_exchange.clean_contacts_import_export_directories",
 	],
 	"hourly": [
 		# mail
 		"suite.mail.doctype.mail_exchange.mail_exchange.retry_stuck_mail_exchanges",
 		"suite.mail.doctype.calendar_exchange.calendar_exchange.retry_stuck_calendar_exchanges",
+		"suite.mail.doctype.contacts_exchange.contacts_exchange.retry_stuck_contacts_exchanges",
 	],
 	"hourly_long": [
 		# mail
@@ -369,6 +386,9 @@ ALLOWED_WILDCARD_PATHS = [
 	"/api/method/suite.meet.api.",
 	"/api/method/suite.drive.api.",
 	"/api/method/suite.writer.api.",
+	# writer — backward-compatible prefix for embed URLs stored in old documents
+	# (see override_whitelisted_methods).
+	"/api/method/writer.api.",
 	"/api/method/suite.slides.api.",
 	"/api/method/suite.sheets.api.",
 ]

@@ -1,6 +1,6 @@
 <template>
   <FrappeUIProvider>
-    <div v-if="isLoggedIn || $route.meta.isPublic" class="flex flex-col sm:flex-row h-full">
+    <div v-if="isLoggedIn || $route.meta.allowGuest" class="flex flex-col sm:flex-row h-full">
       <Sidebar v-if="normalView" />
       <div id="dropzone" class="flex flex-col flex-1 overflow-hidden bg-surface-base relative">
         <router-view :key="$route.fullPath" v-slot="{ Component }">
@@ -35,8 +35,7 @@ import { useRoute } from 'vue-router'
 import { setupTheme } from '@/apps/drive/utils/setupTheme'
 import '@/apps/drive/index.css'
 
-// The standalone main.ts provided these via `app.provide`. Provide them from the
-// route-group layout instead.
+// Provided from the route-group layout since the suite main.ts is shared.
 provide('emitter', emitter)
 provide('socket', initSocket())
 
@@ -57,7 +56,6 @@ emitter.on('showSearchPopup', (data) => {
 })
 
 onMounted(() => {
-  // was `setupTheme().then(app.mount)` in the standalone main.ts
   setupTheme()
 })
 

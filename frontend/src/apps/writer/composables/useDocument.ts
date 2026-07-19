@@ -1,6 +1,7 @@
 import { MaybeRefOrGetter, toValue, ref } from 'vue'
 import { useDoc, createResource } from 'frappe-ui'
-import { prettyData } from '@/apps/drive/ui/drive/js/utils'
+import { useSessionStore } from '@/boot/session'
+import { prettyData } from '@/apps/drive/sdk'
 import { getDocuments } from '@/apps/writer/resources/'
 
 const trackVisit = createResource({
@@ -42,11 +43,13 @@ export default function useDocument(docId: MaybeRefOrGetter<string>) {
         updateSettings: 'update_settings',
       },
     })
-    trackVisit.submit(name)
-    getDocuments.updateRow({
-      name: docId,
-      accessed: new Date().toISOString(),
-    })
+    if (useSessionStore().isLoggedIn) {
+      trackVisit.submit(name)
+      getDocuments.updateRow({
+        name: docId,
+        accessed: new Date().toISOString(),
+      })
+    }
   })
   return { file, document }
 }

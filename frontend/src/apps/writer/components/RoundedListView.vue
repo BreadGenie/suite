@@ -12,7 +12,7 @@
       <div
         class="flex justify-between items-center sticky top-0 bg-surface-base h-8 z-10 mt-3 mb-1 -mx-3"
       >
-        <h2 class="text-sm-medium text-ink-gray-5">
+        <h2 class="text-sm font-medium text-ink-gray-5">
           {{ group }}
         </h2>
         <TabButtons

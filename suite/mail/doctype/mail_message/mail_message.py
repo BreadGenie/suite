@@ -30,20 +30,21 @@ from suite.mail.doctype.user_account.user_account import get_user_for_jmap_accou
 from suite.mail.jmap import get_email_service, get_jmap_connection, get_thread_service
 from suite.mail.jmap.services.mail.email import EmailService
 from suite.mail.jmap.services.mail.mailbox import MailboxService
+from suite.mail.search import get_email_address_index
 from suite.mail.storage import get_blob_store, get_data_store
 from suite.mail.storage.data_store import Entity
 from suite.mail.utils import (
-	enqueue_job,
 	get_config,
-	log_error,
-	parse_filters,
-	user_context,
+	log_mail_error,
 )
-from suite.mail.utils.dt import convert_to_utc, parse_iso_datetime, to_iso8601_z
 from suite.mail.utils.email_parser import EmailParser
-from suite.mail.utils.lock import acquire_lock, release_lock
 from suite.mail.utils.logger import get_push_logger
 from suite.mail.utils.user import get_account_emails, get_sync_state, update_sync_state
+from suite.utils import clean_text, convert_html_to_text, enqueue_job, parse_filters, user_context
+from suite.utils.dt import convert_to_utc, parse_iso_datetime, to_iso8601_z
+from suite.utils.lock import acquire_lock, release_lock
+
+PREVIEW_MAX_LENGTH = 256
 
 
 class MailMessage(Document):
@@ -840,7 +841,7 @@ def get_message_ids(
 			return [email["id"] for email in emails if not set(mailbox_id).isdisjoint(email["mailboxIds"])]
 
 	except Exception:
-		log_error(_("Failed to fetch message IDs."), frappe.get_traceback(with_context=True))
+		log_mail_error(_("Failed to fetch message IDs."), frappe.get_traceback(with_context=True))
 		frappe.throw(_("Failed to fetch message IDs."))
 
 
@@ -855,7 +856,7 @@ def delete_messages(account: str, ids: list[str]) -> None:
 		service.delete(ids)
 		_remove_cached_messages(account, ids)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to delete mail(s)"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -881,7 +882,7 @@ def empty_mailbox(account: str, mailbox_id: str) -> None:
 			service.delete(ids)
 			_remove_cached_messages(account, ids)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to empty mailbox"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -900,7 +901,7 @@ def move_messages_to_mailbox(account: str, ids: list[str], mailbox_id: str) -> N
 		service.update(emails, replace_mailboxes=True)
 		_remove_cached_messages(account, ids)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to move mail(s) to mailbox"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -928,7 +929,7 @@ def set_messages_mailboxes(account: str, mails: list[dict]) -> None:
 		service.update(emails, replace_keywords=False, replace_mailboxes=True)
 		_remove_cached_messages(account, [mail["id"] for mail in mails])
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to restore mailbox membership for mail(s)"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -947,7 +948,7 @@ def add_messages_to_mailbox(account: str, ids: list[str], mailbox_id: str) -> No
 		service.update(emails, replace_mailboxes=False)
 		_remove_cached_messages(account, ids)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to add mail(s) to mailbox"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -966,7 +967,7 @@ def remove_messages_from_mailbox(account: str, ids: list[str], mailbox_id: str) 
 		service.update(emails, replace_mailboxes=False)
 		_remove_cached_messages(account, ids)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to remove mail(s) from mailbox"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -999,7 +1000,7 @@ def set_seen_status(account: str, ids: list[str], seen: bool = True) -> None:
 			_cache_messages(account, messages_to_cache)
 
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to set seen status for mail(s)"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -1032,7 +1033,7 @@ def set_flagged_status(account: str, ids: list[str], flagged: bool = True) -> No
 			_cache_messages(account, messages_to_cache)
 
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to set flagged status for mail(s)"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -1063,7 +1064,7 @@ def set_spam_status(account: str, ids: list[str], spam: bool = True) -> None:
 
 		_remove_cached_messages(account, ids)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to set spam status for mail(s)"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -1114,7 +1115,7 @@ def fetch_blobs(account: str, blobs: list[str] | list[tuple[str, str | None]]) -
 
 		return result
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Failed to fetch blob(s)"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -1157,7 +1158,6 @@ def format_message(account: str, mailbox_map: dict, message: dict) -> dict:
 		"subject": message["subject"],
 		"thread_id": message["threadId"],
 		"name": f"{account}|{message['id']}",
-		"preview": message.get("preview", ""),
 		"has_attachment": cint(message["hasAttachment"]),
 		"keywords": json.dumps(message["keywords"], indent=4),
 		"received_after": time_diff_in_seconds(received_at, sent_at),
@@ -1188,6 +1188,14 @@ def format_message(account: str, mailbox_map: dict, message: dict) -> dict:
 			else None
 		)
 		formatted_message[field] = value
+
+	if html_body := formatted_message["html_body"]:
+		preview = convert_html_to_text(html_body)
+	elif text_body := formatted_message["text_body"]:
+		preview = clean_text(text_body)
+	else:
+		preview = message.get("preview") or ""
+	formatted_message["preview"] = preview[:PREVIEW_MAX_LENGTH]
 
 	formatted_message["mailboxes"] = []
 	for mailbox_id, value in message["mailboxIds"].items():
@@ -1259,17 +1267,41 @@ def _get_cached_messages(account: str, ids: list[str]) -> dict[str, dict | None]
 
 
 def _cache_messages(account: str, messages: dict[str, dict]) -> None:
-	"""Store messages in cache with the message ID as the subkey."""
+	"""Store messages in cache with the message ID as the subkey, and index their addresses for search."""
 
 	store = get_data_store(account)
 	store.set_many(Entity.EMAIL, items=messages)
 
+	# Feed sender/recipient addresses into the shared address index; never let indexing break caching.
+	try:
+		get_email_address_index(account).index_addresses(_message_addresses(messages.values()))
+	except Exception:
+		log_mail_error(
+			_("Failed to index message addresses for search"), frappe.get_traceback(with_context=True)
+		)
+
 
 def _remove_cached_messages(account: str, ids: list[str]) -> None:
-	"""Remove messages from cache for the provided IDs."""
+	"""Remove messages from cache for the provided IDs.
+
+	Addresses are left in the search index on purpose: it is cumulative, and an address seen in an
+	evicted message is almost always still valid elsewhere.
+	"""
 
 	store = get_data_store(account)
 	store.delete_many(Entity.EMAIL, subkeys=ids)
+
+
+def _message_addresses(messages: list[dict]) -> list[dict]:
+	"""Flatten cached messages into {name, email} address dicts (sender + recipients)."""
+
+	addresses = []
+	for message in messages:
+		addresses.append({"name": message.get("from_name"), "email": message.get("from_email")})
+		for recipient in message.get("recipients") or []:
+			addresses.append({"name": recipient.get("display_name"), "email": recipient.get("email")})
+
+	return addresses
 
 
 def _get_cached_blobs(account: str, blob_ids: list[str]) -> dict[str, bytes | None]:
@@ -1410,7 +1442,7 @@ def fetch_changes(user: str, account: str, email_state: str | None = None, ctx: 
 
 	except Exception:
 		logger.error("fetch-changes-failed")
-		log_error(
+		log_mail_error(
 			_("Failed to fetch changes"),
 			frappe.get_traceback(with_context=True),
 		)
@@ -1443,8 +1475,7 @@ def enqueue_fetch_changes(
 	logger.debug("enqueueing-fetch-changes")
 
 	lockname = f"fetch_changes:{user}:{account}"
-	fetch_lock_timeout = cint(get_config("fetch_lock_timeout"))
-	identifier = acquire_lock(lockname, acquire_timeout=0, lock_timeout=fetch_lock_timeout)
+	identifier = acquire_lock(lockname, acquire_timeout=0)
 
 	if not identifier:
 		logger.debug("fetch-changes-lock-not-acquired")

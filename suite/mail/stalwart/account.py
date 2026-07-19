@@ -8,7 +8,7 @@ from frappe import _
 from frappe.utils import random_string
 
 from suite.mail.stalwart.cli import StalwartCLI
-from suite.mail.utils import snake_to_camel
+from suite.utils import snake_to_camel
 
 
 class CredentialType(Enum):
@@ -358,6 +358,62 @@ class AccountService(StalwartCLI):
 
 		if not response["success"]:
 			frappe.throw(title=_("Failed to delete accounts"), msg=response["output"] or response["error"])
+
+	def add_roles(self, account: str, role_ids: list[str]) -> None:
+		"""Adds the given role IDs to the account, switching it to a custom role set while preserving existing roles."""
+
+		if not role_ids:
+			return
+
+		current_roles = self.get(account, fields=["roles"]).get("roles") or {}
+		current_role_ids = current_roles.get("roleIds") or {}
+		existing = list(current_role_ids.keys() if isinstance(current_role_ids, dict) else current_role_ids)
+
+		merged = list(dict.fromkeys([*existing, *role_ids]))
+
+		# `roles` is a tagged union; its `@type` discriminator can't be patched via a sub-path
+		# (the server rejects `roles/@type` as an invalid JSON Pointer path). Replace the whole
+		# field with a full JSON object instead.
+		roles = UserRoles(type=RoleType.CUSTOM, roles=CustomRoles(role_ids=merged))
+		commands = ["update", "Account", account, "--field", f"roles={json.dumps(roles.to_dict())}"]
+
+		response = self.run(commands)
+
+		if not response["success"]:
+			frappe.throw(
+				title=_("Failed to update roles for account {0}").format(account),
+				msg=response["output"] or response["error"],
+			)
+
+	def remove_roles(self, account: str, role_ids: list[str]) -> None:
+		"""Removes the given role IDs from the account, reverting to the default user role set when none remain."""
+
+		if not role_ids:
+			return
+
+		current_roles = self.get(account, fields=["roles"]).get("roles") or {}
+		current_role_ids = current_roles.get("roleIds") or {}
+		existing = list(current_role_ids.keys() if isinstance(current_role_ids, dict) else current_role_ids)
+
+		remove = set(role_ids)
+		remaining = [role_id for role_id in existing if role_id not in remove]
+
+		# Replace the whole `roles` field with a full JSON object rather than patching sub-paths of
+		# the tagged union (the server rejects patching the `@type` discriminator via a pointer path).
+		if remaining:
+			roles = UserRoles(type=RoleType.CUSTOM, roles=CustomRoles(role_ids=remaining))
+		else:
+			roles = UserRoles(type=RoleType.USER)
+
+		commands = ["update", "Account", account, "--field", f"roles={json.dumps(roles.to_dict())}"]
+
+		response = self.run(commands)
+
+		if not response["success"]:
+			frappe.throw(
+				title=_("Failed to update roles for account {0}").format(account),
+				msg=response["output"] or response["error"],
+			)
 
 	def update_password(self, account: str, new_password: str) -> None:
 		"""Updates the password for the specified account on the Stalwart server."""

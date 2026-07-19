@@ -1,6 +1,6 @@
 import { FileUploadHandler, toast, call } from 'frappe-ui'
 
-import { presentationId, isPublicPresentation, presentationDoc } from '../stores/presentation'
+import { presentationId, presentationDoc } from '../stores/presentation'
 import { addMediaElement, replaceMediaElement } from '../stores/element'
 
 import { session } from '@/boot/session'
@@ -116,6 +116,6 @@ export const getAttachmentUrl = (fileUrl) => {
 			// Non-owner media already goes through the slides-namespaced proxy below.
 			return `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}${SLIDES_MEDIA_PARAM}`
 		}
-		return `/api/method/suite.slides.api.file.get_media_file?src=${fileUrl}&public=${isPublicPresentation.value}`
+		return `/api/method/suite.slides.api.file.get_media_file?src=${fileUrl}`
 	}
 }

@@ -6,7 +6,10 @@ import frappe
 from suite.mail.api.utils import get_avatar_url
 from suite.mail.doctype.address_book.address_book import fetch_address_books
 from suite.mail.doctype.contact_card.contact_card import bulk_add_contact_cards, fetch_contact_cards
+from suite.mail.doctype.user_account.user_account import get_user_for_jmap_account
 from suite.mail.jmap import get_default_address_book_id
+from suite.mail.storage import get_data_store
+from suite.mail.storage.data_store import Entity
 
 
 @frappe.whitelist()
@@ -47,6 +50,29 @@ def get_contacts(account: str, filter: dict | None = None, limit: int = 50) -> l
 				contacts.append({"full_name": card.get("full_name"), "email": email.get("address")})
 
 	enrich_contacts_with_user_images(contacts)
+
+	return contacts
+
+
+@frappe.whitelist()
+def get_contacts_from_cache(account: str, limit: int = 1000) -> list[dict]:
+	"""Returns all contact cards for the given account from the cache."""
+
+	get_user_for_jmap_account(account, raise_exception=True)
+
+	store = get_data_store(account)
+	data = store.scan(Entity.CONTACT_CARD, prefix="", limit=limit)
+
+	contacts = []
+	for contact_card in data.values():
+		for email in contact_card.get("emails") or []:
+			contacts.append(
+				{
+					"id": contact_card.get("id"),
+					"email": email.get("address"),
+					"full_name": contact_card.get("full_name"),
+				}
+			)
 
 	return contacts
 

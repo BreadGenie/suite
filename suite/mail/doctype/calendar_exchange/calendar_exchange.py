@@ -35,21 +35,19 @@ from suite.mail.jmap import get_jmap_connection
 from suite.mail.jmap.services.calendars.calendar import CalendarService
 from suite.mail.jmap.services.calendars.calendar_event import CalendarEventService
 from suite.mail.utils import (
-	compress_directory,
-	extract_compressed_file,
 	get_calendar_export_directory,
 	get_calendar_import_directory,
 	get_config,
-	reconnect_on_failure,
 )
 from suite.mail.utils.logger import ExchangeLogger, get_exchange_logger
 from suite.mail.utils.user import (
 	get_user_email_address,
-	is_administrator,
 	is_jmap_configured,
 	is_mail_admin,
-	is_system_manager,
 )
+from suite.utils import reconnect_on_failure
+from suite.utils.file import compress_directory, extract_compressed_file
+from suite.utils.user import is_administrator, is_system_manager
 
 # JSCalendar (RFC 8984) -> iCalendar (RFC 5545) value maps.
 STATUS_MAP: dict[str, str] = {
@@ -373,7 +371,7 @@ class CalendarExchange(Document):
 			logger.debug("import-source-prepared", base_dir=base_dir)
 			self._log_output(_("Prepared the source files for import."))
 
-			service = get_calendar_event_service(self.account)
+			service = get_calendar_event_service(self.user, self.account)
 
 			if self.import_format == "ics":
 				events = self._load_ics_events(service, base_dir, logger)
@@ -427,7 +425,7 @@ class CalendarExchange(Document):
 
 		kwargs = {}
 		try:
-			service = get_calendar_event_service(self.account)
+			service = get_calendar_event_service(self.user, self.account)
 
 			limit = min(self.max_export, cint(self.export_limit or self.max_export))
 			data = service.query(self.export_filter_dict, limit=limit, sort=self.export_sort_clause)

@@ -94,7 +94,7 @@
 </template>
 <script setup>
 import { Button, Breadcrumbs, Dropdown } from 'frappe-ui'
-import { getFileLink } from '@/apps/drive/ui/drive/js/utils'
+import { getFileLink } from '@/apps/drive/sdk'
 
 import { useSessionStore } from '@/boot/session'
 import emitter from '@/apps/writer/emitter'

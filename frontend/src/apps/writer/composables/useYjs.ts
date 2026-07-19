@@ -146,7 +146,12 @@ export function useYjs(id, document, editor, edited) {
   // WebRTC for real-time P2P collaboration
   const provider = new WebrtcProvider(roomName, doc, REALTIME_CONFIG)
   const permanentUserData = new Y.PermanentUserData(doc)
-  permanentUserData.setUserMapping(doc, doc.clientID, useSessionStore().user)
+  // null (guest) as a user key crashes yjs' PermanentUserData map observer
+  permanentUserData.setUserMapping(
+    doc,
+    doc.clientID,
+    useSessionStore().user || 'Guest',
+  )
 
   // Comments
   const { cleanup: cleanupComments, ...commentsData } = useComments(

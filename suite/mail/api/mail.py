@@ -9,7 +9,7 @@ import pydenticon
 import requests
 from frappe import _
 from frappe.model.document import bulk_insert
-from frappe.utils import format_datetime, random_string
+from frappe.utils import cint, format_datetime, random_string
 
 from suite.mail.api.contacts import create_contacts_if_not_exists
 from suite.mail.api.utils import get_avatar_url
@@ -52,13 +52,22 @@ from suite.mail.jmap import (
 	get_email_service,
 	get_mailbox_id_by_name,
 	get_mailbox_id_by_role,
+	get_mailbox_service,
 )
-from suite.mail.utils import convert_html_to_text, get_config, log_error
+from suite.mail.search import get_email_address_index
+from suite.mail.utils import get_config, log_mail_error
 from suite.mail.utils.user import get_account_emails, is_jmap_configured
 from suite.mail.utils.validation import normalize_screened_value, validate_screened_value
+from suite.utils import convert_html_to_text
 
 AVATAR_CACHE_TTL = 60 * 60 * 24
 SCREENING_FETCH_LIMIT = 500
+
+# All Inboxes bounds. limit/start are user-supplied, and per_account_limit (= start + limit) is fetched
+# from *every* account and merged in memory, so both are clamped. MAX_FETCH caps the deepest reachable
+# position (page length ~25 → ~20 pages), which is far beyond any real unified-inbox scroll.
+ALL_INBOX_MAX_LIMIT = 100
+ALL_INBOX_MAX_FETCH = 500
 
 
 @frappe.whitelist()
@@ -241,6 +250,94 @@ def get_threads(account: str, mailbox: str, limit: int, start: int = 0, filter_b
 	return threads, mailbox
 
 
+def get_user_jmap_accounts() -> list[dict]:
+	"""Return the current user's JMAP accounts (id + display name), personal first.
+
+	Ordered personal-first, then by name, so the merged All Inboxes list has a stable tie-break when
+	two accounts have threads at the same timestamp.
+	"""
+
+	account_names = frappe.db.get_all("User Account", {"user": frappe.session.user}, pluck="account")
+	if not account_names:
+		return []
+
+	accounts = frappe.db.get_all(
+		"JMAP Account",
+		filters={"name": ["in", account_names]},
+		fields=["name", "_name", "is_personal"],
+	)
+	accounts.sort(key=lambda a: (not a["is_personal"], a["_name"] or ""))
+	return accounts
+
+
+@frappe.whitelist()
+def get_all_inbox_threads(limit: int, start: int = 0, filter_by: str | None = None) -> list:
+	"""Returns a merged, newest-first page of Inbox threads across all of the user's accounts.
+
+	Each thread is tagged with its owning account (`account`, `account_name`) and that account's
+	Inbox/Archive/Trash mailbox ids, so the client can open it in — and act on it within — the correct
+	JMAP account. Every account is over-fetched to `start + limit` (the deepest global position this
+	page can reach), the results are merged, sorted newest-first, then sliced to the requested window.
+	"""
+
+	accounts = get_user_jmap_accounts()
+	if not accounts:
+		return []
+
+	# Clamp user input before it fans out across accounts: limit to a sane page size, and start so the
+	# per-account fetch (start + limit) can never exceed ALL_INBOX_MAX_FETCH — bounding both the JMAP
+	# fetch per account and the in-memory merge, regardless of what the client sends.
+	limit = min(max(cint(limit), 1), ALL_INBOX_MAX_LIMIT)
+	start = min(max(cint(start), 0), ALL_INBOX_MAX_FETCH - limit)
+	per_account_limit = start + limit
+
+	merged: list[dict] = []
+	for account in accounts:
+		account_id = account["name"]
+		inbox_id = get_mailbox_id_by_role(account_id, "inbox")
+		if not inbox_id:
+			continue
+
+		threads, _mailbox = get_threads(account_id, inbox_id, per_account_limit, 0, filter_by)
+		if not threads:
+			continue
+
+		# Attach once per account (role lookups are cached) so per-item actions can target the right
+		# mailbox without another round trip.
+		archive_id = get_mailbox_id_by_role(account_id, "archive")
+		trash_id = get_mailbox_id_by_role(account_id, "trash")
+		for thread in threads:
+			thread["account"] = account_id
+			thread["account_name"] = account["_name"]
+			thread["inbox"] = inbox_id
+			thread["archive"] = archive_id
+			thread["trash"] = trash_id
+		merged.extend(threads)
+
+	merged.sort(key=lambda thread: thread["received_at"], reverse=True)
+	return merged[start : start + limit]
+
+
+@frappe.whitelist()
+def get_all_inbox_unread_count() -> int:
+	"""Returns the total unread Inbox thread count across all of the user's accounts (sidebar badge).
+
+	Mailbox is a JMAP-backed virtual DocType, so it can't be queried across accounts with a table
+	filter. Each account's Inbox unread count is fetched live via the mailbox service (a fresh
+	Mailbox/get, bypassing the 1-hour `.mailboxes` cache) — the same source the per-account inbox
+	badge uses — and summed.
+	"""
+
+	total = 0
+	for account in get_user_jmap_accounts():
+		for mailbox in get_mailbox_service(account["name"]).get():
+			if (mailbox.get("role") or "").lower() == "inbox":
+				total += cint(mailbox.get("unreadThreads"))
+				break
+
+	return total
+
+
 @frappe.whitelist()
 def get_thread(account: str, thread_id: str) -> list[dict]:
 	"""Returns the full list of messages in a thread, for threads not present in the mailbox list
@@ -276,24 +373,28 @@ def serialize_thread(messages: list[dict], thread_messages: list[dict], latest: 
 
 	first = thread_messages[0]
 	latest = latest or messages[-1]
+	# The row's identity + state come from the thread's representative message in the CURRENT mailbox
+	# (`messages` is scoped to it), so its folder tags and junk/flag/seen reflect THIS view — not a
+	# sibling message that was moved to Junk/Trash/Sent. The activity fields (preview/date/sender) still
+	# come from `latest` (most recent activity across the whole conversation). For single-mailbox threads
+	# `current` and `latest` are the same message, so nothing changes.
+	current = messages[-1]
 
-	thread_fields = [
-		"name",
-		"id",
+	# From the current-mailbox message: identity + state (so star/junk actions target the right mail).
+	current_fields = ["name", "id", "mailboxes", "seen", "junk", "flagged"]
+	# From the most recent activity: what the row displays.
+	activity_fields = [
 		"thread_id",
-		"mailboxes",
 		"from_name",
 		"from_email",
 		"received_at",
 		"recipients",
-		"seen",
 		"draft",
-		"junk",
-		"flagged",
 		"preview",
 	]
 	return {
-		**{field: latest[field] for field in thread_fields},
+		**{field: current[field] for field in current_fields},
+		**{field: latest[field] for field in activity_fields},
 		"subject": first["subject"],
 		"attachments": serialize_attachments(latest.get("attachments", [])),
 		"messages": [serialize_mail(message) for message in thread_messages],
@@ -679,17 +780,105 @@ def empty_user_mailbox(account: str, mailbox: str) -> None:
 
 @frappe.whitelist()
 def search_mails(
-	account: str, filter: dict | None = None, limit: int = 5, start: int = 0
+	account: str,
+	filter: dict | None = None,
+	limit: int = 5,
+	start: int = 0,
+	all_accounts: bool = False,
 ) -> tuple[list[dict], int]:
-	"""Returns search results for the given query."""
+	"""Returns search results for the given query.
+
+	By default the search is scoped to `account`. When `all_accounts` is truthy the query fans out
+	across every JMAP account the user owns and the results are merged newest-first, so a mail can be
+	found without remembering which account it landed in. Either way each result is tagged with its
+	owning account (and that account's Inbox/Archive/Trash mailbox ids) so the client can open — and
+	act on — it in the correct account.
+	"""
 
 	if not filter:
 		return ([], 0)
 
+	# `filter` may arrive carrying the search-page query blob (see MailboxView), which includes the
+	# out-of-band `all_accounts` flag — drop it so it never becomes a bogus JMAP search condition.
+	filter = {k: v for k, v in filter.items() if k != "all_accounts"}
+
+	# The flag crosses the wire as a bool, an int, or a "true"/"1" string depending on the caller, so
+	# normalize all truthy forms (cint("true") would be 0).
+	if str(all_accounts).lower() in ("1", "true"):
+		return _search_all_accounts(filter, limit=limit, start=start)
+
 	normalized_filter = normalize_filter(filter)
 	mails, total = search_messages(account, normalized_filter, position=start, limit=limit)
+	add_user_images_to_emails(account, mails)
+	_tag_search_results(account, mails)
 
-	return add_user_images_to_emails(account, mails), total
+	return mails, total
+
+
+def _search_all_accounts(filter: dict, limit: int, start: int) -> tuple[list[dict], int]:
+	"""Search across every JMAP account the user owns, returning a merged newest-first page.
+
+	Mirrors the All Inboxes fan-out (`get_all_inbox_threads`): each account is over-fetched to the
+	deepest global position this page can reach (`start + limit`, clamped), the results are tagged,
+	merged, sorted newest-first, then sliced to the requested window. `total` is the summed match
+	count across accounts.
+	"""
+
+	accounts = get_user_jmap_accounts()
+	if not accounts:
+		return ([], 0)
+
+	# Clamp user input before it fans out across accounts (see the All Inboxes bounds): limit to a sane
+	# page size, and start so the per-account fetch (start + limit) can never exceed ALL_INBOX_MAX_FETCH.
+	limit = min(max(cint(limit), 1), ALL_INBOX_MAX_LIMIT)
+	start = min(max(cint(start), 0), ALL_INBOX_MAX_FETCH - limit)
+	per_account_limit = start + limit
+
+	# Mailbox ids are account-specific, so a "Look In" folder filter can't carry across accounts.
+	filter = {k: v for k, v in filter.items() if k != "inMailbox"}
+	normalized_filter = normalize_filter(filter)
+
+	merged: list[dict] = []
+	total = 0
+	for account in accounts:
+		account_id = account["name"]
+		mails, account_total = search_messages(
+			account_id, normalized_filter, position=0, limit=per_account_limit
+		)
+		total += account_total
+		if not mails:
+			continue
+
+		add_user_images_to_emails(account_id, mails)
+		_tag_search_results(account_id, mails, account_name=account["_name"])
+		merged.extend(mails)
+
+	merged.sort(key=lambda mail: mail["received_at"], reverse=True)
+	return merged[start : start + limit], total
+
+
+def _tag_search_results(account: str, mails: list[dict], account_name: str | None = None) -> None:
+	"""Tag each result with its owning account and that account's Inbox/Archive/Trash mailbox ids.
+
+	Lets the client open a result in — and run per-row actions against — the correct JMAP account,
+	which matters when results are merged across accounts (the `all_accounts` search path)."""
+
+	if not mails:
+		return
+
+	if account_name is None:
+		account_name = frappe.db.get_value("JMAP Account", account, "_name")
+
+	inbox_id = get_mailbox_id_by_role(account, "inbox")
+	archive_id = get_mailbox_id_by_role(account, "archive")
+	trash_id = get_mailbox_id_by_role(account, "trash")
+
+	for mail in mails:
+		mail["account"] = account
+		mail["account_name"] = account_name
+		mail["inbox"] = inbox_id
+		mail["archive"] = archive_id
+		mail["trash"] = trash_id
 
 
 def normalize_filter(filter: dict) -> dict:
@@ -775,14 +964,13 @@ def get_avatar(email: str, size: int = 128, strict: bool = False) -> None:
 	frappe.local.response.type = "binary"
 
 
-def get_email_suggestions(account: str, query: str, limit: int = 5) -> list[str]:
-	"""Returns email suggestions based on the given query."""
+@frappe.whitelist()
+def search_email_addresses(account: str, text: str, limit: int = 10) -> list[dict]:
+	"""Search the account's local address index for names/emails matching `text`."""
 
-	if not query:
-		return []
+	get_user_for_jmap_account(account, raise_exception=True)
 
-	service = get_email_service(account)
-	return service.get_email_suggestions(query, limit)
+	return get_email_address_index(account).search_email_addresses(text, limit=cint(limit))
 
 
 @frappe.whitelist()
@@ -971,7 +1159,7 @@ def auto_accept_recipients(account: str, recipients: list) -> None:
 		if emails:
 			_screen_email_addresses(account, emails, action="Accepted", override=False)
 	except Exception:
-		log_error(
+		log_mail_error(
 			_("Screening Auto-Accept Error"),
 			_("Failed to auto-accept recipients for account {0}").format(account),
 		)

@@ -1,7 +1,6 @@
 import frappe
 from frappe.utils import getdate
 from frappe.model.document import Document
-from frappe.core.doctype.file.file import has_permission as ff_has_permission
 
 from suite.drive.utils import (
     generate_upward_path,
@@ -44,14 +43,14 @@ def get_user_access(entity: str | Document | frappe._dict, user: str = None, tea
         entity = frappe.get_cached_doc("File", entity)
 
     # Site files defer to the framework's own permissions, read-only.
-    # Needs a full doc (ff_has_permission reads is_private, absent from FILE_FIELDS rows).
+    # Needs a full doc (site_file_has_permission reads is_private, absent from FILE_FIELDS rows).
     if is_site_file(entity):
         if team:
             return {**NO_ACCESS, "type": "guest"}
         if not user:
             user = frappe.session.user
         doc = entity if isinstance(entity, Document) else frappe.get_cached_doc("File", entity.name)
-        return {**NO_ACCESS, "read": int(bool(ff_has_permission(doc, "read", user))), "type": "guest"}
+        return {**NO_ACCESS, "read": int(bool(site_file_has_permission(doc, "read", user))), "type": "guest"}
 
     access = NO_ACCESS.copy()
     if not user:
@@ -246,11 +245,46 @@ def get_shared_with_list(entity: str):
     return permissions
 
 
+def site_file_has_permission(doc, ptype=None, user=None):
+    """Framework `File.has_permission` semantics for site files, reimplemented
+    because `ignore_file_permissions` short-circuits the original."""
+    user = user or frappe.session.user
+    if user == "Administrator":
+        return True
+    if not doc.is_private and ptype in ("read", "select"):
+        return True
+    if user != "Guest" and doc.owner == user:
+        return True
+    if (
+        user != "Guest"
+        and ptype in ("read", "write", "share", "submit")
+        and frappe.share.get_shared(
+            "File", filters=[["share_name", "=", doc.name]], rights=[ptype], user=user
+        )
+    ):
+        return True
+
+    if doc.attached_to_doctype and doc.attached_to_name:
+        try:
+            ref_doc = frappe.get_doc(doc.attached_to_doctype, doc.attached_to_name)
+        except (ModuleNotFoundError, ImportError):
+            return False
+        except frappe.DoesNotExistError:
+            frappe.clear_last_message()
+            return False
+
+        if ptype in ("write", "create", "delete"):
+            return ref_doc.has_permission("write", user=user)
+        return ref_doc.has_permission("read", user=user)
+
+    return False
+
+
 def user_has_permission(doc, ptype, user=None, team=0):
     if isinstance(doc, str):
         doc = frappe.get_doc("File", doc)
     if is_site_file(doc):
-        return ff_has_permission(doc, ptype, user)
+        return site_file_has_permission(doc, ptype, user)
 
     if not user:
         user = frappe.session.user

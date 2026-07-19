@@ -233,9 +233,7 @@ import { call } from '@/apps/sheets/utils/api.js'
 
 const router = useRouter()
 
-// The standalone app emitted `open`/`new` up to App.vue which then mutated the
-// `?id=` query. Under the suite router we navigate directly to the editor
-// route (':id'); `new` is the special create id, preserved verbatim.
+// Navigate directly to the editor route (':id'); `new` is the special create id.
 function openSheet(name) {
   router.push({ name: 'sheets-editor', params: { id: name } })
 }

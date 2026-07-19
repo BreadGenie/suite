@@ -58,7 +58,7 @@ export function useMeetingDoc(): UseMeetingDocReturn {
 		}
 
 		const docResource = createDocumentResource({
-			doctype: "Sae Meeting",
+			doctype: "Meet Room",
 			name: meetingId,
 			auto: session.isLoggedIn,
 			whitelistedMethods: {

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SFUClient } from "../SFUClient";
+import {
+	connectionDetailsFromJoinPayload,
+	SFUClient,
+	SFURequestError,
+} from "../SFUClient";
 
 const mockSignalChannel = () => ({
 	connect: vi.fn(),
@@ -102,6 +106,20 @@ describe("isConnected / getters", () => {
 	});
 });
 
+describe("event handler registration", () => {
+	it("registers pre-connect handlers with SignalChannel only once", () => {
+		const signalChannel = mockSignalChannel();
+		const client = new SFUClient(signalChannel);
+		client.on("custom_event", vi.fn());
+
+		client.registerEventHandlers();
+
+		expect(
+			signalChannel.on.mock.calls.filter(([event]) => event === "custom_event"),
+		).toHaveLength(1);
+	});
+});
+
 describe("isTokenExpiringSoon", () => {
 	it("returns false when tokenExpiresAt is far in the future", () => {
 		const client = createClient();
@@ -172,6 +190,54 @@ describe("sendRequest", () => {
 			cb({ success: false, error: "nope" }),
 		);
 		await expect(client.sendRequest("test", {})).rejects.toThrow("nope");
+	});
+
+	it("rejects with TIMEOUT when an acknowledgement does not arrive", async () => {
+		const client = createClient();
+		client.connected = true;
+		client.signalChannel.emit = vi.fn();
+
+		const request = client.sendRequest("test", {}, 100);
+		const assertion = expect(request).rejects.toMatchObject<SFURequestError>({
+			code: "TIMEOUT",
+			message: "SFU request timed out: test",
+		});
+		await vi.advanceTimersByTimeAsync(100);
+
+		await assertion;
+	});
+
+	it("rejects pending requests when the client disconnects", async () => {
+		const client = createClient();
+		client.connected = true;
+		client.signalChannel.emit = vi.fn();
+
+		const request = client.sendRequest("test", {});
+		const assertion = expect(request).rejects.toMatchObject<SFURequestError>({
+			code: "DISCONNECTED",
+			message: "Disconnected from SFU",
+		});
+		client.disconnect();
+
+		await assertion;
+	});
+
+	it("ignores a late acknowledgement after timing out", async () => {
+		const client = createClient();
+		client.connected = true;
+		let acknowledge: ((response: { success: boolean }) => void) | undefined;
+		client.signalChannel.emit = vi.fn((_event, _data, callback) => {
+			acknowledge = callback;
+		});
+
+		const request = client.sendRequest("test", {}, 100);
+		const assertion = expect(request).rejects.toMatchObject<SFURequestError>({
+			code: "TIMEOUT",
+		});
+		await vi.advanceTimersByTimeAsync(100);
+		acknowledge?.({ success: true });
+
+		await assertion;
 	});
 });
 
@@ -283,10 +349,13 @@ describe("on / off event handling", () => {
 		const client = createClient();
 		const handler = vi.fn();
 		client.on("participant_joined", handler);
-		expect(client.eventHandlers.get("participant_joined")).toBe(handler);
+		client.registerEventHandlers();
+		const dispatcher = client.eventHandlers.get("participant_joined");
+		dispatcher?.();
+		expect(handler).toHaveBeenCalledTimes(1);
 		expect(client.signalChannel.on).toHaveBeenCalledWith(
 			"participant_joined",
-			handler,
+			dispatcher,
 		);
 	});
 
@@ -298,8 +367,23 @@ describe("on / off event handling", () => {
 		expect(client.eventHandlers.has("participant_joined")).toBe(false);
 		expect(client.signalChannel.off).toHaveBeenCalledWith(
 			"participant_joined",
-			handler,
+			expect.any(Function),
 		);
+	});
+
+	it("keeps other listeners when removing one handler", () => {
+		const client = createClient();
+		const first = vi.fn();
+		const second = vi.fn();
+		client.on("reconnect", first);
+		client.on("reconnect", second);
+
+		client.off("reconnect", first);
+		client.eventHandlers.get("reconnect")?.(1);
+
+		expect(first).not.toHaveBeenCalled();
+		expect(second).toHaveBeenCalledWith(1);
+		expect(client.signalChannel.off).not.toHaveBeenCalled();
 	});
 });
 
@@ -344,7 +428,88 @@ describe("scheduleTokenRefresh", () => {
 	});
 });
 
+describe("connectionDetailsFromJoinPayload", () => {
+	it("rejects waiting-room / lobby_token payloads", () => {
+		expect(
+			connectionDetailsFromJoinPayload({
+				status: "waiting_for_approval",
+				lobby_token: "preview-only",
+				sfu_url: "https://sfu.example.com",
+				meeting_id: "meet-1",
+			}),
+		).toBeNull();
+	});
+
+	it("maps a valid joined payload", () => {
+		const details = connectionDetailsFromJoinPayload(
+			{
+				status: "joined",
+				auth_token: "tok",
+				sfu_url: "https://sfu.example.com",
+				sfu_port: "443",
+				meeting_id: "meet-1",
+				user_id: "u1",
+				is_host: true,
+			},
+			{ expectedMeetingId: "meet-1" },
+		);
+		expect(details?.authToken).toBe("tok");
+		expect(details?.userId).toBe("u1");
+		expect(details?.isHost).toBe(true);
+	});
+});
+
 describe("getConnectionDetails", () => {
+	it("uses prefetched join payload without an extra API call", async () => {
+		const client = createClient();
+		const details = await client.getConnectionDetails("meet-1", null, {
+			authToken: "pre-tok",
+			meetingId: "meet-1",
+			userId: "usr-1",
+			sfuUrl: "https://sfu.example.com",
+			sfuPort: "443",
+			tokenExpiresAt: Date.now() + 3600_000,
+			codecStrategy: "svc",
+			e2eeRequired: false,
+			isHost: true,
+			isCohost: false,
+		});
+		expect(details.authToken).toBe("pre-tok");
+		expect(details.isHost).toBe(true);
+		expect(frappeRequest).not.toHaveBeenCalled();
+	});
+
+	it("ignores prefetched details for a different meeting id", async () => {
+		vi.mocked(frappeRequest).mockResolvedValue({
+			auth_token: "tok-1",
+			meeting_id: "meet-1",
+			user_id: "usr-1",
+			sfu_url: "https://sfu.example.com",
+			sfu_port: "443",
+			user_data: { name: "Alice" },
+			expires_in: 3600,
+			codec_strategy: "svc",
+			e2ee_required: false,
+			is_host: false,
+			is_cohost: false,
+		});
+		const client = createClient();
+		const details = await client.getConnectionDetails("meet-1", null, {
+			authToken: "wrong-room-tok",
+			meetingId: "meet-OTHER",
+			userId: "usr-1",
+			sfuUrl: "https://sfu.example.com",
+			sfuPort: "443",
+			tokenExpiresAt: Date.now() + 3600_000,
+			codecStrategy: "svc",
+			e2eeRequired: false,
+			isHost: false,
+			isCohost: false,
+		});
+		expect(details.authToken).toBe("tok-1");
+		expect(frappeRequest).toHaveBeenCalled();
+	});
+
 	it("fetches regular connection details", async () => {
 		vi.mocked(frappeRequest).mockResolvedValue({
 			auth_token: "tok-1",

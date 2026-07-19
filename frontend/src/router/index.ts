@@ -120,7 +120,7 @@ router.beforeEach(async (to) => {
 
   // 2. Auth gate (shell launcher + every app require a logged-in user).
   const session = useSessionStore()
-  if (!session.isLoggedIn && !to.meta.isPublic) {
+  if (!session.isLoggedIn && !to.meta.allowGuest) {
     window.location.href = `/login?redirect-to=${encodeURIComponent(to.fullPath)}`
     return false
   }

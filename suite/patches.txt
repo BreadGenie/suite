@@ -1,6 +1,8 @@
 # Patches consolidated in Phase 3 (grouped by source app, preserving order).
 
 [pre_model_sync]
+# --- meet ---
+suite.meet.patches.rename_sae_meeting_to_meet_room
 # --- drive ---
 suite.drive.patches.team_restructure #8
 suite.drive.patches.update_roles
@@ -31,6 +33,7 @@ suite.slides.doctype.presentation.patches.sanitize_attachment_urls
 suite.slides.doctype.presentation.patches.move_attachments_to_private_folder
 suite.slides.doctype.presentation.patches.move_slide_thumbnail_to_presentation
 suite.slides.doctype.presentation.patches.cleanup_unused_thumbnail_files
+suite.slides.doctype.presentation.patches.integrate_with_drive
 # --- writer ---
 suite.writer.patches.change_versioning_schema
 suite.writer.patches.autopopulate_html
@@ -53,5 +56,9 @@ suite.mail.patches.sync_jmap_accounts_for_configured_users
 suite.mail.patches.copy_sync_history_account_id_to_account
 suite.mail.patches.destroy_data_store
 suite.mail.patches.backfill_screened_email_address_account
+suite.mail.patches.rebuild_email_address_indexes
+suite.mail.patches.enable_screening_for_personal_accounts
+execute:frappe.db.set_single_value("Mail Settings", "verify_ssl", 1)
+execute:frappe.db.set_single_value("Mail Settings", "show_mail_client_config", 1)
 # --- calendar ---
 # (no patches)

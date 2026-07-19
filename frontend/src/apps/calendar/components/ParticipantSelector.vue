@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { Combobox, createResource, toast } from 'frappe-ui'
 
@@ -38,6 +38,18 @@ const mailContacts = createResource({
 
 const debouncedSearch = useDebounceFn((text: string) => text && mailContacts.reload(text), 300)
 
+const combobox = ref<{ reset: () => void } | null>(null)
+
+// Picking a dropdown option commits it on keydown, so the matching keyup.enter lands here too and
+// would re-add the option and clear the input from under the reset below. Typing is the only way
+// back to the free-text path, so an input event is what clears this again.
+const justSelectedOption = ref(false)
+
+const handleInput = (text: string) => {
+	justSelectedOption.value = false
+	debouncedSearch(text)
+}
+
 const addParticipant = (email: string) => {
 	const value = email?.trim()
 	if (!value) return
@@ -57,7 +69,21 @@ const addParticipant = (email: string) => {
 	]
 }
 
+// Picking a contact commits it as the Combobox's selected value — add it and reset the control so the
+// input clears for the next participant, rather than sitting there showing the one just added.
+// The reset waits a tick: this handler fires mid-commit, and the Combobox writes the option's label
+// into its input right after we return, which would undo a synchronous reset.
+const handleParticipantSelect = async (email: string | null) => {
+	if (!email) return
+	justSelectedOption.value = true
+	addParticipant(email)
+	await nextTick()
+	combobox.value?.reset()
+}
+
 const handleParticipantEnter = (e: Event) => {
+	if (justSelectedOption.value) return
+
 	const input = e.target as HTMLInputElement
 	input.value
 		.split(',')
@@ -77,10 +103,12 @@ const removeParticipant = (email: string) => {
 		<div>
 			<h3 class="text-base-medium mb-2 text-ink-gray-8">{{ label }}</h3>
 			<Combobox
+				ref="combobox"
 				class="w-full"
 				:options="mailContacts?.data || []"
 				:placeholder="placeholder"
-				@input="debouncedSearch($event)"
+				@input="handleInput($event)"
+				@update:model-value="handleParticipantSelect($event)"
 				@keyup.enter="handleParticipantEnter($event)"
 			/>
 		</div>

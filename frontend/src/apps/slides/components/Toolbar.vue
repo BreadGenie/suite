@@ -53,7 +53,7 @@ import { ref } from 'vue'
 import { Type, ImagePlus, Trash, Copy, Square } from 'lucide-vue-next'
 
 import { Tooltip, FileUploader, toast } from 'frappe-ui'
-import { isPublicPresentation, presentationId } from '@/apps/slides/stores/presentation'
+import { presentationId } from '@/apps/slides/stores/presentation'
 import { addTextElement, addMediaElement } from '@/apps/slides/stores/element'
 import { allowedImageFileTypes } from '@/apps/slides/utils/constants'
 

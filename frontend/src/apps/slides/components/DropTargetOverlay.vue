@@ -11,7 +11,6 @@
 <script setup>
 import { ref, useTemplateRef, nextTick } from 'vue'
 
-import { isPublicPresentation, presentationId } from '@/apps/slides/stores/presentation'
 import { handleUploadedMedia } from '@/apps/slides/utils/mediaUploads'
 import { currentSlide } from '@/apps/slides/stores/slide'
 

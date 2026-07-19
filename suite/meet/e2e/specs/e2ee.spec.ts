@@ -1,14 +1,36 @@
 import type { Page } from "@playwright/test";
-import { test, expect, joinFromPreview, appUrl } from "../fixtures/test";
+import {
+	test,
+	expect,
+	joinFromPreview,
+	joinHostAndGuest,
+	appUrl,
+} from "../fixtures/test";
 import {
 	expectRemoteVideoReceiving,
 	expectVideoReceiving,
 } from "../helpers/media";
 
+async function expectParticipantsAndVideo(
+	hostPage: Page,
+	guestPage: Page,
+	guestName: string,
+): Promise<void> {
+	await expect(hostPage.locator("[data-participant-id]")).toHaveCount(2, {
+		timeout: 30_000,
+	});
+	await expect(guestPage.locator("[data-participant-id]")).toHaveCount(2, {
+		timeout: 30_000,
+	});
+	await expectRemoteVideoReceiving(guestPage, "Administrator");
+	await expectRemoteVideoReceiving(hostPage, guestName);
+}
+
 async function openMeetingAccessSettings(page: Page): Promise<void> {
 	await page.getByTestId("toolbar-more").click();
 	await page.getByRole("menuitem", { name: "Settings" }).click();
-	await page.getByRole("button", { name: "Meeting Access" }).click();
+	// Tab renamed to "Controls"; SettingsNavItem is role=tab (frappe-ui TabsTrigger)
+	await page.getByRole("tab", { name: "Controls" }).click();
 }
 
 async function enableE2EEInSettings(page: Page): Promise<void> {
@@ -81,29 +103,22 @@ function capturePageErrors(page: Page, filterPatterns: string[] = []) {
 }
 
 test.describe("E2EE", () => {
-	test("participants can join an E2EE meeting", async ({
+	// Join first so media is healthy, then enable E2EE (avoids host-only avatar on CI).
+	test("participants keep video after E2EE is enabled", async ({
 		hostPage,
 		createMeeting,
 		createParticipant,
 	}) => {
 		const meetingId = await createMeeting();
+		const guestName = "Guest E2EE";
+		const guest = await createParticipant();
 
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
+		await joinHostAndGuest(hostPage, guest, meetingId, guestName);
+		await expectParticipantsAndVideo(hostPage, guest.page, guestName);
 
 		await enableE2EEInSettings(hostPage);
 
-		const guest = await createParticipant();
-		await guest.joinAsGuest(meetingId, "Guest E2EE");
-
-		await expect(hostPage.locator("[data-participant-id]")).toHaveCount(2, {
-			timeout: 30_000,
-		});
-		await expect(guest.page.locator("[data-participant-id]")).toHaveCount(2, {
-			timeout: 30_000,
-		});
-		await expectRemoteVideoReceiving(guest.page, "Administrator");
-		await expectRemoteVideoReceiving(hostPage, "Guest E2EE");
+		await expectParticipantsAndVideo(hostPage, guest.page, guestName);
 	});
 
 	test.describe("heavy coverage", () => {
@@ -118,9 +133,7 @@ test.describe("E2EE", () => {
 		const guestName = "Guest Convert E2EE";
 		const guest = await createParticipant();
 
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
-		await guest.joinAsGuest(meetingId, guestName);
+		await joinHostAndGuest(hostPage, guest, meetingId, guestName);
 
 		await expectRemoteVideoReceiving(guest.page, "Administrator");
 		await expectRemoteVideoReceiving(hostPage, guestName);
@@ -142,9 +155,7 @@ test.describe("E2EE", () => {
 		const guestName = "Guest Rejoin E2EE";
 		const guest = await createParticipant();
 
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
-		await guest.joinAsGuest(meetingId, guestName);
+		await joinHostAndGuest(hostPage, guest, meetingId, guestName);
 
 		await expectRemoteVideoReceiving(guest.page, "Administrator");
 		await expectRemoteVideoReceiving(hostPage, guestName);
@@ -176,47 +187,6 @@ test.describe("E2EE", () => {
 		guestErrors.assertNoErrors();
 	});
 
-	test("participants recover streams after an SFU reconnect in an E2EE meeting", async ({
-		hostPage,
-		createMeeting,
-		createParticipant,
-	}) => {
-		const meetingId = await createMeeting();
-		const guestName = "Guest Reconnect E2EE";
-		const guest = await createParticipant();
-
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
-		await guest.joinAsGuest(meetingId, guestName);
-
-		await expectRemoteVideoReceiving(guest.page, "Administrator");
-		await expectRemoteVideoReceiving(hostPage, guestName);
-
-		await enableE2EEInSettings(hostPage);
-
-		await expectRemoteVideoReceiving(guest.page, "Administrator");
-		await expectRemoteVideoReceiving(hostPage, guestName);
-
-		const guestErrors = capturePageErrors(guest.page, [
-			"refresh_sfu_token",
-			"403 (FORBIDDEN)",
-			"request_consumer_keyframe",
-		]);
-		const hostErrors = capturePageErrors(hostPage, ["request_consumer_keyframe"]);
-		await forceSFUReconnect(guest.page);
-
-		await expect(hostPage.locator("[data-participant-id]")).toHaveCount(2, {
-			timeout: 30_000,
-		});
-		await expect(guest.page.locator("[data-participant-id]")).toHaveCount(2, {
-			timeout: 30_000,
-		});
-		await expectRemoteVideoReceiving(guest.page, "Administrator");
-		await expectRemoteVideoReceiving(hostPage, guestName);
-		hostErrors.assertNoErrors();
-		guestErrors.assertNoErrors();
-	});
-
 	test("the host can leave and rejoin an E2EE meeting while a guest stays", async ({
 		hostPage,
 		createMeeting,
@@ -226,9 +196,7 @@ test.describe("E2EE", () => {
 		const guestName = "Guest Host Rejoin E2EE";
 		const guest = await createParticipant();
 
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
-		await guest.joinAsGuest(meetingId, guestName);
+		await joinHostAndGuest(hostPage, guest, meetingId, guestName);
 
 		await expectRemoteVideoReceiving(guest.page, "Administrator");
 		await expectRemoteVideoReceiving(hostPage, guestName);
@@ -273,9 +241,7 @@ test.describe("E2EE", () => {
 		const guestName = "Guest Screen E2EE";
 		const guest = await createParticipant();
 
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
-		await guest.joinAsGuest(meetingId, guestName);
+		await joinHostAndGuest(hostPage, guest, meetingId, guestName);
 
 		await expectRemoteVideoReceiving(guest.page, "Administrator");
 		await expectRemoteVideoReceiving(hostPage, guestName);
@@ -306,9 +272,7 @@ test.describe("E2EE", () => {
 		const guestB = await createParticipant();
 		const guestC = await createParticipant();
 
-		await hostPage.goto(appUrl(`/meet/${meetingId}`));
-		await joinFromPreview(hostPage);
-		await guestA.joinAsGuest(meetingId, guestAName);
+		await joinHostAndGuest(hostPage, guestA, meetingId, guestAName);
 
 		await expectRemoteVideoReceiving(guestA.page, "Administrator");
 		await expectRemoteVideoReceiving(hostPage, guestAName);
@@ -345,5 +309,35 @@ test.describe("E2EE", () => {
 		expect(await readFingerprint(guestB.page)).toBe(guestAFingerprint);
 		expect(await readFingerprint(guestC.page)).toBe(guestAFingerprint);
 	});
+	});
+
+	test("participants recover advancing streams after an SFU reconnect in an E2EE meeting", async ({
+		hostPage,
+		createMeeting,
+		createParticipant,
+	}) => {
+		const meetingId = await createMeeting();
+		const guestName = "Guest Reconnect E2EE";
+		const guest = await createParticipant();
+
+		await joinHostAndGuest(hostPage, guest, meetingId, guestName);
+		await expectParticipantsAndVideo(hostPage, guest.page, guestName);
+		await enableE2EEInSettings(hostPage);
+		await expectParticipantsAndVideo(hostPage, guest.page, guestName);
+
+		const guestErrors = capturePageErrors(guest.page, [
+			"refresh_sfu_token",
+			"403 (FORBIDDEN)",
+			"request_consumer_keyframe",
+			"ERR_INTERNET_DISCONNECTED",
+			"Failed to load MediaPipe Selfie Segmentation model",
+			"Background effects processing error",
+		]);
+		const hostErrors = capturePageErrors(hostPage, ["request_consumer_keyframe"]);
+		await forceSFUReconnect(guest.page);
+
+		await expectParticipantsAndVideo(hostPage, guest.page, guestName);
+		hostErrors.assertNoErrors();
+		guestErrors.assertNoErrors();
 	});
 });

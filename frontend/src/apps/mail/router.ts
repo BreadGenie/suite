@@ -6,19 +6,14 @@ import { useSessionStore } from '@/boot/session'
 import { userStore } from '@/apps/mail/stores/user'
 
 /**
- * Mail router compat + guard.
+ * Mail-local guard on the shared suite router: setup-wizard escape, user-data
+ * wait, dashboard access control, account resolution, mailbox validation and
+ * shortcut-route expansion. Early-returns for any route whose name doesn't
+ * start with `mail-`; auth itself is the suite router's `beforeEach`
+ * (redirects guests unless `meta.allowGuest`).
  *
- * The standalone mail app had its own `createRouter` with a global
- * `beforeEach` that did: setup-wizard escape, auth, user-data wait, dashboard
- * access control, account resolution, mailbox validation and shortcut-route
- * expansion. In the suite there is ONE router (mail routes live under '/mail');
- * the suite router's own `beforeEach` already redirects guests to `/login`
- * unless the route has `meta.isPublic`. So only the mail-SPECIFIC parts are
- * ported here as a mail-local guard that early-returns for any route whose
- * name doesn't start with `mail-`.
- *
- * Re-exports the single suite router instance as `router` so mail pages/stores
- * can keep importing it (`@/apps/mail/router`), mirroring the calendar port.
+ * Re-exports the suite router instance as `router` so mail pages/stores can
+ * import it from `@/apps/mail/router`.
  */
 export const router = suiteRouter
 

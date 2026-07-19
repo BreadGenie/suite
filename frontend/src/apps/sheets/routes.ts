@@ -3,12 +3,8 @@ import type { RouteRecordRaw } from 'vue-router'
 /**
  * Sheets route module — mounted by the suite router under the '/sheets' prefix.
  *
- * The standalone app had NO vue-router: it toggled between the Home listing and
- * the editor with `history.pushState` + a `?id=` query param. That is replaced
- * here with two real routes:
- *
- *   ''       -> sheets-home    (the listing; was `?id` absent)
- *   ':id'    -> sheets-editor  (the editor; was `?id=<name>`, `?id=new` => /sheets/new)
+ *   ''       -> sheets-home    (the listing)
+ *   ':id'    -> sheets-editor  (the editor; 'new' creates a sheet)
  *
  * Paths are RELATIVE to '/sheets' (no leading slash; '' is the app index).
  * Route names are namespaced `sheets-*` to avoid collisions in the single suite

@@ -43,7 +43,7 @@
 			class="absolute inset-0 flex items-center justify-center pointer-events-none"
 			:class="avatarBackgroundClass"
 		>
-			<Avatar
+			<MeetAvatar
 				size="3xl"
 				:image="participant.avatar"
 				:label="participant.user_name || participant.initials"
@@ -153,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { Avatar, Button } from "frappe-ui";
+import { Button } from "frappe-ui";
 import { type ComputedRef, computed, inject, type Ref, ref, watch } from "vue";
 import { useAudioStream } from "../composables/useAudioLevels";
 import { useMeetingContext } from "../composables/useMeetingContext";
@@ -162,6 +162,7 @@ import WifiAlertIcon from "../icons/WifiAlertIcon.vue";
 import type { Participant } from "../utils/media/ParticipantManager";
 import AudioIndicator from "./AudioIndicator.vue";
 import KickParticipantDialog from "./KickParticipantDialog.vue";
+import MeetAvatar from "./MeetAvatar.vue";
 import NamePill from "./NamePill.vue";
 
 type TileSize = "xs" | "sm" | "md";
@@ -369,7 +370,7 @@ video.remote-video::-moz-focus-inner {
 	100% { transform: scale(1); opacity: 1 }
 }
 
-/* Raised-hand wave (was a global rule in the standalone app's index.css) */
+/* Raised-hand wave */
 .wave {
 	display: inline-block;
 	transform-origin: 70% 70%;

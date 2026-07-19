@@ -4,7 +4,6 @@ import { openEntity, setTitle } from '@/apps/drive/utils/files'
 import { activeEntity } from '@/apps/drive/data/selection'
 import { updateLastBreadcrumbLabel } from '@/apps/drive/data/breadcrumbs'
 import { getSortOrder } from '@/apps/drive/data/prefs'
-import router from '@/apps/drive/router'
 import { prettyData, setCache } from '@/apps/drive/utils/files'
 import { updateURLSlug } from '@/apps/drive/utils/files'
 
@@ -160,34 +159,30 @@ export const mutate = (entities, func) => {
   )
 }
 
-export const updateMoved = (team, new_parent, special) => {
-  if (!special) {
-    // All details are repetetively provided (check Folder.vue) because if this is run first
-    // No further mutation of the resource object can take place
-    createResource({
-      ...COMMON_OPTIONS,
-      url: 'suite.drive.api.list.files',
-      makeParams: (params) => ({
-        ...params,
-        entity_name: new_parent,
-        personal: -2,
-        team,
-      }),
-      cache: ['folder', new_parent],
-    }).fetch(
-      (() => {
-        const order = getSortOrder(new_parent)
-        return order
-          ? {
-              order_by: order.field,
-              ascending: order.ascending,
-            }
-          : {}
-      })()
-    )
-  } else {
-    ;(move.params.is_private ? getPersonal : getFiles).fetch({ team })
-  }
+export const updateMoved = (team, new_parent) => {
+  // All details are repetetively provided (check Folder.vue) because if this is run first
+  // No further mutation of the resource object can take place
+  createResource({
+    ...COMMON_OPTIONS,
+    url: 'suite.drive.api.list.files',
+    makeParams: (params) => ({
+      ...params,
+      entity_name: new_parent,
+      personal: -2,
+      team,
+    }),
+    cache: ['folder', new_parent],
+  }).fetch(
+    (() => {
+      const order = getSortOrder(new_parent)
+      return order
+        ? {
+            order_by: order.field,
+            ascending: order.ascending,
+          }
+        : {}
+    })()
+  )
 }
 
 export const toggleFav = createResource({
@@ -309,24 +304,21 @@ export const move = createResource({
   url: 'suite.drive.api.files.move',
   onSuccess(data) {
     toast({
-      title: 'Moved to ' + data.title,
+      title: 'Moved to ' + data.file_name,
       buttons: [
         {
           label: 'Go',
-          onClick: () => {
-            if (!data.special)
-              openEntity({
-                name: data.name,
-                is_folder: true,
-              })
-            else router.push({ name: data.file_name })
-          },
+          onClick: () =>
+            openEntity({
+              name: data.name,
+              is_folder: true,
+            }),
         },
       ],
     })
 
     // Update moved-into folder
-    updateMoved(data.team, data.name, data.special)
+    updateMoved(data.team, data.name)
   },
   onError() {
     toast({ title: 'There was an error.', type: 'error' })

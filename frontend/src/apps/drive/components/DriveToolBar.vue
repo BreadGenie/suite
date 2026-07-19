@@ -175,7 +175,7 @@ const toggleAscending = () => {
 const columnHeaders = computed(() => [
   {
     label: __('Name'),
-    field: 'title',
+    field: 'file_name',
   },
   {
     label: __('Owner'),
@@ -191,7 +191,7 @@ const columnHeaders = computed(() => [
   },
   {
     label: __('Type'),
-    field: 'mime_type',
+    field: 'file_type',
   },
   {
     group: true,
@@ -199,7 +199,7 @@ const columnHeaders = computed(() => [
     items: [
       {
         label: __('Smart'),
-        disabled: sortOrder.value.field !== 'title',
+        disabled: sortOrder.value.field !== 'file_name',
         switch: true,
         switchValue: sortOrder.value.smart,
         onClick: (val) => (sortOrder.value.smart = val),

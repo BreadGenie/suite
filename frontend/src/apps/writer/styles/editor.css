@@ -44,6 +44,20 @@ b {
   padding: 0.2em 0;
 }
 
+/* tiptap's Selection extension injects a rule that makes ::selection
+   transparent while the editor is unfocused, then redraws it as a decoration
+   only when editable — leaving read-only docs with no visible selection.
+   Restore the browser's native selection highlight there. */
+.ProseMirror[contenteditable='false'] *::selection {
+  background: Highlight !important;
+  color: HighlightText !important;
+}
+
+.ProseMirror[contenteditable='false'] *::-moz-selection {
+  background: Highlight !important;
+  color: HighlightText !important;
+}
+
 div[data-page-break='true'] {
   page-break-after: always;
   break-after: always;

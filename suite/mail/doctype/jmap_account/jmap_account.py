@@ -14,17 +14,20 @@ from suite.mail.jmap import (
 	invalidate_jmap_identities_cache,
 	invalidate_jmap_mailboxes_cache,
 )
+from suite.mail.search import rebuild_email_address_index
 from suite.mail.storage import get_blob_store, get_data_store
 from suite.mail.storage.data_store import Entity
+from suite.search import destroy_search_indexes
 
 if TYPE_CHECKING:
 	from suite.mail.jmap.services.core import CoreService
 
 from suite.mail.doctype.sieve_script.sieve_script import build_automation_sieve, maybe_build_automation_sieve
 from suite.mail.doctype.user_account.user_account import get_user_jmap_accounts
-from suite.mail.utils import execute_with_logging
-from suite.mail.utils.lock import acquire_lock, release_lock
-from suite.mail.utils.user import get_account_emails, is_system_manager
+from suite.mail.utils.user import get_account_emails
+from suite.utils import execute_with_logging
+from suite.utils.lock import acquire_lock, release_lock
+from suite.utils.user import is_system_manager
 
 
 class JMAPAccount(Document):
@@ -158,6 +161,7 @@ class JMAPAccount(Document):
 		self.clear_cached_mail_messages()
 		self.clear_cached_contact_cards()
 		self.clear_cached_blobs()
+		self.clear_search_indexes()
 
 	@frappe.whitelist()
 	def clear_cached_jmap_identities(self) -> None:
@@ -199,6 +203,24 @@ class JMAPAccount(Document):
 			return
 
 		get_data_store(self.name).delete_all(Entity.CONTACT_CARD)
+
+	@frappe.whitelist()
+	def clear_search_indexes(self) -> None:
+		"""Delete all search indexes belonging to the current account."""
+
+		if not self.has_clear_cache_permission():
+			return
+
+		destroy_search_indexes(self.name)
+
+	@frappe.whitelist()
+	def rebuild_search_index(self) -> None:
+		"""Rebuild the account's email-address index from its cached messages and contact cards."""
+
+		if not self.has_clear_cache_permission():
+			return
+
+		rebuild_email_address_index(self.name)
 
 	def has_clear_cache_permission(self) -> bool:
 		"""Check if the session user has permission to clear cache."""
@@ -253,8 +275,8 @@ def sync_jmap_accounts(user: str, accounts: dict[str, dict]) -> None:
 	"""
 
 	lockname = f"sync_jmap_accounts:{user}"
-	lock_id = acquire_lock(lockname)
-	if not lock_id:
+	identifier = acquire_lock(lockname, acquire_timeout=0)
+	if not identifier:
 		return
 
 	try:
@@ -268,7 +290,7 @@ def sync_jmap_accounts(user: str, accounts: dict[str, dict]) -> None:
 			create_archive_mailbox(account)
 			build_automation_sieve(account, activate=True)
 	finally:
-		release_lock(lockname, lock_id)
+		release_lock(lockname, identifier)
 
 
 def _ensure_jmap_account_docs(user: str, accounts: dict[str, dict]) -> list[str]:
@@ -358,6 +380,7 @@ def create_archive_mailbox(account: str) -> None:
 		title=_("Archive Mailbox Creation Error"),
 		user_message=_("Failed to create archive mailbox for account {0}").format(frappe.bold(account)),
 		with_context=False,
+		module="Mail",
 	)
 
 

@@ -92,6 +92,25 @@ export const raisePromiseToast = (
 	toast.promise(action(), { loading, success, error })
 }
 
+// Toast for an OPTIMISTIC action: the UI has already updated, so show the success message (with an
+// optional Undo) immediately — no "…ing" loading phase. If the (already in-flight) request fails, the
+// caller rolls the UI back; this only swaps the confirmation for an error toast.
+export const raiseOptimisticToast = (
+	forward: Promise<unknown>,
+	success: string,
+	undoAction?: () => void,
+) => {
+	toast.removeAll()
+	const id = toast.success(
+		success,
+		undoAction ? { action: { label: __('Undo'), onClick: () => undoAction() } } : undefined,
+	)
+	forward.catch(() => {
+		toast.dismiss(id)
+		raiseToast(__('Action failed. Please try again later.'), 'error')
+	})
+}
+
 export const copyToClipBoard = async (text: string) => {
 	try {
 		await navigator.clipboard.writeText(text)
@@ -152,6 +171,10 @@ export const getFormattedDate = (date: Date | string, omitDate = false) => {
 }
 
 export const getFirstAlphabet = (str?: string) => str?.match(/\p{L}/u)?.[0]
+
+// The letter on a sender's avatar: their name's first, or their address's when they go by no name.
+export const getSenderInitial = (sender: { from_name?: string; from_email?: string }) =>
+	getFirstAlphabet(sender.from_name) || getFirstAlphabet(sender.from_email)
 
 export const getTheme = (
 	status: 'Draft' | 'Queued' | 'In Progress' | 'Completed' | 'Failed' | 'Cancelled',

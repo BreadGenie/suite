@@ -1,7 +1,7 @@
 <template>
   <!-- Mutation dialogs -->
   <RenameDialog v-if="dialog === 'rn'" v-model="dialog" :entity @complete="refresh" />
-  <ShareDialog v-else-if="dialog === 's'" v-model="dialog" :add-users="params || []" :entity @success="() => resource.fetch()" />
+  <ShareDialog v-else-if="dialog === 's'" v-model="dialog" :add-users="params || []" :file="entity" @success="() => resource.fetch()" />
   <MoveDialog v-else-if="dialog === 'm'" :entities @complete="refresh" />
   
   <!-- Confirmation dialogs -->
@@ -14,7 +14,7 @@
 import { ref, watch, computed } from 'vue'
 import emitter from '@/apps/writer/emitter'
 
-import { ShareDialog, MoveDialog, InfoDialog, RenameDialog } from '@/apps/drive/ui/drive'
+import { ShareDialog, MoveDialog, InfoDialog, RenameDialog } from '@/apps/drive/sdk'
 import RemoveDialog from './RemoveDialog.vue'
 import SearchDialog from './SearchDialog.vue'
 

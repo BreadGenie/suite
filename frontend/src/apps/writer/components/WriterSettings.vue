@@ -10,21 +10,15 @@
             <template #default="{ dirty, setDirty, error }">
               <div class="overflow-y-auto max-h-96 px-2 pt-3">
                 <div class="flex flex-col gap-4 pb-5 pr-5">
-                  <div class="space-y-1.5">
-                    <FormLabel label="Font Family" />
-                    <FontSelect
-                      v-model="settings.font_family"
-                      variant="subtle"
-                      :options="fontOptions"
-                    />
-                    <div class="text-xs text-ink-gray-5">
-                      {{
-                        `Choose the default font family for ${
-                          tabIndex === 1 ? 'this document' : 'new documents'
-                        }.`
-                      }}
-                    </div>
-                  </div>
+                  <FontSelect
+                    v-model="settings.font_family"
+                    variant="subtle"
+                    :options="fontOptions"
+                    label="Font Family"
+                    :description="`Choose the default font family for ${
+                      tabIndex === 1 ? 'this document' : 'new documents'
+                    }.`"
+                  />
                   <FormControl
                     v-model="settings.font_size"
                     type="number"
@@ -42,7 +36,7 @@
                     description="Set the line height of the editor."
                   />
                   <div class="space-y-1.5">
-                    <FormLabel label="Paragraph Spacing" />
+                    <FormLabel label="Paragraph Spacing" size="md" />
                     <div class="grid grid-cols-2 gap-2">
                       <FormControl
                         v-model.number="settings.paragraph_spacing_before"
@@ -51,7 +45,7 @@
                         :min="0"
                         :step="1"
                         autocomplete="off"
-                        description="Above"
+                        label="Above"
                       />
                       <FormControl
                         v-model.number="settings.paragraph_spacing_after"
@@ -60,10 +54,10 @@
                         :min="0"
                         autocomplete="off"
                         :step="1"
-                        description="Below"
+                        label="Below"
                       />
                     </div>
-                    <div class="text-xs text-ink-gray-5">
+                    <div class="text-p-sm text-ink-gray-5">
                       Set the default spacing around paragraphs.
                     </div>
                   </div>
@@ -72,29 +66,29 @@
                 <!-- Print Settings Section -->
                 <div class="flex flex-col gap-3 pb-5 pr-5">
                   <template v-if="tabIndex === 1">
-                    <h3 class="text-sm-medium text-ink-gray-7">Print Settings</h3>
+                    <h3 class="text-base font-medium text-ink-gray-7">Print Settings</h3>
                     <div class="space-y-2">
-                      <FormLabel label="Header & Footer" />
+                      <FormLabel label="Header & Footer" size="md" />
                       <div class="grid grid-cols-2 gap-2">
                         <FormControl
                           v-model="settings.print_header_left"
                           type="text"
                           placeholder="Header Left"
-                          description="Top Left"
+                          label="Top Left"
                           autocomplete="off"
                         />
                         <FormControl
                           v-model="settings.print_header_right"
                           type="text"
                           placeholder="Header Right"
-                          description="Top Right"
+                          label="Top Right"
                           autocomplete="off"
                         />
                         <FormControl
                           v-model="settings.print_footer_left"
                           type="text"
                           placeholder="Footer Left"
-                          description="Bottom Left"
+                          label="Bottom Left"
                           autocomplete="off"
                         />
                         <FormControl
@@ -102,11 +96,11 @@
                           :disabled="settings.print_show_pages"
                           type="text"
                           placeholder="Footer Right"
-                          description="Bottom Right"
+                          label="Bottom Right"
                           autocomplete="off"
                         />
                       </div>
-                      <div class="text-xs text-ink-gray-5 mt-2">
+                      <div class="text-p-sm text-ink-gray-5 mt-2">
                         Set the text to appear in headers and footers when printing.
                       </div>
                     </div>
@@ -138,7 +132,7 @@
                     </div>
                   </template>
                   <template v-else>
-                    <h3 class="text-sm-medium text-ink-gray-7">Watermark</h3>
+                    <h3 class="text-base font-medium text-ink-gray-7">Watermark</h3>
                     <FormControl
                       v-model="settings.watermark_text"
                       type="text"
@@ -174,7 +168,7 @@
                 </div>
               </div>
               <div class="mt-2">
-                <div v-if="error" class="text-xs text-ink-red-8">
+                <div v-if="error" class="text-p-sm text-ink-red-6">
                   {{ error }}
                 </div>
                 <Button

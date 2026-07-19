@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 
-from suite.mail.utils import execute_with_logging
+from suite.utils import execute_with_logging
 
 
 def execute() -> None:
@@ -25,4 +25,5 @@ def execute() -> None:
 		execute_with_logging(
 			func=lambda: _configure(cluster),
 			title=_("Failed to configure Mail Cluster {0}").format(frappe.bold(cluster)),
+			module="Mail",
 		)

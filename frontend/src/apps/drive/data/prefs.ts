@@ -29,7 +29,11 @@ watch(view, (v) => setJson('view', v))
 export const sortOrders = ref<Record<string, SortOrder>>(getJson('sortOrder', {}))
 
 export function getSortOrder(scopeId: string): SortOrder | undefined {
-  return sortOrders.value[scopeId]
+  const order = sortOrders.value[scopeId]
+  // Temporary: saved before Name/Type sorts were fixed to use real fields
+  if (order?.field === 'title') order.field = 'file_name'
+  if (order?.field === 'mime_type') order.field = 'file_type'
+  return order
 }
 
 export function setSortOrder(scopeId: string, order: SortOrder) {

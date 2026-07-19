@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 
-from suite.mail.utils import execute_with_logging
+from suite.utils import execute_with_logging
 
 
 def execute() -> None:
@@ -15,4 +15,5 @@ def execute() -> None:
 		execute_with_logging(
 			func=lambda: _configure(server),
 			title=_("Failed to configure Mail Server {0}").format(frappe.bold(server)),
+			module="Mail",
 		)
