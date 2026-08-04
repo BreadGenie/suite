@@ -64,7 +64,7 @@ def execute():
     frappe.db.commit()
 
     for k in entities:
-        if not k.get("old_name") in translate:
+        if k.get("old_name") not in translate:
             continue
         name = translate[k["old_name"]]
         frappe.db.set_value("Drive File", name, "owner", k["owner"], update_modified=False)

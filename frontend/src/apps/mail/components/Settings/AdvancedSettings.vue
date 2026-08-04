@@ -97,7 +97,7 @@ import {
 import AppSettingsHeader from '@/components/settings/AppSettingsHeader.vue'
 import AppSettingsBody from '@/components/settings/AppSettingsBody.vue'
 
-import CopyControl from '@/apps/mail/components/Controls/CopyControl.vue'
+import CopyControl from '@/components/CopyControl.vue'
 import { copyToClipBoard } from '@/apps/mail/utils'
 
 const user = inject('$user')

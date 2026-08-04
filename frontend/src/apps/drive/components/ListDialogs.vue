@@ -12,18 +12,6 @@
     @success="(data) => addToList(data, 'Link')"
   />
 
-  <RenameDialog
-    v-else-if="dialog === 'rn'"
-    v-model="dialog"
-    :entity="entities[0]"
-    @success="
-      ({ name, file_name }) => {
-        const el = list?.data?.find?.((k) => k.name === name)
-        if (el) el.file_name = file_name
-        resetDialog()
-      }
-    "
-  />
   <ShareDialog
     v-else-if="dialog === 's'"
     v-model="dialog"
@@ -41,22 +29,6 @@
     v-model="dialog"
     :entity="entities[0]"
   />
-
-  <ConfirmDialog
-    v-if="
-      [
-        'remove',
-        'restore',
-        'd',
-        'cta-favourites',
-        'cta-recents',
-        'cta-trash',
-      ].includes(dialog)
-    "
-    v-model="dialog"
-    :entities="entities"
-    @success="removeFromList(entities)"
-  />
 </template>
 
 <script setup>
@@ -66,8 +38,7 @@ import { useRoute } from 'vue-router'
 
 import NewFolderDialog from '@/apps/drive/components/NewFolderDialog.vue'
 import NewLinkDialog from '@/apps/drive/components/NewLinkDialog.vue'
-import ConfirmDialog from '@/apps/drive/components/ConfirmDialog.vue'
-import { ShareDialog, MoveDialog, RenameDialog, InfoDialog } from '@/apps/drive/ui/drive'
+import { ShareDialog, MoveDialog, InfoDialog } from '@/apps/drive/ui/drive'
 
 const props = defineProps({
   list: Object,

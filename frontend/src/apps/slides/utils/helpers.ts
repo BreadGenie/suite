@@ -1,3 +1,5 @@
+import DOMPurify from 'dompurify'
+
 import { getAttachmentUrl } from './mediaUploads'
 
 let isClicked = false
@@ -78,9 +80,18 @@ const getDocFromHTML = (html: string) => {
 	return parser.parseFromString(html, 'text/html')
 }
 
+const sanitizeSlideHTML = (html: string) => {
+	return DOMPurify.sanitize(html, {
+		ALLOWED_TAGS: ['p', 'span', 'strong', 'b', 'em', 'i', 'u', 's', 'ul', 'ol', 'li', 'br'],
+		ALLOWED_ATTR: ['style', 'class'],
+	})
+}
+
 const isCmdOrCtrl = (e: KeyboardEvent | MouseEvent) => {
 	return e.metaKey || e.ctrlKey
 }
+
+const normalizeRotation = (deg: number) => ((deg % 360) + 360) % 360
 
 export {
 	handleSingleAndDoubleClick,
@@ -91,5 +102,7 @@ export {
 	cloneObj,
 	getThumbnailCardStyles,
 	getDocFromHTML,
+	sanitizeSlideHTML,
 	isCmdOrCtrl,
+	normalizeRotation,
 }

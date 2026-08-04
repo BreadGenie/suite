@@ -1,104 +1,70 @@
 <template>
 	<div
-		class="flex h-full w-64 flex-col overflow-y-auto border-l bg-white pb-4 custom-scrollbar"
-		@wheel="handleScrollBarWheelEvent"
+		class="no-scrollbar flex h-full w-72 flex-col overflow-y-auto border-l bg-surface-base px-4"
+		@mousedown="keepEditorFocus"
 	>
 		<div v-if="activeElementIds.length">
-			<AlignmentControls />
-			<LayoutProperties />
-			<component :is="activeProperties" />
-			<AppearanceProperties v-if="activeElement" />
+			<PositionSection />
+			<Divider flexItem />
+			<LayoutSection />
+			<template v-if="activeElement?.type === 'text' || isEditingShapeText">
+				<Divider flexItem />
+				<TypographySection />
+			</template>
+			<template v-if="activeElement?.type === 'shape' && !isEditingShapeText">
+				<Divider flexItem />
+				<ShapeStyleSection />
+			</template>
+			<template v-if="activeElement?.type === 'video'">
+				<Divider flexItem />
+				<PlaybackSection />
+			</template>
+			<template v-if="['image', 'video'].includes(activeElement?.type)">
+				<Divider flexItem />
+				<BorderSection :key="activeElement?.id" />
+			</template>
+			<template v-if="['image', 'video', 'shape'].includes(activeElement?.type)">
+				<Divider flexItem />
+				<ShadowSection :key="activeElement?.id" />
+			</template>
+			<template v-if="activeElement">
+				<Divider flexItem />
+				<AppearanceSection />
+			</template>
 		</div>
-		<SlideProperties v-else-if="currentSlide" />
+		<div v-else-if="currentSlide">
+			<BackgroundSection />
+			<Divider flexItem />
+			<TransitionSection />
+		</div>
 	</div>
 </template>
 
 <script setup>
-import { computed, provide } from 'vue'
+import { computed } from 'vue'
 
-import SlideProperties from '@/apps/slides/components/SlideProperties.vue'
-import TextProperties from '@/apps/slides/components/TextProperties.vue'
-import ImageProperties from '@/apps/slides/components/ImageProperties.vue'
-import VideoProperties from '@/apps/slides/components/VideoProperties.vue'
-import ShapeProperties from '@/apps/slides/components/ShapeProperties.vue'
-import AlignmentControls from '@/apps/slides/components/AlignmentControls.vue'
-import LayoutProperties from '@/apps/slides/components/LayoutProperties.vue'
-import AppearanceProperties from '@/apps/slides/components/AppearanceProperties.vue'
-
-import { useDeferredCommit } from '@/apps/slides/composables/useDeferredCommit'
-
-import { currentSlide } from '@/apps/slides/stores/slide'
 import { activeElement, activeElementIds, focusElementId } from '@/apps/slides/stores/element'
-import { commandHistory } from '@/apps/slides/stores/historyMeta'
-import { handleScrollBarWheelEvent } from '@/apps/slides/utils/helpers'
-import { editElementCommand, editSlideCommand } from '@/apps/slides/stores/commands'
+import { currentSlide } from '@/apps/slides/stores/slide'
 
-const activeProperties = computed(() => {
-	const element = activeElement.value
-	const isEditingShapeText = element?.type === 'shape' && focusElementId.value === element.id
+import { Divider } from 'frappe-ui'
 
-	if (isEditingShapeText) return TextProperties
+import PositionSection from './PositionSection.vue'
+import LayoutSection from './LayoutSection.vue'
+import AppearanceSection from './AppearanceSection.vue'
+import TypographySection from './TypographySection.vue'
+import ShapeStyleSection from './ShapeStyleSection.vue'
+import PlaybackSection from './PlaybackSection.vue'
+import BorderSection from './BorderSection.vue'
+import ShadowSection from './ShadowSection.vue'
+import BackgroundSection from './BackgroundSection.vue'
+import TransitionSection from './TransitionSection.vue'
 
-	switch (element?.type) {
-		case 'text':
-			return TextProperties
-		case 'image':
-			return ImageProperties
-		case 'video':
-			return VideoProperties
-		case 'shape':
-			return ShapeProperties
-	}
-})
+const isEditingShapeText = computed(
+	() => activeElement.value?.type === 'shape' && focusElementId.value === activeElement.value?.id,
+)
 
-const setProperty = (property, value) => {
-	const oldValue = activeElement.value[property]
-	commandHistory.execute(
-		editElementCommand({
-			slideId: currentSlide.value.clientId,
-			elementIds: activeElementIds.value,
-			property,
-			oldValue,
-			newValue: value,
-		}),
-	)
+const keepEditorFocus = (e) => {
+	if (e.target.closest('input, textarea')) return
+	e.preventDefault()
 }
-
-const setPropertyDeferred = (level, property) => {
-	if (level === 'element') {
-		return useDeferredCommit(
-			() => activeElement.value?.[property],
-			(oldValue, newValue) =>
-				editElementCommand({
-					slideId: currentSlide.value?.clientId,
-					elementIds: activeElementIds.value,
-					property,
-					oldValue,
-					newValue,
-				}),
-		)
-	} else if (level === 'slide') {
-		return useDeferredCommit(
-			() => currentSlide.value?.[property],
-			(oldValue, newValue) =>
-				editSlideCommand({
-					slideId: currentSlide.value?.clientId,
-					property,
-					oldValue,
-					newValue,
-				}),
-		)
-	}
-}
-
-provide('setProperty', setProperty)
-provide('setPropertyDeferred', setPropertyDeferred)
 </script>
-
-<style scoped>
-input::-webkit-outer-spin-button,
-input::-webkit-inner-spin-button {
-	-webkit-appearance: none;
-	margin: 0;
-}
-</style>

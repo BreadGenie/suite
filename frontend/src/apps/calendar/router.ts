@@ -48,8 +48,9 @@ function installCalendarGuard(r: Router) {
 		store.resolveAccount(user?.accounts, to.params.accountId as string | undefined)
 		const accountId = store.accountId
 
-		// Expand shortcut routes to their full account-scoped equivalents.
-		if (to.meta.shortcut) return resolveShortcut(to.name, to.params, accountId)
+		// Expand shortcut routes to their full account-scoped equivalents. The
+		// query rides along — it carries the open event's deep link (?event=).
+		if (to.meta.shortcut) return { ...resolveShortcut(to.name, to.params, accountId), query: to.query }
 	})
 }
 

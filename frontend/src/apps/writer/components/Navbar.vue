@@ -21,8 +21,9 @@
       <WriterLogo v-else class="size-7" />
     </div>
     <slot name="breadcrumbs">
-      <Breadcrumbs
+      <EditableBreadcrumbs
         :items="formattedCrumbs"
+        :entity="file?.doc || null"
         class="select-none truncate max-w-[80%]"
       />
     </slot>
@@ -86,6 +87,7 @@
         :button="{
           variant: 'ghost',
           icon: LucideMoreHorizontal,
+          label: 'Document actions',
         }"
       />
     </div>
@@ -93,7 +95,8 @@
   </nav>
 </template>
 <script setup>
-import { Button, Breadcrumbs, Dropdown } from 'frappe-ui'
+import { Button, Dropdown } from 'frappe-ui'
+import EditableBreadcrumbs from '@/apps/drive/components/EditableBreadcrumbs.vue'
 import { getFileLink } from '@/apps/drive/sdk'
 
 import { useSessionStore } from '@/boot/session'
@@ -222,7 +225,7 @@ const fileActions = computed(() =>
             {
               label: __('Rename'),
               icon: LucideSquarePen,
-              onClick: () => (dialog.value = 'rn'),
+              onClick: () => emitter.emit('rename'),
               isEnabled: () => props.file.doc.write,
             },
             {

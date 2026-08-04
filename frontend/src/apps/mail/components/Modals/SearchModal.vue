@@ -7,12 +7,7 @@
 		<template #body>
 			<div class="bg-surface-base">
 				<div class="flex items-center border-b px-4 py-2">
-					<Button v-if="isMobile" variant="ghost" @click="show = false">
-						<template #icon>
-							<ChevronLeft class="text-ink-gray-5 h-4 w-4" />
-						</template>
-					</Button>
-					<Search v-else class="text-ink-gray-5 h-4 w-4" />
+					<Search class="text-ink-gray-5 h-4 w-4" />
 					<input
 						ref="searchInput"
 						v-model="filter.text"
@@ -38,14 +33,14 @@
 					v-if="!showAdvancedFilters && !opTrigger"
 					class="flex flex-wrap items-center gap-1.5 px-4 py-2"
 				>
-					<span v-if="!activeFilters.length" class="text-ink-gray-5 text-xs">
-						{{ __('Filter by') }}
-					</span>
 					<span
 						v-for="chip in activeFilters"
 						:key="chip.key"
-						class="bg-surface-gray-2 inline-flex h-7 items-center gap-1 rounded pl-2 pr-1 text-xs"
-						:class="{ 'hover:bg-surface-gray-3 cursor-pointer': isClickableChip(chip.key) }"
+						class="bg-surface-gray-2 inline-flex items-center gap-1 rounded pl-2 pr-1"
+						:class="[
+							isMobile ? 'h-8 text-sm' : 'h-7 text-xs',
+							{ 'hover:bg-surface-gray-3 cursor-pointer': isClickableChip(chip.key) },
+						]"
 						@click="isClickableChip(chip.key) && handleChipClick(chip.key)"
 					>
 						<span class="max-w-40 truncate">{{ chip.label }}</span>
@@ -61,7 +56,7 @@
 						v-for="f in inactiveQuickFilters"
 						:key="f.label"
 						variant="outline"
-						class="!h-7 text-xs"
+						:class="isMobile ? '!h-8 text-sm' : '!h-7 text-xs'"
 						@click="applyQuickFilter(f)"
 					>
 						<span class="flex items-center gap-1">
@@ -72,7 +67,7 @@
 					<Button
 						v-if="activeFilters.length"
 						variant="ghost"
-						class="text-xs"
+						:class="isMobile ? 'text-sm' : 'text-xs'"
 						:label="__('Clear all')"
 						@click="clearFilters()"
 					/>
@@ -104,18 +99,14 @@
 							v-model="filter.to"
 							:label="__('To')"
 						/>
-						<div class="flex space-x-4">
-							<ContactCombobox
-								v-model="filter.cc"
-								:label="__('Cc')"
-								class="w-full"
-							/>
-							<ContactCombobox
-								v-model="filter.bcc"
-								:label="__('Bcc')"
-								class="w-full"
-							/>
-						</div>
+						<ContactCombobox
+							v-model="filter.cc"
+							:label="__('Cc')"
+						/>
+						<ContactCombobox
+							v-model="filter.bcc"
+							:label="__('Bcc')"
+						/>
 						<div class="flex space-x-4">
 							<FormControl
 								v-model="filter.after"
@@ -130,32 +121,32 @@
 								class="w-full"
 							/>
 						</div>
-						<FormControl
-							v-model="filter.hasAttachment"
-							type="select"
-							:label="__('Attachments')"
-							:options="getAttachmentOptions()"
-						/>
-						<FormControl
-							v-model="filter.isRead"
-							type="select"
-							:label="__('Read Status')"
-							:options="getReadStatusOptions()"
-						/>
+						<div class="flex space-x-4">
+							<FormControl
+								v-model="filter.hasAttachment"
+								type="select"
+								:label="__('Attachments')"
+								:options="getAttachmentOptions()"
+								class="w-full min-w-0"
+							/>
+							<FormControl
+								v-model="filter.isRead"
+								type="select"
+								:label="__('Read Status')"
+								:options="getReadStatusOptions()"
+								class="w-full min-w-0"
+							/>
+						</div>
 					</div>
-					<div
-						class="flex w-full p-4"
-						:class="isMobile ? 'flex-col space-y-4' : 'justify-end space-x-4'"
-					>
-						<Button
-							:label="__('Clear Filters')"
-							class="w-full sm:w-28"
-							@click="clearFilters()"
-						/>
+					<!-- Desktop-only: on mobile filters apply live (the chips row and quick
+					     results reflect them as they're set), so the footer buttons are
+					     redundant next to the filters toggle and Enter. -->
+					<div v-if="!isMobile" class="flex w-full justify-end space-x-4 p-4">
+						<Button :label="__('Clear Filters')" class="w-28" @click="clearFilters()" />
 						<Button
 							:label="__('Search')"
 							variant="solid"
-							class="w-full sm:w-28"
+							class="w-28"
 							@click="openSearchPage"
 						/>
 					</div>
@@ -269,7 +260,7 @@
 import { computed, nextTick, reactive, ref, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { watchDebounced } from '@vueuse/core'
-import { ChevronLeft, Paperclip, Plus, Search, SlidersHorizontal, X } from 'lucide-vue-next'
+import { Paperclip, Plus, Search, SlidersHorizontal, X } from 'lucide-vue-next'
 import { Avatar, Button, Dialog, FormControl, Switch, createResource } from 'frappe-ui'
 import { Icon } from 'frappe-ui/icons'
 
@@ -396,24 +387,19 @@ const folderMatches = computed<MailboxData[]>(() =>
 )
 
 const contactSearch = createResource({
-	url: 'suite.mail.api.contacts.get_contacts',
+	url: 'suite.mail.api.mail.get_email_suggestions',
 	auto: false,
-	makeParams: (text: string) => {
+	makeParams: (text: string) => ({
+		account: store.accountId,
 		// frappe-ui's fetch reuses the previous params object when called with a falsy value (our
 		// intended empty query) and feeds it back here as `text`, so guard against a non-string.
-		const query = typeof text === 'string' ? text : ''
-		return {
-			account: store.accountId,
-			limit: 5,
-			// Omit the filter entirely for an empty query → the backend returns a default contact list, so the
-			// dropdown is populated the moment an operator (e.g. `from:`) is inserted, before anything is typed.
-			// (Sending `filter: undefined` can serialize to the string "undefined" and error server-side.)
-			...(query ? { filter: { operator: 'OR', conditions: [{ text: query }, { email: query }] } } : {}),
-		}
-	},
-	transform: (data: { email: string; full_name?: string; user_image?: string }[]) =>
+		// An empty query returns [] (no default contact list), which also clears stale matches.
+		text: typeof text === 'string' ? text : '',
+		limit: 5,
+	}),
+	transform: (data: { email: string; name?: string; user_image?: string }[]) =>
 		data.map((o) => {
-			const name = o.full_name || ''
+			const name = o.name || ''
 			// Shape serves both consumers: the inline operator dropdown (email/name/image) and the advanced
 			// comboboxes (value/label/display_name for frappe-ui's Combobox).
 			return { value: o.email, label: name || o.email, email: o.email, name, display_name: name, image: o.user_image }
@@ -465,7 +451,7 @@ const QUICK_FILTERS = computed<QuickFilter[]>(() =>
 		{ label: __('From'), key: 'from', op: 'from' },
 		{ label: __('To'), key: 'to', op: 'to' },
 		{ label: __('With attachments'), key: 'hasAttachment', apply: () => (filter.hasAttachment = 'true') },
-		{ label: __('Read'), key: 'isRead', apply: () => (filter.isRead = 'true') },
+		{ label: __('Unread'), key: 'isRead', apply: () => (filter.isRead = 'false') },
 		// `in:` (folder) is account-scoped, so it's dropped from a cross-account search.
 	].filter((f) => f.op !== 'in' || !allAccounts.value),
 )
@@ -585,7 +571,7 @@ const highlight = (text?: string) => {
 	if (!term) return escaped
 	return escaped.replace(
 		new RegExp(`(${escapeRegExp(escapeHtml(term))})`, 'gi'),
-		'<mark class="bg-surface-yellow-5 text-ink-gray-9">$1</mark>',
+		'<mark class="bg-surface-yellow-5 text-ink-gray-8">$1</mark>',
 	)
 }
 

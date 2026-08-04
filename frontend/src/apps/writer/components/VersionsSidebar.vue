@@ -120,7 +120,7 @@
             :style="{
               fontFamily: `var(--font-${settings?.font_family})`,
               fontSize: `${settings?.font_size || 15}px`,
-              lineHeight: settings?.line_height || 1.5,
+              lineHeight: cssLineHeight(settings?.line_height),
             }"
             :editor
           />
@@ -131,6 +131,7 @@
 </template>
 <script setup>
 import { COMMON_EXTENSIONS } from '@/apps/writer/utils'
+import { cssLineHeight } from '@/apps/writer/utils/typography'
 import { diff_match_patch } from 'diff-match-patch'
 import DiffTag from '@/apps/writer/extensions/diff-tag'
 const dmp = new diff_match_patch()

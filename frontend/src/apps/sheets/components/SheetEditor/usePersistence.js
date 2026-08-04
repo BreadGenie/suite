@@ -6,13 +6,18 @@ import { packSheet, packSheetChunked, unpackSheet, boundsOf } from '../../utils/
 // `merge` and the view-state getters/setters are optional — they were missing
 // from earlier versions and their absence caused merged cells / column widths /
 // freeze panes / hidden cols/rows to silently disappear after every save.
-export function usePersistence({ sheet, formats, merge, comments, validation, protection, condFormat, sortFilter, pivot, charts, namedRanges, getViewState, applyViewState, currentTitle, emit }) {
+export function usePersistence({ sheet, formats, merge, comments, validation, protection, condFormat, sortFilter, slicers, pivot, charts, namedRanges, getViewState, applyViewState, currentTitle, emit }) {
   const isSaving  = ref(false)
   const saveError = ref('')
   // Write permission for the currently-loaded sheet, from get_sheet's `can_write`.
   // Defaults to true so a brand-new (autoCreate) doc — which the creator always
   // owns — never flashes read-only before the first load resolves.
   const canWrite  = ref(true)
+  // The sheet's true owner (creator's user id), surfaced by get_sheet so the
+  // Share dialog can name the real owner rather than the current viewer. Empty
+  // until the first load resolves; for a brand-new sheet the editor falls back
+  // to the session user (who is the creator).
+  const sheetOwner = ref('')
   // Surfaces "couldn't open this sheet" cases (404 / 403 / network) to the
   // editor so it can render a proper error screen instead of mounting a
   // blank canvas. Shape: { kind: 'denied' | 'missing' | 'other', message }.
@@ -36,6 +41,7 @@ export function usePersistence({ sheet, formats, merge, comments, validation, pr
       if (saved.protection && protection?.restore) protection.restore(saved.protection)
       if (saved.condFormat && condFormat?.restore) condFormat.restore(saved.condFormat)
       if (saved.sortFilter && sortFilter?.restore) sortFilter.restore(saved.sortFilter)
+      if (saved.slicers    && slicers?.restore)    slicers.restore(saved.slicers)
       if (saved.view       && applyViewState)      applyViewState(saved.view)
       if (saved.pivot      && pivot?.restore)      pivot.restore(saved.pivot)
       if (saved.charts     && charts?.restore)     charts.restore(saved.charts)
@@ -44,6 +50,7 @@ export function usePersistence({ sheet, formats, merge, comments, validation, pr
       // Older backends predate `can_write`; treat its absence as writable so we
       // never lock out an editor on a stale server.
       canWrite.value = doc.can_write !== false
+      sheetOwner.value = doc.owner || ''
     } catch (err) {
       console.error('Load failed:', err)
       const t = err?.excType || ''
@@ -121,6 +128,7 @@ export function usePersistence({ sheet, formats, merge, comments, validation, pr
         protection: protection?.snapshot?.() ?? null,
         condFormat: condFormat?.snapshot?.() ?? null,
         sortFilter: sortFilter?.snapshot?.() ?? null,
+        slicers:    slicers?.snapshot?.()    ?? null,
         pivot:      pivot?.snapshot?.()      ?? null,
         charts:     charts?.snapshot?.()     ?? null,
         namedRanges: namedRanges?.snapshot?.() ?? null,
@@ -150,7 +158,13 @@ export function usePersistence({ sheet, formats, merge, comments, validation, pr
         }
         try {
           const result = await call('suite.sheets.api.save_sheet', args, { keepalive })
-          currentTitle.value = title
+          // Deliberately DON'T write `title` back into currentTitle here.
+          // `title` is a snapshot captured when this save was queued (up to
+          // the 2s debounce + network round-trip ago), and the server echoes
+          // nothing new — so assigning it back can only clobber keystrokes the
+          // user typed while the save was in flight and reset their caret to
+          // the end (the "jittery title" bug). currentTitle is already the
+          // local source of truth; leave it alone.
           // First success clears any sticky error from a previous failure.
           saveError.value = ''
           _lastSaveArgs   = null
@@ -173,5 +187,5 @@ export function usePersistence({ sheet, formats, merge, comments, validation, pr
     }
   }
 
-  return { isSaving, saveError, canWrite, loadError, loadSheet, autoCreate, saveExisting, retrySave }
+  return { isSaving, saveError, canWrite, sheetOwner, loadError, loadSheet, autoCreate, saveExisting, retrySave }
 }

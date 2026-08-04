@@ -80,9 +80,9 @@ import {
 } from 'frappe-ui'
 
 import { getTheme } from '@/apps/mail/utils'
+import { formatSystemDateTime } from '@/apps/mail/utils/datetime'
 
 const user = inject('$user')
-const dayjs = inject('$dayjs')
 const route = useRoute()
 
 const tabIndex = ref(route.query.operation === 'Export' ? 1 : 0)
@@ -120,7 +120,7 @@ const contactsExchanges = useList({
 	transform: (data) =>
 		data.map((row) => ({
 			...row,
-			started_at: row.started_at ? dayjs(row.started_at).format('MMM D, YYYY h:mm A') : '-',
+			started_at: row.started_at ? formatSystemDateTime(row.started_at, 'MMM D, YYYY h:mm A') : '-',
 		})),
 })
 

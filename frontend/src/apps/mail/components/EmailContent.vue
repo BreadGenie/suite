@@ -48,6 +48,7 @@ import { Button } from 'frappe-ui'
 
 import { analyzeRemoteAssets, blockRemoteAssets } from '@/apps/mail/utils'
 import { useTheme } from '@/apps/mail/utils/composables'
+import { isArtDirected, normalizeToLightScheme, remapEmailForDarkMode } from '@/apps/mail/utils/darkMail'
 
 const {
 	content,
@@ -87,8 +88,14 @@ const handleTrust = () => {
 	emit('trust')
 }
 
-// Listen for keyboard events from iframe
+// Listen for keyboard/swipe events from iframe
 const handleMessage = (event: MessageEvent) => {
+	// Horizontal swipes detected inside the iframe, re-broadcast for the thread pane's
+	// swipe navigation (MailboxView listens; it dedupes across EmailContent instances).
+	if (event.data?.type === 'swipe') {
+		window.dispatchEvent(new CustomEvent('email-swipe', { detail: event.data.direction }))
+		return
+	}
 	if (event.data?.type !== 'keyboard') return
 
 	// Create a synthetic keyboard event in the parent
@@ -109,8 +116,7 @@ onUnmounted(() => window.removeEventListener('message', handleMessage))
 // Collapse each top-level quoted reply (gmail_quote / frappe_mail_quote) behind a "···" toggle. Done on
 // the DOM, not regex: a quote with nested divs is wrapped as one unit, instead of the old regex stopping
 // at the first </div> and collapsing the wrong region.
-const collapseQuotes = (html: string) => {
-	const doc = new DOMParser().parseFromString(html, 'text/html')
+const collapseQuotes = (doc: Document) => {
 	doc.querySelectorAll('.gmail_quote, .frappe_mail_quote').forEach((quote) => {
 		// Only the outermost quote gets a toggle — hiding it hides any quotes nested inside.
 		if (quote.parentElement?.closest('.gmail_quote, .frappe_mail_quote')) return
@@ -126,13 +132,27 @@ const collapseQuotes = (html: string) => {
 		button.setAttribute('onclick', "this.nextElementSibling.classList.toggle('quote-hidden');")
 		quote.parentNode?.insertBefore(button, quote)
 	})
-	return doc.documentElement.outerHTML
 }
 
 const srcdoc = computed(() => {
 	let sanitized = DOMPurify.sanitize(content, DOMPURIFY_CONFIG)
 	if (effectiveBlock.value) sanitized = blockRemoteAssets(sanitized)
-	const transformedContent = collapseQuotes(sanitized).replace(
+	const doc = new DOMParser().parseFromString(sanitized, 'text/html')
+	// Art-directed emails — the author claimed the full canvas and painted with
+	// color — render exactly as authored, dark theme or not; remapping them
+	// would second-guess a deliberate design. Everything else (plain mail,
+	// floating cards, replies quoting either kind) adapts to the dark canvas.
+	// Note this is a DOM-shape check, not "does it declare dark support" — the
+	// email's own dark-scheme rules are dropped up front (sanitization guts the
+	// selectors they rely on, and half a dark design is worse than none), so
+	// every email is judged and remapped as its light-scheme self. Remap runs
+	// before collapseQuotes so the toggle buttons it inserts keep their exact
+	// theme colors.
+	normalizeToLightScheme(doc)
+	const remapped = dataTheme.value === 'dark' && !isArtDirected(doc)
+	if (remapped) remapEmailForDarkMode(doc)
+	collapseQuotes(doc)
+	const transformedContent = doc.documentElement.outerHTML.replace(
 		/<([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>/g,
 		'<b>&lt;$1&gt;</b>',
 	)
@@ -151,7 +171,26 @@ const srcdoc = computed(() => {
 					font-size: 14px;
 					line-height: 1.25rem;
 					background-color: ${colors.value.background};
+					/* Art-directed (unremapped) emails bring a light-calibrated design of
+					   their own, so the fallback text color follows the light theme then. */
+					color: ${remapped ? colors.value.text : THEME_CONFIG.light.text};
 					margin: 0;
+					/* 'anywhere' (unlike 'break-word') also shrinks min-content width, so an
+					   unbreakable run (nbsp-joined text, long URLs) inside a table cell can't
+					   force the table wider than the viewport. */
+					overflow-wrap: anywhere;
+				}
+
+				/* Emails routinely hardcode widths (width attrs, inline styles); clamp them to the
+				   viewport so the message reflows instead of scrolling sideways. max-width wins over
+				   both the width attribute and inline width, covering every fixed-width variant. */
+				table, td, th, div {
+					max-width: 100% !important;
+				}
+
+				img {
+					max-width: 100% !important;
+					height: auto !important;
 				}
 
 				blockquote {
@@ -159,6 +198,11 @@ const srcdoc = computed(() => {
 					padding-left: 12px;
 					border-left: 1px solid ${colors.value.buttonHover};
 				}
+
+				/* Fallback for links the email leaves uncolored — the UA default
+				   (#0000EE) is unreadable on the remapped dark canvas. Author styles
+				   come later in the document, so they still win. */
+				${remapped ? `a { color: ${THEME_CONFIG.dark.link}; }` : ''}
 
 				table {
 					color: inherit !important;
@@ -192,19 +236,32 @@ const srcdoc = computed(() => {
 					white-space: pre;
 					overflow-x: auto;
 				}
-
-				@media (max-width: 640px) {
-                    /* Only override specific problematic patterns */
-                    table[width="600"], table[width="600px"] {
-                        width: 100% !important;
-                    }
-                }
 			</style>
 			<script> ${iframeResizerChildScript} <\/script>
 		</head>
 		<body>
 			${transformedContent}
 			<script>
+				// The stylesheet's max-width clamp can't reach fixed-width tables nested
+				// inside other tables: during the outer table's intrinsic sizing a
+				// percentage max-width counts as auto, so the inner pixel width still
+				// propagates up and the whole grid overflows. Rewrite any fixed pixel
+				// width wider than the sheet instead. Desktop panes are wider than the
+				// usual 600px email grid, so this effectively only bites on mobile.
+				const normalizeWidths = () => {
+					const limit = document.documentElement.clientWidth;
+					if (!limit) return;
+					document.querySelectorAll('[width], [style*="width"]').forEach((el) => {
+						if (parseInt(el.getAttribute('width'), 10) > limit) el.setAttribute('width', '100%');
+						const style = el.style;
+						if (style.width.endsWith('px') && parseFloat(style.width) > limit) style.width = '100%';
+						if (style.maxWidth.endsWith('px') && parseFloat(style.maxWidth) > limit) style.maxWidth = '100%';
+						if (style.minWidth.endsWith('px') && parseFloat(style.minWidth) > limit) style.minWidth = '0';
+					});
+				};
+				normalizeWidths();
+				window.addEventListener('resize', normalizeWidths);
+
 				// Forward keyboard events to parent
 				['keydown', 'keyup', 'keypress'].forEach(eventType => {
 					document.addEventListener(eventType, (e) => {
@@ -230,7 +287,36 @@ const srcdoc = computed(() => {
 						}
 					}
 				});
-				${colors.value.script}
+
+				// Forward horizontal swipes to the parent — touches never leave the iframe, so
+				// the thread pane's swipe navigation can't see them otherwise. A gesture that
+				// starts on horizontally scrollable content (incl. an overflowing body) means
+				// scroll, not navigate.
+				const inHorizontalScroller = (el) => {
+					const doc = document.documentElement;
+					if (doc.scrollWidth > doc.clientWidth + 1) return true;
+					for (; el && el.nodeType === 1; el = el.parentElement) {
+						if (el.scrollWidth > el.clientWidth + 1) {
+							const overflowX = getComputedStyle(el).overflowX;
+							if (overflowX === 'auto' || overflowX === 'scroll') return true;
+						}
+					}
+					return false;
+				};
+				let swipeOrigin = null;
+				document.addEventListener('touchstart', (e) => {
+					swipeOrigin = e.touches.length === 1 && !inHorizontalScroller(e.target)
+						? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+						: null;
+				}, { passive: true });
+				document.addEventListener('touchend', (e) => {
+					if (!swipeOrigin) return;
+					const dx = e.changedTouches[0].clientX - swipeOrigin.x;
+					const dy = e.changedTouches[0].clientY - swipeOrigin.y;
+					swipeOrigin = null;
+					if (Math.abs(dx) < 64 || Math.abs(dx) < Math.abs(dy) * 2) return;
+					window.parent.postMessage({ type: 'swipe', direction: dx < 0 ? 'left' : 'right' }, '*');
+				}, { passive: true });
 			<\/script>
 		</body>
 		</html>
@@ -288,6 +374,11 @@ const DOMPURIFY_CONFIG = {
 		'valign',
 		'cellpadding',
 		'cellspacing',
+		// Without colspan/rowspan a table email's grid falls apart: rows stop
+		// agreeing on column count, cells get crushed to slivers, and text can
+		// land outside its authored background (seen as invisible/vertical text).
+		'colspan',
+		'rowspan',
 		'border',
 		'bgcolor',
 		'color',
@@ -321,48 +412,17 @@ const THEME_CONFIG = {
 		text: '#383838',
 		button: '#F3F3F3',
 		buttonHover: '#EDEDED',
-		script: '',
+		link: '',
 	},
 	dark: {
 		// Match frappe-ui v2's dark `surface-base` (#171717) so the email body doesn't seam against
 		// the reading-pane background. Iframes don't inherit the parent's CSS vars, so it's concrete.
+		// Colors the email itself carries are remapped onto this canvas by remapEmailForDarkMode.
 		background: '#171717',
 		text: '#D4D4D4',
 		button: '#2B2B2B',
 		buttonHover: '#343434',
-		script: `
-			function hasBackground(el) {
-				while (el && el !== document.body) {
-					const bg = getComputedStyle(el).backgroundColor;
-					if (bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
-						return true;
-					}
-					el = el.parentElement;
-				}
-				return false;
-			}
-
-			function walkAndWrapTextNodes(node) {
-				for (let child of Array.from(node.childNodes)) {
-					if (child.nodeType === 3) {
-						const trimmed = child.textContent.trim();
-						if (
-							trimmed.length > 0 &&
-							!hasBackground(child.parentElement) &&
-							child.parentElement.tagName !== 'A' &&
-							child.parentElement.tagName !== 'PRE' &&
-							child.parentElement.tagName !== 'CODE'
-						) {
-							child.parentElement.style.setProperty('color', '#D4D4D4');
-						}
-					} else if (child.nodeType === 1) {
-						walkAndWrapTextNodes(child);
-					}
-				}
-			}
-
-			walkAndWrapTextNodes(document.body);
-		`,
+		link: '#6CB6FF',
 	},
 }
 </script>

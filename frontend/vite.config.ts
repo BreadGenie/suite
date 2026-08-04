@@ -90,9 +90,13 @@ export default defineConfig(({ mode }) => ({
     // Bundles mail's Firebase Cloud Messaging service worker (src/apps/mail/sw.ts)
     // into sw.js at the build root -> served at /assets/suite/frontend/sw.js, which
     // MailLayout.registerServiceWorker() registers. Scoped to FCM only: precaching
-    // is disabled (injectionPoint: undefined) and no webmanifest is generated
-    // (manifest: false), so the other suite apps are NOT turned into a PWA.
-    // Registration is manual (injectRegister: null).
+    // is disabled (injectionPoint: undefined). Registration is manual
+    // (injectRegister: null).
+    // `manifest: false`: the webmanifest is NOT generated here. All seven apps
+    // share one HTML shell, so a <link rel="manifest"> injected into <head> at
+    // build time would make drive/calendar/... install as Frappe Mail too. It
+    // lives at public/pwa/mail/ instead and is linked at runtime only
+    // while the route is inside /mail (see router/index.ts setPwaTags).
     VitePWA({
       strategies: 'injectManifest',
       srcDir: 'src/apps/mail',
@@ -103,11 +107,11 @@ export default defineConfig(({ mode }) => ({
       },
       manifest: false,
       devOptions: {
-        // The SW is registered at the production-absolute path
-        // (/assets/suite/frontend/sw.js), which only exists in a build, so push
-        // notifications are a build-only feature (same as the slides SW). No need
-        // to serve a dev SW that would 404 anyway.
-        enabled: false,
+        // Serves the dev SW stub so installability is testable locally. The FCM
+        // SW itself stays build-only: registration targets the
+        // production-absolute path, which the dev server never has.
+        enabled: true,
+        type: 'module',
       },
     }),
   ],
@@ -118,6 +122,9 @@ export default defineConfig(({ mode }) => ({
     },
     // Keep single ProseMirror / Yjs / reka-ui / vue singletons across the 7
     // merged editors (drive/writer/sheets/mail collab) — see _resolved.json.
+    // @vueuse/core must NOT be deduped: frappe-ui needs v10 while reka-ui
+    // ships with its own nested v14, and collapsing them onto one copy breaks
+    // reka-ui (e.g. TabsIndicator's useResizeObserver call under vueuse 10).
     dedupe: [
       'vue',
       'vue-router',
@@ -126,7 +133,6 @@ export default defineConfig(({ mode }) => ({
       'prosemirror-state',
       'prosemirror-view',
       'reka-ui',
-      '@vueuse/core',
     ],
   },
   build: {

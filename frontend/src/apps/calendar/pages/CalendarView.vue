@@ -4,15 +4,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { Button, Calendar, Dialog, createResource, usePageMeta } from 'frappe-ui'
 
 import { raiseToast } from '@/apps/calendar/utils'
+import { fromEventZone } from '@/apps/calendar/utils/datetime'
 import { userStore } from '@/apps/calendar/stores/user'
 import AppSidebar from '@/apps/calendar/components/AppSidebar.vue'
-import EventPopoverContent from '@/apps/calendar/components/EventPopoverContent.vue'
+import EventDetailSidebar from '@/apps/calendar/components/EventDetailSidebar.vue'
 import EventModal from '@/apps/calendar/components/Modals/EventModal.vue'
 
 const dayjs = inject('$dayjs')
 
 const store = userStore()
-const { identities } = store
+const { participantIdentities } = store
 
 const route = useRoute()
 const router = useRouter()
@@ -65,8 +66,10 @@ const setRoute = () => {
 	const name = routeNameForView(view)
 	const accountId = route.params.accountId
 
-	if (dayjs().isSame(target, view)) router.replace({ name, params: { accountId } })
-	else router.push({ name, params: { accountId, year, month: month + 1, day } })
+	// Query carries the open event's deep link; date/view navigation keeps it.
+	if (dayjs().isSame(target, view))
+		router.replace({ name, params: { accountId }, query: route.query })
+	else router.push({ name, params: { accountId, year, month: month + 1, day }, query: route.query })
 }
 
 onMounted(() => {
@@ -81,20 +84,30 @@ onMounted(() => {
 })
 
 const transformEvent = (event) => {
-	const start = dayjs(event.start)
+	// The all-day heuristic reads the stored wall clock (midnight in the event's own zone).
+	const rawStart = dayjs(event.start)
 	const dur = dayjs.duration(event.duration || 'PT0S')
-	const end = start.add(dur)
 	const isAllDay =
-		start.hour() === 0 &&
-		start.minute() === 0 &&
-		start.second() === 0 &&
+		rawStart.hour() === 0 &&
+		rawStart.minute() === 0 &&
+		rawStart.second() === 0 &&
 		dur.days() > 0 &&
 		dur.hours() === 0 &&
 		dur.minutes() === 0 &&
 		dur.seconds() === 0
 
+	// Timed events are placed in the viewer's zone; all-day events keep their calendar date.
+	const start = isAllDay ? rawStart : fromEventZone(event.start, event.time_zone)
+	const end = start.add(dur)
+
 	return {
 		...event,
+		// The calendar pills render `title` verbatim (frappe-ui hardcodes an italic
+		// '[No title]' fallback), so untitled events get their placeholder here.
+		// actualTitle keeps the raw value; every path that writes back to the
+		// server must restore it (withActualTitle) or the placeholder gets saved.
+		title: event.title || __('Untitled event'),
+		actualTitle: event.title,
 		fromDate: start.format('YYYY-MM-DD'),
 		toDate: end.format('YYYY-MM-DD'),
 		fromTime: start.format('HH:mm'),
@@ -105,10 +118,10 @@ const transformEvent = (event) => {
 }
 
 const getEventRole = (event) => {
-	if (identities.data?.some((id) => id.email === event.organizer.replace('mailto:', '')))
+	if (participantIdentities.data?.some((id) => id.email === event.organizer.replace('mailto:', '')))
 		return 'Organizer'
 	if (
-		identities.data?.some((id) =>
+		participantIdentities.data?.some((id) =>
 			event.participants?.some((p) => p.email.replace('mailto:', '') === id.email),
 		)
 	)
@@ -134,8 +147,8 @@ const events = createResource({
 			.month(calendarRef.value?.currentMonth)
 		return {
 			account: store.accountId,
-			from_date: date.startOf('month').subtract(37, 'day').toDate(),
-			to_date: date.endOf('month').add(37, 'day').toDate(),
+			from_date: date.startOf('month').subtract(37, 'day').utc().format('YYYY-MM-DD[T]HH:mm:ss[Z]'),
+			to_date: date.endOf('month').add(37, 'day').utc().format('YYYY-MM-DD[T]HH:mm:ss[Z]'),
 			time_zone: dayjs.tz.guess(),
 		}
 	},
@@ -156,16 +169,104 @@ const showEditEvent = ref(false)
 
 const event = reactive({})
 
+const withActualTitle = (event) => ({ ...event, title: event.actualTitle })
+
 const handleOpenEvent = (e) => {
-	Object.assign(event, e)
+	Object.assign(event, e, e.calendarEvent && { calendarEvent: withActualTitle(e.calendarEvent) })
 	showEditEvent.value = true
+
+	// Editing an existing event is addressable: ?event=<id>&edit=1 (never for
+	// new-event drafts, which have no id and no restorable form state).
+	const opened = e.calendarEvent
+	if (opened?.id && (route.query.edit !== '1' || route.query.event !== opened.id))
+		router.replace({
+			query: {
+				...route.query,
+				event: opened.id,
+				recurrence: opened.recurrence_id || undefined,
+				edit: '1',
+			},
+		})
 }
+
+// --- Event detail sidebar ---
+
+const selectedCalendarEvent = ref(null)
+
+// The open event lives in the URL (?event=<id>, plus &recurrence=<id> for a
+// recurring instance): clicking a pill writes it, closing clears it, and the
+// selection is DERIVED from it below — so event links are shareable, survive
+// reload, and back/forward toggles the panel. Deriving from events.data also
+// keeps the sidebar in sync after edits/RSVPs (fresh copy swapped in, closed
+// while the event is deleted or outside the fetched range).
+const handleEventClick = ({ calendarEvent }) =>
+	router.replace({
+		query: {
+			...route.query,
+			event: calendarEvent.id,
+			recurrence: calendarEvent.recurrence_id || undefined,
+		},
+	})
+
+const closeEventDetail = () => {
+	const { event: _event, recurrence: _recurrence, ...query } = route.query
+	router.replace({ query })
+}
+
+// The calendar app has no compose surface of its own — hand over to mail's
+// compose window via its deep link (mailto: would depend on the OS having a
+// mail handler; the suite IS the mail client). Path, not route name: mail's
+// routes register lazily on first navigation into /mail.
+const emailParticipants = (emails: string[]) => {
+	router.push({ path: '/mail', query: { compose: '1', to: emails.join(',') } })
+}
+
+watch(
+	[() => events.data, () => route.query.event, () => route.query.recurrence],
+	([data, id, recurrence]) => {
+		if (!id) {
+			selectedCalendarEvent.value = null
+			return
+		}
+		selectedCalendarEvent.value =
+			data?.find(
+				(e) => e.id === id && (e.recurrence_id ?? '') === ((recurrence as string) ?? ''),
+			) ?? null
+	},
+	{ immediate: true },
+)
 
 watch(
 	() => showEditEvent.value,
 	(val) => {
-		if (!val) Object.keys(event).forEach((key) => delete event[key])
+		if (val) return
+		Object.keys(event).forEach((key) => delete event[key])
+		// Closing the modal drops only `edit` — the detail sidebar (?event=) stays.
+		if (route.query.edit) {
+			const { edit: _edit, ...query } = route.query
+			router.replace({ query })
+		}
 	},
+)
+
+// Restore the edit modal from ?edit=1 (reload, shared link), and close it when
+// back/forward removes the param. Guards: never touch an already-open modal
+// (events reloading in the background must not stomp form state), and never
+// close a NEW-event draft (those carry no calendarEvent and own no query).
+watch(
+	[() => events.data, () => route.query.event, () => route.query.recurrence, () => route.query.edit],
+	([data, id, recurrence, edit]) => {
+		if (!edit || !id) {
+			if (showEditEvent.value && event.calendarEvent) showEditEvent.value = false
+			return
+		}
+		if (showEditEvent.value) return
+		const match = data?.find(
+			(e) => e.id === id && (e.recurrence_id ?? '') === ((recurrence as string) ?? ''),
+		)
+		if (match) handleOpenEvent({ calendarEvent: match })
+	},
+	{ immediate: true },
 )
 
 const eventToBeUpdated = reactive({})
@@ -174,7 +275,7 @@ const isUpdateInstance = ref(false)
 const showNotifyModal = ref(false)
 
 const handleUpdate = (e) => {
-	Object.assign(eventToBeUpdated, e)
+	Object.assign(eventToBeUpdated, withActualTitle(e))
 	if (e.recurrence_id) showRecurringEventModal.value = true
 	else handleUpdateEvent()
 }
@@ -193,7 +294,7 @@ const handleUpdateEvent = () => {
 const hasParticipantsOtherThanUser = computed(
 	() =>
 		eventToBeUpdated.participants?.some((p) =>
-			identities.data.every((i) => i.email !== p.email),
+			participantIdentities.data.every((i) => i.email !== p.email),
 		) ?? false,
 )
 
@@ -204,6 +305,9 @@ const submitEvent = (sendEmail: boolean) => {
 
 	eventToBeUpdated.start = dayjs(eventToBeUpdated.fromDateTime).format('YYYY-MM-DDTHH:mm:ss')
 	if (!eventToBeUpdated.isAllDay) {
+		// The dragged wall clock is in the viewer's zone; re-zone the event to match, or the
+		// same numbers would be reinterpreted in the event's original zone.
+		eventToBeUpdated.time_zone = dayjs.tz.guess()
 		const start = dayjs(eventToBeUpdated.fromDateTime)
 		const end = dayjs(eventToBeUpdated.toDateTime)
 		const diff = dayjs.duration(end.diff(start))
@@ -215,7 +319,7 @@ const submitEvent = (sendEmail: boolean) => {
 }
 
 const editEvent = createResource({
-	url: 'suite.mail.doctype.calendar_event.calendar_event.update_calendar_event',
+	url: 'suite.calendar.doctype.calendar_event.calendar_event.update_calendar_event',
 	makeParams: ({ sendEmail }: { sendEmail: boolean }) => ({
 		...eventToBeUpdated,
 		// master_id is only set on recurring events; fall back to the event's own id
@@ -259,20 +363,21 @@ const NOTIFY_MODAL_OPTIONS = {
 					ref="calendar"
 					:events="visibleEvents"
 					:config="{ isEditMode: true }"
+					:on-click="handleEventClick"
 					:on-dbl-click="(event) => handleOpenEvent(event)"
 					:on-cell-click="(event) => handleOpenEvent(event)"
 					@update="handleUpdate"
-				>
-					<template #event-popover-content="{ calendarEvent, close }">
-						<EventPopoverContent
-							:calendar-event
-							:close
-							@edit="handleOpenEvent({ calendarEvent })"
-							@reload-events="events.reload()"
-						/>
-					</template>
-				</Calendar>
+				/>
 			</div>
+			<EventDetailSidebar
+				v-if="selectedCalendarEvent"
+				:key="selectedCalendarEvent.id + (selectedCalendarEvent.recurrence_id ?? '')"
+				:calendar-event="selectedCalendarEvent"
+				@close="closeEventDetail"
+				@edit="handleOpenEvent({ calendarEvent: selectedCalendarEvent })"
+				@reload-events="events.reload()"
+				@email-participants="emailParticipants"
+			/>
 		</div>
 	</div>
 	<EventModal v-model="showEditEvent" :selected-event="event" @reload-events="events.reload()" />

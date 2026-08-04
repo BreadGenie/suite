@@ -2,7 +2,7 @@
 	<Dropdown :options="shapeOptions" side="top" align="center" :offset="12">
 		<template #default="{ open }">
 			<div :class="triggerClass(open)">
-				<LucideShapes class="size-4 stroke-[1.5]" />
+				<LucideShapes class="size-4.5 stroke-[1.5] text-ink-gray-7" />
 			</div>
 		</template>
 	</Dropdown>
@@ -15,8 +15,8 @@ import { Dropdown } from 'frappe-ui'
 import { pendingShapeType } from '@/apps/slides/stores/element'
 
 const triggerClass = (open) => [
-	'cursor-pointer rounded p-2 hover:bg-gray-100',
-	{ 'bg-gray-100': open },
+	'cursor-pointer rounded p-2 hover:bg-surface-gray-3',
+	{ 'bg-surface-gray-3': open },
 ]
 
 const addShape = (shapeType) => {

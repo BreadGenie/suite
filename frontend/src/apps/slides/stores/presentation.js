@@ -1,5 +1,7 @@
 import { ref, computed } from 'vue'
-import { createResource, call, createDocumentResource } from 'frappe-ui'
+import { createResource, call, createDocumentResource, toast } from 'frappe-ui'
+
+import tinycolor from 'tinycolor2'
 
 import { router } from '@/apps/slides/router'
 import { slides } from './slide'
@@ -116,7 +118,30 @@ const transformElements = async (elements) => {
 	return newEls
 }
 
-const parseElements = (value) => {
+const migrateShadow = (el) => {
+	// legacy px shadow (shadowSpread/shadowOffsetX/shadowOffsetY) -> size-relative model
+	if (el.shadowOffset != null) return
+	const hasLegacyShadow =
+		el.shadowSpread != null || el.shadowOffsetX != null || el.shadowOffsetY != null
+	if (!hasLegacyShadow) return
+
+	const refSize = Number(el.width) || 1
+	const offsetX = Number(el.shadowOffsetX || 0)
+	const offsetY = Number(el.shadowOffsetY || 0)
+	const toRelativeSize = (px) => Math.round((px / refSize) * 1000) / 10
+	const offsetAngle = ((Math.atan2(offsetY, offsetX) * 180) / Math.PI + 360) % 360
+
+	el.shadowBlur = toRelativeSize(Number(el.shadowSpread || 0))
+	el.shadowOffset = toRelativeSize(Math.hypot(offsetX, offsetY))
+	el.shadowAngle = offsetX || offsetY ? Math.round(offsetAngle) : 45
+	el.shadowOpacity = Math.round(tinycolor(el.shadowColor || '#000000ff').getAlpha() * 100)
+
+	delete el.shadowSpread
+	delete el.shadowOffsetX
+	delete el.shadowOffsetY
+}
+
+const parseElements = (value, slide) => {
 	if (!value) return []
 
 	let parsed = []
@@ -125,7 +150,12 @@ const parseElements = (value) => {
 	} else if (typeof value === 'string') {
 		try {
 			parsed = JSON.parse(value)
-		} catch {
+		} catch (err) {
+			console.error('Failed to parse slide elements', err)
+			toast.error(
+				'A slide could not be read. Its content is preserved but hidden; avoid saving over it.',
+			)
+			if (slide) slide.corruptElements = value
 			return []
 		}
 	}
@@ -140,6 +170,7 @@ const parseElements = (value) => {
 			// 'circle' was renamed to 'oval' to match the display name
 			el.shapeType = 'oval'
 		}
+		migrateShadow(el)
 		return el
 	})
 
@@ -160,6 +191,21 @@ const ensureUniqueClientIds = (slides) => {
 	return repaired
 }
 
+const normalizeSlideDoc = (doc) => {
+	for (const slide of doc.slides || []) {
+		slide.elements = parseElements(slide.elements, slide)
+		slide.clientId = slide.client_id || uuid4()
+		slide.transitionDuration = slide.transition_duration
+		slide.fadeUnmatchedElements = slide.fade_unmatched_elements
+		delete slide.thumbnail
+		// remove the transition_duration field to avoid confusion
+		delete slide.transition_duration
+		delete slide.fade_unmatched_elements
+		delete slide.client_id
+	}
+	return ensureUniqueClientIds(doc.slides || [])
+}
+
 const slidesLength = ref(0)
 
 const getPresentationResource = (name) => {
@@ -169,18 +215,7 @@ const getPresentationResource = (name) => {
 		name: name,
 		auto: false,
 		transform(doc) {
-			for (const slide of doc.slides || []) {
-				slide.elements = parseElements(slide.elements)
-				slide.clientId = slide.client_id || uuid4()
-				slide.transitionDuration = slide.transition_duration
-				slide.fadeUnmatchedElements = slide.fade_unmatched_elements
-				delete slide.thumbnail
-				// remove the transition_duration field to avoid confusion
-				delete slide.transition_duration
-				delete slide.fade_unmatched_elements
-				delete slide.client_id
-			}
-			clientIdsRepaired = ensureUniqueClientIds(doc.slides || [])
+			clientIdsRepaired = normalizeSlideDoc(doc)
 		},
 		async onSuccess(doc) {
 			slidesLength.value = doc.slides?.length || 0
@@ -192,7 +227,10 @@ const getPresentationResource = (name) => {
 			const local = await getPresentationFromLocalDB(name)
 			if (local?.dirty && local.baseModified === doc.modified) {
 				const restored = JSON.parse(JSON.stringify(local.content))
-				// local content skips the transform's repair, so dedup it here too
+				// local content skips the load pipeline; migrate + dedup it here too
+				for (const slide of restored) {
+					slide.elements = parseElements(slide.elements, slide)
+				}
 				ensureUniqueClientIds(restored)
 				slides.value = restored
 				slidesLength.value = slides.value.length
@@ -208,57 +246,16 @@ const getPresentationResource = (name) => {
 	})
 }
 
-const getPublicPresentationResource = (name) => {
+const getReadonlyPresentationResource = (name, url) => {
 	return createResource({
-		url: 'suite.slides.doctype.presentation.presentation.get_public_presentation',
+		url,
 		method: 'GET',
 		auto: false,
 		makeParams: () => {
 			return { name: name }
 		},
 		transform(doc) {
-			for (const slide of doc.slides || []) {
-				slide.elements = parseElements(slide.elements)
-				slide.clientId = slide.client_id || uuid4()
-				slide.transitionDuration = slide.transition_duration
-				slide.fadeUnmatchedElements = slide.fade_unmatched_elements
-				delete slide.thumbnail
-				// remove the transition_duration field to avoid confusion
-				delete slide.transition_duration
-				delete slide.fade_unmatched_elements
-				delete slide.client_id
-			}
-			ensureUniqueClientIds(doc.slides || [])
-		},
-		onSuccess(doc) {
-			slidesLength.value = doc.slides?.length || 0
-			slides.value = JSON.parse(JSON.stringify(doc.slides || []))
-			markClean()
-		},
-	})
-}
-
-const getCompositePresentationResource = (name) => {
-	return createResource({
-		url: 'suite.slides.doctype.presentation.presentation.get_composite_presentation',
-		method: 'GET',
-		auto: false,
-		makeParams: () => {
-			return { name: name }
-		},
-		transform(doc) {
-			for (const slide of doc.slides || []) {
-				slide.elements = parseElements(slide.elements)
-				slide.clientId = slide.client_id || uuid4()
-				slide.transitionDuration = slide.transition_duration
-				slide.fadeUnmatchedElements = slide.fade_unmatched_elements
-				delete slide.thumbnail
-				// remove the transition_duration field to avoid confusion
-				delete slide.transition_duration
-				delete slide.fade_unmatched_elements
-				delete slide.client_id
-			}
-			ensureUniqueClientIds(doc.slides || [])
+			normalizeSlideDoc(doc)
 		},
 		onSuccess(doc) {
 			slidesLength.value = doc.slides?.length || 0
@@ -270,11 +267,11 @@ const getCompositePresentationResource = (name) => {
 
 const savePresentationDoc = async (updatedSlides) => {
 	const newSlides = updatedSlides.map((slide) => {
-		const { thumbnail, ...slideData } = slide
+		const { thumbnail, corruptElements, ...slideData } = slide
 		return {
 			...slideData,
 			client_id: slide.clientId,
-			elements: JSON.stringify(slide.elements, null, 2),
+			elements: corruptElements ?? JSON.stringify(slide.elements, null, 2),
 			transition_duration: slide.transitionDuration,
 			fade_unmatched_elements: slide.fadeUnmatchedElements,
 		}
@@ -292,10 +289,16 @@ const presentationResource = ref(null)
 const initPresentationDoc = async (id, readonly = false) => {
 	presentationId.value = id
 	if (readonly) {
-		presentationResource.value = getPublicPresentationResource(id)
+		presentationResource.value = getReadonlyPresentationResource(
+			id,
+			'suite.slides.doctype.presentation.presentation.get_public_presentation',
+		)
 		await presentationResource.value.fetch()
 		if (presentationResource.value.data.is_composite) {
-			presentationResource.value = getCompositePresentationResource(id)
+			presentationResource.value = getReadonlyPresentationResource(
+				id,
+				'suite.slides.doctype.presentation.presentation.get_composite_presentation',
+			)
 			await presentationResource.value.fetch()
 		}
 		return presentationResource.value.data
@@ -305,8 +308,6 @@ const initPresentationDoc = async (id, readonly = false) => {
 		return presentationResource.value.doc
 	}
 }
-
-const unsyncedPresentationRecord = ref({})
 
 const templateList = ref([])
 
@@ -354,7 +355,6 @@ export {
 	createPresentationResource,
 	presentationDoc,
 	transformElements,
-	unsyncedPresentationRecord,
 	slidesLength,
 	templateList,
 	templateListResource,

@@ -42,7 +42,9 @@ def execute():
                     content = reply.get("content")
                     owner = reply.get("ownerEmail")
                     created_at = datetime.fromtimestamp(reply.get("createdAt", 0) / 1000)
-                    reply_doc = frappe.get_doc({"doctype": "Drive Comment", "content": content, "name": str(uuid4())})
+                    reply_doc = frappe.get_doc(
+                        {"doctype": "Drive Comment", "content": content, "name": str(uuid4())}
+                    )
                     comment.append("replies", reply_doc)
                     reply_doc.insert(ignore_permissions=True)
                     MAP[reply_doc.name] = (owner, created_at)

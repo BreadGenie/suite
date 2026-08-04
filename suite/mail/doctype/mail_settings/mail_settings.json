@@ -13,6 +13,7 @@
   "password",
   "mail_client_config_section",
   "show_mail_client_config",
+  "show_calendar_client_config",
   "mail_client_configurations",
   "spamassassin_section",
   "spamd_host",
@@ -41,20 +42,20 @@
   "process_pending_emails_batch_size",
   "process_pending_emails_max_batch_size",
   "logs_section",
+  "admin_log_file_count",
   "push_log_file_count",
-  "storage_log_file_count",
   "inbound_log_file_count",
   "outbound_log_file_count",
   "exchange_log_file_count",
   "column_break_ztzv",
+  "admin_log_level",
   "push_log_level",
-  "storage_log_level",
   "inbound_log_level",
   "outbound_log_level",
   "exchange_log_level",
   "column_break_pvju",
+  "admin_log_max_file_size",
   "push_log_max_file_size",
-  "storage_log_max_file_size",
   "inbound_log_max_file_size",
   "outbound_log_max_file_size",
   "exchange_log_max_file_size",
@@ -96,7 +97,10 @@
   "column_break_wpvf",
   "jmap_push_auth",
   "jmap_push_private_key",
-  "jmap_push_p256dh"
+  "jmap_push_p256dh",
+  "event_invites_tab",
+  "event_invites_section",
+  "custom_event_invites"
  ],
  "fields": [
   {
@@ -438,6 +442,28 @@
   },
   {
    "default": "10",
+   "fieldname": "admin_log_file_count",
+   "fieldtype": "Int",
+   "label": "Admin Log File Count",
+   "reqd": 1
+  },
+  {
+   "default": "INFO",
+   "fieldname": "admin_log_level",
+   "fieldtype": "Select",
+   "label": "Admin Log Level",
+   "options": "ERROR\nWARNING\nINFO\nDEBUG",
+   "reqd": 1
+  },
+  {
+   "default": "5000000",
+   "fieldname": "admin_log_max_file_size",
+   "fieldtype": "Int",
+   "label": "Admin Log Max File Size",
+   "reqd": 1
+  },
+  {
+   "default": "10",
    "fieldname": "push_log_file_count",
    "fieldtype": "Int",
    "label": "Push Log File Count",
@@ -460,28 +486,6 @@
    "fieldname": "push_log_max_file_size",
    "fieldtype": "Int",
    "label": "Push Log Max File Size",
-   "reqd": 1
-  },
-  {
-   "default": "10",
-   "fieldname": "storage_log_file_count",
-   "fieldtype": "Int",
-   "label": "Storage Log File Count",
-   "reqd": 1
-  },
-  {
-   "default": "INFO",
-   "fieldname": "storage_log_level",
-   "fieldtype": "Select",
-   "label": "Storage Log Level",
-   "options": "ERROR\nWARNING\nINFO\nDEBUG",
-   "reqd": 1
-  },
-  {
-   "default": "5000000",
-   "fieldname": "storage_log_max_file_size",
-   "fieldtype": "Int",
-   "label": "Storage Log Max File Size",
    "reqd": 1
   },
   {
@@ -561,6 +565,13 @@
    "fieldname": "show_mail_client_config",
    "fieldtype": "Check",
    "label": "Show Connection Details in Mail UI"
+  },
+  {
+   "default": "1",
+   "description": "Show the CalDAV connection details in the Calendar UI so users can set up third-party calendar clients. When unchecked, nothing is shown.",
+   "fieldname": "show_calendar_client_config",
+   "fieldtype": "Check",
+   "label": "Show Connection Details in Calendar UI"
   },
   {
    "depends_on": "eval: doc.show_mail_client_config",
@@ -694,6 +705,23 @@
    "reqd": 1
   },
   {
+   "fieldname": "event_invites_tab",
+   "fieldtype": "Tab Break",
+   "label": "Event Invites"
+  },
+  {
+   "fieldname": "event_invites_section",
+   "fieldtype": "Section Break",
+   "label": "Event Invitations"
+  },
+  {
+   "default": "1",
+   "description": "Send calendar invitation, update, and cancellation emails from Frappe Mail using the templates below, with .ics attachments and HTTP RSVP links. When disabled, the JMAP server handles scheduling messages instead.",
+   "fieldname": "custom_event_invites",
+   "fieldtype": "Check",
+   "label": "Send Custom Event Invitations"
+  },
+  {
    "default": "INFO",
    "fieldname": "exchange_log_level",
    "fieldtype": "Select",
@@ -712,7 +740,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-07-15 18:46:42.475053",
+ "modified": "2026-08-03 13:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail",
  "name": "Mail Settings",

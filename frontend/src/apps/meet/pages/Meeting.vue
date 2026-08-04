@@ -11,9 +11,16 @@
 		>
 			<MeetingHeader
 				:meetingId="meetingId"
-				:meetingTitle="meetingTitle"
+				:meetingTitle="previewTitle"
 			>
 				<template #right>
+					<Button
+						v-if="showPreview"
+						size="sm"
+						icon-left="lucide-link-2"
+						label="Copy link"
+						@click="copyMeetingLink"
+					/>
 					<Button
 						v-if="showPreview && !session.isLoggedIn"
 						variant="ghost"
@@ -42,6 +49,7 @@
 			<MeetingPreview
 				v-if="showPreview"
 				:meetingId="meetingId"
+				:meetingTitle="previewTitle"
 				:isCameraOn="mediaState.isCameraOn"
 				:isMicOn="mediaState.isMicOn"
 				:cameraPermissionGranted="mediaState.cameraPermissionGranted"
@@ -70,15 +78,6 @@
 			<template v-else>
 			<div class="relative grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
 				<div
-					v-if="e2eeJoinPendingMessage"
-					class="absolute top-4 left-1/2 -translate-x-1/2 z-[60] max-w-[calc(100%-2rem)] rounded-full border border-amber-300/30 bg-amber-950/80 px-4 py-2 text-sm text-amber-50 shadow-lg backdrop-blur-md flex items-center gap-2"
-					role="status"
-					data-testid="e2ee-join-pending-banner"
-				>
-					<Spinner class="h-4" />
-					<span>{{ e2eeJoinPendingMessage }}</span>
-				</div>
-				<div
 					class="grid flex-1 min-h-0 transition-[grid-template-columns] duration-300 ease-out relative"
 					:style="{
 						'--panel-width': panelWidth,
@@ -88,8 +87,29 @@
 					<div class="flex flex-col min-h-0 relative">
 						<!-- Video area -->
 						<div class="p-2.5 flex flex-col flex-1 min-h-0 text-white relative">
-							<MeetingLayout @open-people-panel="togglePeople" />
+							<div
+								v-if="e2eeJoinPendingMessage"
+								class="flex h-full flex-col items-center justify-center px-4 py-12 text-center"
+								role="status"
+								aria-live="polite"
+								data-testid="e2ee-join-pending-state"
+							>
+								<h1 class="text-lg-medium text-ink-gray-8">
+									{{ e2eeJoinTitle }}
+								</h1>
+								<p class="mt-1 max-w-sm text-p-base text-ink-gray-7">
+									{{ e2eeJoinPendingMessage }}
+								</p>
+								<Badge class="mt-3" variant="subtle" theme="gray">
+									<template #prefix>
+										<span class="lucide-lock size-3.5" aria-hidden="true" />
+									</template>
+									End-to-end encrypted
+								</Badge>
+							</div>
+							<MeetingLayout v-else @open-people-panel="togglePeople" />
 							<CaptionOverlay
+								v-if="!e2eeJoinPendingMessage"
 								:is-captions-enabled="captionStore.isCaptionsEnabled"
 								:lines="captionStore.captionLines"
 								:participants="participantStore.participants"
@@ -172,6 +192,7 @@
 						:isCameraOn="mediaState.isCameraOn"
 						:isScreenSharing="mediaState.isScreenSharing"
 						:isFullscreen="isFullscreen"
+						:statsVisible="showStatsForNerds"
 						:isHandRaised="isHandRaised"
 						:isReactionPickerOpen="isReactionPickerOpen"
 						:isCaptionsEnabled="captionStore.isCaptionsEnabled"
@@ -191,12 +212,15 @@
 						@toggle-raise-hand="raiseHand.toggleRaiseHand()"
 						@toggle-captions="toggleCaptions"
 						@report-problem="handleReportProblem"
+						@toggle-stats="toggleStatsForNerds"
 						@end-call="sfuConnection.endCall()"
 						@device-changed="handleDeviceChanged"
 						@visibility-change="isToolbarVisible = $event"
 					/>
 				</div>
 			</div>
+
+			<StatsForNerdsOverlay v-if="showStatsForNerds" />
 
 			<LobbyOverlay
 				v-if="(isInLobby || isWaitingForApproval) && !isRejected"
@@ -206,13 +230,6 @@
 			<RejectionOverlay v-if="isRejected && isGuestSession" @leave="goHome" />
 			</template>
 		</template>
-
-		<!-- Chat notifications -->
-		<ChatNotificationQueue
-			ref="chatNotificationQueue"
-			:auto-dismiss-delay="5000"
-			@notification-click="handleNotificationClick"
-		/>
 
 		<!-- Join request notifications -->
 		<JoinRequestNotifications
@@ -224,22 +241,22 @@
 </template>
 
 <script setup lang="ts">
-import { Button, frappeRequest, toast } from "frappe-ui";
-import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { Badge, Button, createResource, frappeRequest, toast } from "frappe-ui";
+import { computed, h, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import CaptionOverlay from "../components/CaptionOverlay.vue";
-import ChatNotificationQueue from "../components/ChatNotificationQueue.vue";
 import ChatPanel from "../components/ChatPanel.vue";
 import JoinRequestNotifications from "../components/JoinRequestNotifications.vue";
 import LobbyOverlay from "../components/LobbyOverlay.vue";
+import MeetAvatar from "../components/MeetAvatar.vue";
 import MeetingLayout from "../components/MeetingLayout.vue";
 import MeetingPreview from "../components/MeetingPreview.vue";
 import MeetingHeader from "../components/MeetingHeader.vue";
 import MeetingToolbar from "../components/MeetingToolbar.vue";
 import PeoplePanel from "../components/PeoplePanel.vue";
 import RejectionOverlay from "../components/RejectionOverlay.vue";
-import Spinner from "../components/Spinner.vue";
+import StatsForNerdsOverlay from "../components/StatsForNerdsOverlay.vue";
 import { useBackgroundEffects } from "../composables/useBackgroundEffects";
 import { useCaptionStore } from "../composables/useCaptionStore";
 import { useCaptions } from "../composables/useCaptions";
@@ -260,6 +277,7 @@ import {
 	useMeetingHandlers,
 } from "../composables/useMeetingHandlers";
 import { useNoiseCancellation } from "../composables/useNoiseCancellation";
+import { useNetworkQuality } from "../composables/useNetworkQuality";
 import { useParticipantStore } from "../composables/useParticipantStore";
 import { useRaiseHand } from "../composables/useRaiseHand";
 import { useRaiseHandStore } from "../composables/useRaiseHandStore";
@@ -276,6 +294,10 @@ import {
 	selectedMicId,
 	selectedSpeakerId,
 } from "../data/mediaPreferences";
+import {
+	setShowStatsForNerds,
+	showStatsForNerds,
+} from "../data/statsPreferences";
 import { session, userResource } from "@/boot/session";
 import { useSocket } from "../socket";
 import { deviceManager } from "../utils/media/DeviceManager";
@@ -293,6 +315,15 @@ function redirectToLogin() {
 		? window.location.pathname
 		: `/meet${window.location.pathname}`;
 	window.location.href = `/login?redirect-to=${encodeURIComponent(path)}`;
+}
+
+async function copyMeetingLink() {
+	try {
+		await navigator.clipboard.writeText(window.location.href);
+		toast.success("Meeting link copied");
+	} catch {
+		toast.error("Could not copy meeting link");
+	}
 }
 
 // --- Stores (singletons) ---
@@ -321,6 +352,23 @@ const {
 	meetingCoHosts,
 } = useMeetingDoc();
 const meetingDoc = getMeetingDoc(meetingId.value);
+const previewDetails = createResource({
+	url: "suite.meet.api.meeting.get_public_meeting_preview",
+	params: { meeting_id: meetingId.value },
+	auto: !session.isLoggedIn,
+});
+const previewTitle = computed(
+	() => meetingDoc.doc?.title || previewDetails.data?.title || meetingId.value,
+);
+
+watch(
+	() => meetingDoc.get.error,
+	(error) => {
+		if (error && !previewDetails.data && !previewDetails.loading) {
+			previewDetails.fetch();
+		}
+	},
+);
 
 // --- Background effects & noise cancellation ---
 const backgroundEffects = useBackgroundEffects();
@@ -338,22 +386,37 @@ const lobbyUsersForNotifications = computed(() => {
 });
 
 const e2eeJoinPendingMessage = ref("");
+const e2eeJoinStatus = ref<"pending" | "failed" | "">("");
+const e2eeJoinReason = ref("");
 const e2eeState = useE2EEState();
+const e2eeJoinTitle = computed(() => {
+	if (e2eeJoinStatus.value === "failed") return "Could not join encrypted meeting";
+	if (e2eeJoinReason.value === "waiting-for-host") {
+		return "Waiting for the host to join";
+	}
+	return "Joining encrypted meeting";
+});
 
 function handleE2EEJoinStatus(event: Event): void {
 	const detail = (event as CustomEvent).detail as
 		| { status?: string; reason?: string; message?: string }
 		| undefined;
 	if (detail?.status === "pending") {
+		e2eeJoinStatus.value = "pending";
+		e2eeJoinReason.value = detail.reason || "";
 		e2eeJoinPendingMessage.value = getE2EEJoinPendingMessage(detail);
 		return;
 	}
 	if (detail?.status === "failed") {
+		e2eeJoinStatus.value = "failed";
+		e2eeJoinReason.value = detail.reason || "";
 		e2eeJoinPendingMessage.value =
 			detail.message ||
 			"Could not set up encryption for this meeting. Please leave and try again.";
 		return;
 	}
+	e2eeJoinStatus.value = "";
+	e2eeJoinReason.value = "";
 	e2eeJoinPendingMessage.value = "";
 }
 
@@ -362,10 +425,7 @@ function getE2EEJoinPendingMessage(detail: {
 	message?: string;
 }): string {
 	if (detail.reason === "waiting-for-host") {
-		return (
-			detail.message ||
-			"This encrypted meeting needs the host to join before others can enter."
-		);
+		return "You'll join automatically when the host arrives.";
 	}
 	return (
 		detail.message ||
@@ -442,6 +502,7 @@ const sfuConnection = useSFUConnection({
 		participantStore.activeSpeakerIds = participantIds;
 	},
 });
+const { networkQuality } = useNetworkQuality(sfuConnection.sfuManager);
 
 // --- Media Controls ---
 const mediaControls = useMediaControls({
@@ -541,6 +602,7 @@ provideMeetingContext({
 	processedStream: mediaState.processedStream,
 	isInMeeting: computed(() => true),
 	onBackgroundEffectsChanged: mediaControls.applyBackgroundEffectsToLocalStream,
+	networkQuality,
 });
 
 // Provide legacy injects for components not yet migrated to useMeetingContext
@@ -676,9 +738,6 @@ const isHandRaised = computed(() => {
 });
 
 // --- Refs ---
-const chatNotificationQueue = ref<InstanceType<
-	typeof ChatNotificationQueue
-> | null>(null);
 const isReactionPickerOpen = ref(false);
 const isFullscreen = ref(false);
 const isToolbarVisible = ref(true);
@@ -724,11 +783,83 @@ const {
 	handleApproveLobbyUser,
 	handleApproveAllLobbyUsers,
 	handleRejectLobbyUser,
-	handleNotificationClick,
 	toggleFullscreen,
 	handleReportProblem,
 	handleDeviceChanged,
 } = handlers;
+
+const showMeetingNotification = (notification: {
+	message: string;
+	fromUser: string;
+	fromName: string;
+	type: "chat" | "poll";
+}) => {
+	const participant = participantStore.participants[notification.fromUser] as
+		| { avatar?: string }
+		| undefined;
+	const openChat = () => {
+		if (!chatStore.isChatOpen) toggleChat();
+	};
+	let toastId: string | number;
+	const removeToastId = () => meetingNotificationIds.delete(toastId);
+	const handleClick = () => {
+		toast.dismiss(toastId);
+		openChat();
+	};
+
+	toastId = toast.custom(
+		() =>
+			h(
+				"button",
+				{
+					type: "button",
+					class:
+						"flex w-full min-w-0 items-center gap-3 text-left focus-visible:outline-none",
+					onClick: handleClick,
+				},
+				[
+					h(MeetAvatar, {
+						image: participant?.avatar,
+						label: notification.fromName,
+						size: "lg",
+					}),
+					h("span", { class: "min-w-0 flex-1" }, [
+						h(
+							"span",
+							{ class: "block truncate text-p-base font-medium text-ink-base" },
+							notification.type === "poll"
+								? `${notification.fromName} started a poll`
+								: notification.fromName,
+						),
+						h(
+							"span",
+							{ class: "block truncate text-p-base text-ink-base" },
+							notification.message,
+						),
+					]),
+				],
+			),
+		{
+			duration: 5000,
+			onDismiss: removeToastId,
+			onAutoClose: removeToastId,
+		},
+	);
+	meetingNotificationIds.add(toastId);
+};
+
+const meetingNotificationIds = new Set<string | number>();
+const clearMeetingNotifications = () => {
+	for (const id of meetingNotificationIds) toast.dismiss(id);
+	meetingNotificationIds.clear();
+};
+
+watch(
+	() => chatStore.isChatOpen,
+	(isOpen) => {
+		if (isOpen) clearMeetingNotifications();
+	},
+);
 
 // --- Local UI state ---
 const togglePeople = () => {
@@ -744,6 +875,10 @@ const togglePeople = () => {
 const toggleReactions = (payload: string) => {
 	reactions.onSendReaction(payload);
 	isReactionPickerOpen.value = false;
+};
+
+const toggleStatsForNerds = () => {
+	setShowStatsForNerds(!showStatsForNerds.value);
 };
 
 const syncFullscreenState = () => {
@@ -858,10 +993,10 @@ onMounted(async () => {
 	}
 
 	// Setup event handlers
-	chat.setupChatEvents(chatNotificationQueue.value);
+	chat.setupChatEvents(showMeetingNotification);
 	reactions.setupReactionEvents();
 	raiseHand.setupRaiseHandEvents();
-	poll.setupPollEvents(chatNotificationQueue.value);
+	poll.setupPollEvents(showMeetingNotification);
 
 	// Setup notification context watchers
 
@@ -898,6 +1033,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
 	clearConnectingToast();
+	clearMeetingNotifications();
 	document.removeEventListener("fullscreenchange", syncFullscreenState);
 	document.removeEventListener(
 		"meet:e2ee-needs-media-republish",

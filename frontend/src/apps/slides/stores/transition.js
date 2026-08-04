@@ -1,6 +1,6 @@
 import { slides, slideIndex, currentSlide } from '@/apps/slides/stores/slide'
 import { generateUniqueId } from '@/apps/slides/utils/helpers'
-import { editElementCommand } from './commands'
+import { editElementCommand, editSlideCommand } from './commands'
 
 const canCreateTextConnection = (currentContent, nextContent) => {
 	const parser = new DOMParser()
@@ -295,10 +295,43 @@ const getCommandsForRefIdSeries = (fromSlideIndex, element, refId, isForward) =>
 	return commands
 }
 
+const getCommandsToSetTransition = (slide, index, settings) => {
+	const { transition, transitionDuration, fadeUnmatchedElements } = settings
+	const commands = [
+		editSlideCommand({
+			slideId: slide.clientId,
+			property: 'transition',
+			oldValue: slide.transition,
+			newValue: transition,
+		}),
+		editSlideCommand({
+			slideId: slide.clientId,
+			property: 'transitionDuration',
+			oldValue: slide.transitionDuration,
+			newValue: transitionDuration,
+		}),
+		editSlideCommand({
+			slideId: slide.clientId,
+			property: 'fadeUnmatchedElements',
+			oldValue: slide.fadeUnmatchedElements,
+			newValue: fadeUnmatchedElements,
+		}),
+	]
+
+	if (transition == 'Magic Move') {
+		commands.push(...(getCommandsToAddMagicMove(index) || []))
+	} else {
+		commands.push(...(getCommandsToRemoveMagicMove(index) || []))
+	}
+
+	return commands
+}
+
 export {
 	isAffectedByMagicMove,
 	getCommandsToAddMagicMove,
 	getCommandsToRemoveMagicMove,
+	getCommandsToSetTransition,
 	getCommandsToInitElementRefId,
 	getCommandsToUpdateElementRefId,
 }

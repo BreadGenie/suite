@@ -41,7 +41,11 @@
           'grid grid-cols-2 gap-x-5 gap-y-8 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 !mb-0 mx-0.5'
         "
       >
-        <div v-for="(row, i) in files" :key="row.name">
+        <div
+          v-for="(row, i) in files"
+          :key="row.name"
+          :data-testid="`writer-document-${row.name}`"
+        >
           <template v-if="thumbnail === 'grid'">
             <section
               class="group"

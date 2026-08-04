@@ -1,5 +1,10 @@
 import { ref } from 'vue'
-import { presentationId, savePresentationDoc, presentationDoc } from '@/apps/slides/stores/presentation'
+import {
+	presentationId,
+	savePresentationDoc,
+	presentationDoc,
+	inReadonlyMode,
+} from '@/apps/slides/stores/presentation'
 import { slides } from '@/apps/slides/stores/slide'
 import { cloneObj } from '@/apps/slides/utils/helpers'
 
@@ -123,6 +128,7 @@ const getLatestSlideContent = () => {
 }
 
 const saveCurrentState = async () => {
+	if (inReadonlyMode.value) return
 	if (isSaving.value) return
 	if (!slides.value?.length || !presentationId.value) return
 

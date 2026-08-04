@@ -1,7 +1,8 @@
 <template>
 	<div
 		ref="overlay"
-		class="absolute left-0 top-0 size-full bg-blue-400 opacity-10"
+		class="absolute left-0 top-0 size-full opacity-10"
+		:style="{ backgroundColor: selectionColor }"
 		@dragleave.prevent="handleDragLeave"
 		@dragover.prevent
 		@drop="handleMediaDrop"
@@ -13,6 +14,7 @@ import { ref, useTemplateRef, nextTick } from 'vue'
 
 import { handleUploadedMedia } from '@/apps/slides/utils/mediaUploads'
 import { currentSlide } from '@/apps/slides/stores/slide'
+import { selectionColor } from '@/apps/slides/utils/constants'
 
 const emit = defineEmits(['hideOverlay'])
 

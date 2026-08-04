@@ -33,7 +33,6 @@
 <script setup>
 import { Button } from 'frappe-ui'
 import { useSessionStore } from '@/boot/session'
-import { setPageBreadcrumbs } from '@/apps/drive/data/breadcrumbs'
 import router from '@/apps/drive/router'
 import { computed, watchEffect } from 'vue'
 import LucideFileUser from '~icons/lucide/file-user'
@@ -48,12 +47,8 @@ const goToLogin = () => {
 }
 
 watchEffect(() => {
-  if (
-    props.error.exc_type === 'PermissionError' &&
-    !isLoggedIn.value
-  ) {
+  if (props.error.exc_type === 'PermissionError' && !isLoggedIn.value) {
     goToLogin()
   }
-  setPageBreadcrumbs([])
 })
 </script>

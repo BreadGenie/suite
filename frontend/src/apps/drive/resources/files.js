@@ -2,12 +2,18 @@ import { createResource } from 'frappe-ui'
 import { toast } from '@/apps/drive/utils/toasts'
 import { openEntity, setTitle } from '@/apps/drive/utils/files'
 import { activeEntity } from '@/apps/drive/data/selection'
-import { updateLastBreadcrumbLabel } from '@/apps/drive/data/breadcrumbs'
+import { renameCrumbEntity } from '@/apps/drive/data/breadcrumbs'
 import { getSortOrder } from '@/apps/drive/data/prefs'
-import { prettyData, setCache } from '@/apps/drive/utils/files'
+import {
+  prettyData,
+  setCache,
+  PRESENTATION_CONTENT_DOCTYPE,
+} from '@/apps/drive/utils/files'
 import { updateURLSlug } from '@/apps/drive/utils/files'
 
 // GETTERS
+export const PAGE_SIZE = 50
+
 export const COMMON_OPTIONS = {
   method: 'GET',
   debounce: 500,
@@ -16,43 +22,20 @@ export const COMMON_OPTIONS = {
   },
 }
 
-export const getTeam = createResource({
-  ...COMMON_OPTIONS,
-  url: 'suite.drive.api.list.files',
-  makeParams: (params) => {
-    return {
-      ...params,
-      personal: 0,
-    }
-  },
-  cache: 'team-folder-contents',
-})
-
 export const getFiles = createResource({
   ...COMMON_OPTIONS,
   url: 'suite.drive.api.list.files',
   makeParams: (params) => {
     return params
   },
-  cache: 'team-folder-contents',
+  cache: 'folder-contents',
 })
 
-export const getTeams = createResource({
-  url: '/api/method/suite.drive.api.permissions.get_teams',
-  params: {
-    details: 1,
-  },
+// The site root and the current user's private folder
+export const rootInfo = createResource({
+  url: 'suite.drive.api.files.get_root_folder',
   method: 'GET',
-  cache: 'teams',
-})
-
-export const getPublicTeams = createResource({
-  url: 'suite.drive.api.permissions.get_public_teams',
-  method: 'GET',
-  cache: 'public-teams',
-  transform: (d) => {
-    return d.reduce((acc, k) => ({ ...acc, [k.name]: k }), {})
-  },
+  cache: 'root-info',
 })
 
 export const getRecents = createResource({
@@ -66,17 +49,6 @@ export const getPersonal = createResource({
   url: 'suite.drive.api.list.files',
   cache: 'personal-folder-contents',
   makeParams: (params) => params,
-})
-
-export const getSiteFiles = createResource({
-  ...COMMON_OPTIONS,
-  url: 'suite.drive.api.list.files',
-  cache: 'site-folder-contents',
-  makeParams: (params) => ({ ...params, entity_name: 'Home' }),
-  transform(data) {
-    data = COMMON_OPTIONS.transform(data)
-    return data.filter((k) => k.name !== 'Home/Attachments')
-  },
 })
 
 export const getAttachments = createResource({
@@ -107,6 +79,9 @@ export const getSlides = createResource({
   transform(data) {
     data = data.map((k) => ({
       ...k,
+      file_name: k.title,
+      content_doctype: PRESENTATION_CONTENT_DOCTYPE,
+      content_docname: k.name,
       mime_type: 'frappe/slides',
       file_type: 'Presentation',
       path: k.name,
@@ -136,6 +111,16 @@ export const getTrash = createResource({
   },
 })
 
+;[
+  getFiles,
+  getPersonal,
+  getRecents,
+  getFavourites,
+  getDocuments,
+  getShared,
+  getTrash,
+].forEach((r) => (r.paginated = true))
+
 // SETTERS
 export const LISTS = [
   getPersonal,
@@ -159,7 +144,7 @@ export const mutate = (entities, func) => {
   )
 }
 
-export const updateMoved = (team, new_parent) => {
+export const updateMoved = (new_parent) => {
   // All details are repetetively provided (check Folder.vue) because if this is run first
   // No further mutation of the resource object can take place
   createResource({
@@ -168,8 +153,6 @@ export const updateMoved = (team, new_parent) => {
     makeParams: (params) => ({
       ...params,
       entity_name: new_parent,
-      personal: -2,
-      team,
     }),
     cache: ['folder', new_parent],
   }).fetch(
@@ -196,8 +179,8 @@ export const toggleFav = createResource({
     const entity_names = data.entities.map(({ name }) => name)
     getFavourites.setData((d) => {
       return data.entities[0].is_favourite
-        ? [...d, ...data.entities]
-        : d.filter(({ name }) => !entity_names.includes(name))
+        ? [...(d ?? []), ...data.entities]
+        : (d ?? []).filter(({ name }) => !entity_names.includes(name))
     })
     mutate(
       data.entities,
@@ -232,10 +215,7 @@ export const clearRecent = createResource({
     }
   },
   onError: () => {
-    toast({
-      message: 'There was an error while clearing recents.',
-      type: 'error',
-    })
+    toast.error('There was an error while clearing recents.')
   },
 })
 
@@ -256,10 +236,7 @@ export const clearTrash = createResource({
     )
   },
   onError(error) {
-    toast({
-      text: JSON.stringify(error),
-      error: true,
-    })
+    toast.error(JSON.stringify(error))
   },
 })
 
@@ -272,10 +249,7 @@ export const rename = createResource({
     }
   },
   onSuccess: () => {
-    updateLastBreadcrumbLabel(
-      rename.params.new_title,
-      rename.params.entity_name,
-    )
+    renameCrumbEntity(rename.params.entity_name, rename.params.new_title)
     if (activeEntity.value?.name === rename.params.entity_name) {
       activeEntity.value.file_name = rename.params.new_title
       activeEntity.value.modified = new Date()
@@ -284,12 +258,7 @@ export const rename = createResource({
     updateURLSlug(rename.params.new_title)
   },
   onError(error) {
-    toast({
-      title: error.messages[error.messages.length - 1],
-      position: 'bottom-right',
-      type: 'error',
-      timeout: 2,
-    })
+    toast.error(error.messages[error.messages.length - 1], { duration: 2000 })
   },
 })
 
@@ -299,29 +268,28 @@ export const createDocument = createResource({
   makeParams: (params) => params,
 })
 
+export const createSheet = createResource({
+  method: 'POST',
+  url: 'suite.sheets.api.create_sheet',
+  makeParams: (params) => params,
+})
+
 
 export const move = createResource({
   url: 'suite.drive.api.files.move',
   onSuccess(data) {
-    toast({
-      title: 'Moved to ' + data.file_name,
-      buttons: [
-        {
-          label: 'Go',
-          onClick: () =>
-            openEntity({
-              name: data.name,
-              is_folder: true,
-            }),
-        },
-      ],
+    toast('Moved to ' + data.file_name, {
+      action: {
+        label: 'Go',
+        onClick: () => openEntity({ name: data.name, is_folder: true }),
+      },
     })
 
     // Update moved-into folder
-    updateMoved(data.team, data.name)
+    updateMoved(data.name)
   },
-  onError() {
-    toast({ title: 'There was an error.', type: 'error' })
+  onError(error) {
+    toast.error(error?.messages?.at(-1) || 'Could not move this file.')
   },
 })
 

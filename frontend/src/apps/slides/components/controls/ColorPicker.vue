@@ -2,7 +2,7 @@
 	<Popover @open="syncCurrentColor">
 		<template #target="{ togglePopover, isOpen }">
 			<div
-				class="me-0.5 size-4 cursor-pointer rounded-sm ring-[1.5px] ring-gray-300 ring-offset-1"
+				class="me-0.5 size-4 cursor-pointer rounded-sm ring-[1.5px] ring-outline-gray-2 ring-offset-1"
 				:style="{ backgroundColor: currentColor }"
 				@click="handleColorPickerClick(togglePopover, isOpen)"
 			></div>
@@ -23,7 +23,7 @@
 					</div>
 					<div class="flex h-8 justify-between py-1">
 						<div
-							class="h-full w-6 rounded-sm ring-1 ring-gray-100 ring-offset-1"
+							class="h-full w-6 rounded-sm ring-1 ring-outline-gray-1 ring-offset-1"
 							:style="{ backgroundColor: currentColor }"
 						></div>
 						<div class="flex flex-col justify-between px-1">
@@ -53,6 +53,7 @@
 					</div>
 					<div class="flex items-center gap-2">
 						<Input
+							:key="revertKey"
 							type="text"
 							placeholder="Set Color"
 							:aria-label="'Hex color input'"
@@ -69,10 +70,10 @@
 						<div class="flex justify-center">
 							<Button
 								@click="handleClipboardCopy"
-								class="flex items-center justify-center rounded text-gray-600 transition-colors hover:bg-gray-100"
+								class="flex items-center justify-center rounded text-ink-gray-6 transition-colors hover:bg-surface-gray-3"
 								title="Copy Color"
 							>
-								<LucideClipboard class="size-3.5 text-gray-700" />
+								<LucideClipboard class="size-3.5 text-ink-gray-7" />
 							</Button>
 						</div>
 
@@ -80,10 +81,10 @@
 							<Button
 								v-if="isSupported"
 								@click="openEyeDropper"
-								class="flex items-center justify-center rounded transition-colors hover:bg-gray-100"
+								class="flex items-center justify-center rounded transition-colors hover:bg-surface-gray-3"
 								title="Pick color from screen"
 							>
-								<EyeDropper class="size-3.5 text-gray-700" />
+								<EyeDropper class="size-3.5 text-ink-gray-7" />
 							</Button>
 						</div>
 					</div>
@@ -120,7 +121,7 @@ const SHADE_RECT_HEIGHT = 130
 
 const sliderClasses = 'h-1/5 rounded cursor-pointer'
 const sliderCursorClasses =
-	'relative size-[0.8rem] rounded shadow border border-gray-200 bg-white hover:scale-[1.1] transition-transform duration-200 ease-in-out'
+	'relative size-[0.8rem] rounded shadow border border-outline-gray-2 bg-white hover:scale-[1.1] transition-transform duration-200 ease-in-out'
 
 const currentColor = defineModel()
 
@@ -128,6 +129,8 @@ const emit = defineEmits(['colordown', 'colorup', 'update:modelValue'])
 
 const currentHue = ref()
 const currentOpacity = ref()
+
+const revertKey = ref(0)
 
 const colorHue = ref(0)
 const colorSaturation = ref()
@@ -164,6 +167,7 @@ const shadeRectStyles = computed(() => {
 })
 
 const handleUpdateHue = (e) => {
+	emit('colordown')
 	updateHue(e)
 	window.addEventListener('mousemove', updateHue)
 	window.addEventListener('mouseup', endUpdateHue)
@@ -209,6 +213,7 @@ const updateHue = (e) => {
 const endUpdateHue = (e) => {
 	emit('colorup')
 	window.removeEventListener('mousemove', updateHue)
+	window.removeEventListener('mouseup', endUpdateHue)
 }
 
 const handleUpdateShade = (e) => {
@@ -241,6 +246,7 @@ const updateShade = (e) => {
 const endUpdateShade = (e) => {
 	emit('colorup')
 	window.removeEventListener('mousemove', updateShade)
+	window.removeEventListener('mouseup', endUpdateShade)
 }
 
 const handleUpdateOpacity = (e) => {
@@ -252,7 +258,6 @@ const handleUpdateOpacity = (e) => {
 
 const updateOpacity = (e) => {
 	e.preventDefault()
-	emit('colordown')
 
 	const clientX = e.clientX - unref(colorRect.left)
 
@@ -265,6 +270,7 @@ const updateOpacity = (e) => {
 const endUpdateOpacity = (e) => {
 	emit('colorup')
 	window.removeEventListener('mousemove', updateOpacity)
+	window.removeEventListener('mouseup', endUpdateOpacity)
 }
 
 const syncCurrentColor = () => {
@@ -294,6 +300,11 @@ watch(sRGBHex, (newColor) => {
 })
 
 const setColor = (newColor) => {
+	if (!tinycolor(newColor).isValid()) {
+		revertKey.value++
+		return
+	}
+	emit('colordown')
 	currentColor.value = newColor
 	const initialHsv = tinycolor(newColor).toHsv()
 	colorHue.value = initialHsv.h
@@ -301,6 +312,7 @@ const setColor = (newColor) => {
 	colorValue.value = initialHsv.v
 	currentOpacity.value = initialHsv.a
 	currentHue.value = tinycolor({ h: colorHue.value, s: 1, l: 0.5 })
+	emit('colorup')
 }
 
 const getDisplayColor = () => {

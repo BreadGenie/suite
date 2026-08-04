@@ -7,7 +7,9 @@
  "engine": "InnoDB",
  "field_order": [
   "user",
+  "user_folder",
   "auto_detect_links",
+  "quota",
   "writer_section",
   "writer_settings"
  ],
@@ -24,6 +26,20 @@
    "fieldname": "auto_detect_links",
    "fieldtype": "Check",
    "label": "Auto Detect Links"
+  },
+  {
+   "fieldname": "user_folder",
+   "fieldtype": "Link",
+   "label": "User Folder",
+   "options": "File",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Storage quota override for this user (in megabytes). 0 falls back to the site default.",
+   "fieldname": "quota",
+   "fieldtype": "Int",
+   "label": "Quota"
   },
   {
    "fieldname": "writer_section",
@@ -66,7 +82,7 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Drive User",
+   "role": "Suite User",
    "share": 1,
    "write": 1
   }

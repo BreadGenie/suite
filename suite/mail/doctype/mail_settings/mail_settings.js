@@ -78,7 +78,7 @@ frappe.ui.form.on('Mail Settings', {
 			),
 			() => {
 				frappe.call({
-					method: 'suite.mail.storage.destroy_data_store',
+					method: 'suite.mail.store.destroy_data_store',
 					freeze: true,
 					freeze_message: __('Destroying Data Store…'),
 					callback: (r) => {
@@ -96,7 +96,7 @@ frappe.ui.form.on('Mail Settings', {
 			),
 			() => {
 				frappe.call({
-					method: 'suite.mail.storage.destroy_blob_store',
+					method: 'suite.mail.store.destroy_blob_store',
 					freeze: true,
 					freeze_message: __('Destroying Blob Store…'),
 					callback: (r) => {
@@ -114,7 +114,7 @@ frappe.ui.form.on('Mail Settings', {
 			),
 			() => {
 				frappe.call({
-					method: 'suite.search.destroy_search_index',
+					method: 'suite.mail.store.destroy_search_index',
 					freeze: true,
 					freeze_message: __('Destroying Search Index…'),
 					callback: (r) => {
@@ -132,7 +132,7 @@ frappe.ui.form.on('Mail Settings', {
 			),
 			() => {
 				frappe.call({
-					method: 'suite.mail.search.rebuild_all_email_address_indexes',
+					method: 'suite.mail.store.rebuild_all_email_address_indexes',
 					freeze: true,
 					freeze_message: __('Queuing rebuild…'),
 					callback: (r) => {

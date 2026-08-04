@@ -60,6 +60,8 @@ import { Play, Pause } from 'lucide-vue-next'
 
 import { activeElementIds } from '@/apps/slides/stores/element'
 import { getAttachmentUrl } from '@/apps/slides/utils/mediaUploads'
+import { useBoxShadow } from '@/apps/slides/composables/useShadow'
+import { defaultBorderColor } from '@/apps/slides/utils/constants'
 
 const props = defineProps({
 	mode: {
@@ -101,15 +103,18 @@ const progressBarClasses = computed(() => {
 
 const isPlaying = ref(false)
 
+const boxShadow = useBoxShadow(element)
+
 const videoStyles = computed(() => {
 	return {
 		width: '100%',
-		opacity: element.value.opacity / 100,
+		opacity: (element.value.opacity ?? 100) / 100,
 		borderRadius: `${element.value.borderRadius}px`,
 		borderStyle: element.value.borderStyle || 'none',
-		borderColor: element.value.borderColor,
+		borderColor: element.value.borderColor || defaultBorderColor,
 		borderWidth: `${element.value.borderWidth}px`,
-		boxShadow: `${element.value.shadowOffsetX}px ${element.value.shadowOffsetY}px ${element.value.shadowSpread}px ${element.value.shadowColor}`,
+		boxShadow: boxShadow.value,
+		transform: `scale(${element.value.invertX || 1}, ${element.value.invertY || 1})`,
 		...props.transitionStyles,
 	}
 })

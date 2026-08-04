@@ -14,14 +14,13 @@
         <!-- General section -->
         <div class="border-b pb-5 mb-5">
           <div class="mb-2 text-ink-gray-5 text-sm">General access</div>
-          <div class="flex justify-between gap-2">
-            <div class="flex flex-col gap-2">
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex flex-col items-start gap-2">
               <Select v-model="generalAccessLevel" variant="outline" :options="levelOptions" @update:model-value="
                 (val) => updateGeneralAccess(val, generalPerms)
               " />
-              <TeamSelector v-if="generalAccessLevel == 'team'" v-model="chosenTeam" />
             </div>
-            <AccessSelect v-if="generalAccessLevel !== 'restricted'" v-model="generalPerms" variant="ghost" :options="accessOptions"
+            <AccessSelect v-if="generalAccessLevel !== 'restricted'" v-model="generalPerms" variant="outline" :options="accessOptions"
               @update:model-value="
                 (val) => updateGeneralAccess(generalAccessLevel, val)
               " />
@@ -31,25 +30,33 @@
         <div class="text-ink-gray-5 text-sm mb-2">Members</div>
         <div class="flex items-start gap-2 rounded bg-surface-white p-1.5 ring-1 ring-outline-gray-2 mb-4">
           <TagInput autofocus v-model="usersToAdd" v-model:options="filteredUsers" class="flex-1 min-w-0" :render-icon="(k) =>
-            h(Avatar, {
-              image: k.user_image,
-              label: k.value,
-              size: 'xs',
-            })
-            " placeholder="Add people" />
+            k.is_group
+              ? h(LucideUsers, { class: 'size-3.5 text-ink-gray-6' })
+              : h(Avatar, {
+                image: k.user_image,
+                label: k.value,
+                size: 'xs',
+              })
+            " placeholder="Add people or groups" />
           <AccessSelect v-if="usersToAdd.length" v-model="accessToAdd" variant="ghost" :options="accessOptions" />
         </div>
 
         <div v-if="usersWithAccess.data"
           class="flex flex-col gap-3 overflow-y-auto text-base max-h-64 py-1 overflow-auto">
           <div v-for="(user, idx) in usersWithAccess.data" :key="user.name" class="flex items-center gap-3 pr-1">
-            <Avatar size="xl" :label="user.user || user.email" :image="user.user_image" />
+            <div v-if="user.is_group"
+              class="size-7 shrink-0 rounded-full bg-surface-gray-3 flex items-center justify-center">
+              <LucideUsers class="size-4 text-ink-gray-7" />
+            </div>
+            <Avatar v-else size="xl" :label="user.user || user.email" :image="user.user_image" />
 
             <div class="flex items-start flex-col gap-1">
               <span class="text-base-medium text-ink-gray-9">{{
-                user.full_name || user.user || user.email
+                user.is_group ? groupName(user.user) : user.full_name || user.user || user.email
                 }}</span>
-              <span v-if="user.full_name && user.full_name !== (user.user || user.email)"
+              <span v-if="user.is_group" class="text-ink-gray-7 text-sm">{{
+                peopleLabel(groupCount(user.user)) }}</span>
+              <span v-else-if="user.full_name && user.full_name !== (user.user || user.email)"
                 class="text-ink-gray-7 text-sm">{{ user.user || user.email }}</span>
             </div>
             <div class="ml-auto flex w-28 shrink-0 items-center justify-end">
@@ -101,8 +108,9 @@ import {
   Button,
 } from 'frappe-ui'
 import AccessSelect from './AccessSelect.vue'
-import TeamSelector from './TeamSelector.vue'
 import TagInput from './TagInput/TagInput.vue'
+import { getUserGroups } from '@/apps/drive/resources/permissions'
+import LucideUsers from '~icons/lucide/users'
 import { getFileLink, dynamicList } from '../js/utils'
 
 import { usersWithAccess, updateAccess, allUsers } from '../js/resources'
@@ -124,7 +132,8 @@ const props = defineProps({
 const emit = defineEmits(['success'])
 
 props.usersWithAccess.fetch({ entity: props.file.name })
-props.users.fetch({ team: 'all' })
+props.users.fetch()
+getUserGroups.fetch()
 
 const levelOptions = [
   {
@@ -133,8 +142,8 @@ const levelOptions = [
     icon: 'lucide-lock',
   },
   {
-    label: 'Accessible to a team',
-    value: 'team',
+    label: 'Accessible to all site users',
+    value: 'site',
     icon: 'lucide-building-2',
   },
   { label: 'Accessible to all', value: 'public', icon: 'lucide-globe-2' },
@@ -168,10 +177,10 @@ const accessOptions = computed(() =>
   })),
 )
 
-// General access
+// General access: '' rows are public (anyone with the link), $GENERAL rows
+// cover all logged-in site users; restricted writes explicit deny rows.
 const generalAccessLevel = ref(levelOptions[0].value)
 const generalPerms = ref('reader')
-const chosenTeam = ref()
 
 let generalParams = {}
 const getGeneralAccess = useCall({
@@ -179,11 +188,10 @@ const getGeneralAccess = useCall({
   immediate: false,
   onSuccess: (data) => {
     if (!data || !data.read) {
-      if (generalParams.user === 'Guest') fetchGeneralAccess({ team: 1 })
+      if (generalParams.user === 'Guest') fetchGeneralAccess({ user: '$GENERAL' })
       return
     }
-    generalAccessLevel.value = generalParams.team ? 'team' : 'public'
-    chosenTeam.value = data.team
+    generalAccessLevel.value = generalParams.user === 'Guest' ? 'public' : 'site'
     generalPerms.value = data.write
       ? 'editor'
       : data.upload
@@ -196,24 +204,17 @@ const fetchGeneralAccess = (params) => {
   getGeneralAccess.submit({ entity: props.file.name, ...params })
 }
 fetchGeneralAccess({ user: 'Guest' })
-let selectingTeam = false
 const updateGeneralAccess = (level, perms) => {
-  if (level === 'team' && !chosenTeam.value) {
-    selectingTeam = true
-    return
-  }
   if (level !== 'restricted') {
     props.updateAccess.submit({
       entity_name: props.file.name,
-      user: level === 'public' ? '' : chosenTeam.value,
-      team: level === 'team',
+      user: level === 'public' ? '' : '$GENERAL',
       read: 1,
       comment: 1,
       share: 1,
       write: perms === 'editor',
       upload: perms === 'editor' || perms === 'upload',
     })
-    selectingTeam = false
   } else {
     props.updateAccess.submit({
       entity_name: props.file.name,
@@ -224,24 +225,30 @@ const updateGeneralAccess = (level, perms) => {
   emit('success')
 }
 
-watch(
-  chosenTeam,
-  (now, prev) =>
-    (prev || selectingTeam) &&
-    updateGeneralAccess(generalAccessLevel.value, generalPerms.value),
-)
-
 // Invite specific users
 const usersToAdd = ref([])
 const accessToAdd = ref('reader')
 const filteredUsers = ref([])
+const peopleLabel = (n) => `${n} ${n === 1 ? 'person' : 'people'}`
+const groupName = (v) => (v || '').replace(/^\$GROUP:/, '')
+const groupCount = (v) =>
+  getUserGroups.data?.find((g) => g.value === v)?.member_count ?? 0
+
 watch(
-  [() => props.users.data, () => props.usersWithAccess.data],
-  ([users, existingUsers]) => {
+  [
+    () => props.users.data,
+    () => props.usersWithAccess.data,
+    () => getUserGroups.data,
+  ],
+  ([users, existingUsers, groups]) => {
     if (!existingUsers || !users) return []
-    filteredUsers.value = users.filter(
-      (k) => !existingUsers.find(({ user }) => user === k.name),
-    )
+    const taken = (v) => existingUsers.find(({ user }) => user === v)
+    filteredUsers.value = [
+      ...(groups || [])
+        .filter((g) => !taken(g.value))
+        .map((g) => ({ ...g, description: peopleLabel(g.member_count) })),
+      ...users.filter((k) => !taken(k.name)),
+    ]
   },
   // deep: removals/invites splice/push `usersWithAccess.data` in place
   { immediate: true, deep: true },
@@ -258,9 +265,10 @@ const inviteUsers = () => {
     props.updateAccess.submit(r)
     const userObj = filteredUsers.value.find((k) => k.value === user)
     // For new records
-    if (!userObj.email) userObj.email = userObj.label
+    if (!userObj.is_group && !userObj.email) userObj.email = userObj.label
     props.usersWithAccess.data.push({
       ...userObj,
+      user,
       ...access,
     })
   }

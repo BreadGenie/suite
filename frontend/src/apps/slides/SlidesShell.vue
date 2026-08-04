@@ -13,6 +13,7 @@ import { h, onMounted, onUnmounted, provide, ref } from 'vue'
 import { toast, FrappeUIProvider } from 'frappe-ui'
 import { Wifi, WifiOff } from 'lucide-vue-next'
 import { saveCurrentState } from '@/apps/slides/stores/saving'
+import { setupTheme } from '@/utils/setupTheme'
 
 const isOnline = ref(navigator?.onLine ?? true)
 
@@ -43,12 +44,50 @@ onMounted(() => {
   window.addEventListener('online', handleOnline)
   window.addEventListener('offline', handleOffline)
   registerServiceWorker()
+  setupTheme()
+  document.documentElement.style.overscrollBehavior = 'none'
 })
 
 onUnmounted(() => {
   window.removeEventListener('online', handleOnline)
   window.removeEventListener('offline', handleOffline)
+  document.documentElement.style.overscrollBehavior = ''
 })
 
 provide('isOnline', isOnline)
 </script>
+
+<style>
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.faded-scroll {
+  --fade-length: 12px;
+  --fade-mask: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0) 0,
+    rgb(0 0 0 / 0.08) calc(var(--fade-length) * 0.25),
+    rgb(0 0 0 / 0.29) calc(var(--fade-length) * 0.5),
+    rgb(0 0 0 / 0.61) calc(var(--fade-length) * 0.7),
+    rgb(0 0 0 / 0.89) calc(var(--fade-length) * 0.88),
+    rgb(0 0 0 / 1) var(--fade-length),
+    rgb(0 0 0 / 1) calc(100% - var(--fade-length)),
+    rgb(0 0 0 / 0.89) calc(100% - var(--fade-length) * 0.88),
+    rgb(0 0 0 / 0.61) calc(100% - var(--fade-length) * 0.7),
+    rgb(0 0 0 / 0.29) calc(100% - var(--fade-length) * 0.5),
+    rgb(0 0 0 / 0.08) calc(100% - var(--fade-length) * 0.25),
+    rgb(0 0 0 / 0) 100%
+  );
+  -webkit-mask-image: var(--fade-mask);
+  mask-image: var(--fade-mask);
+  scrollbar-width: none;
+}
+.faded-scroll::-webkit-scrollbar {
+  display: none;
+}
+</style>

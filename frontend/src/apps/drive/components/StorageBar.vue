@@ -23,11 +23,9 @@
         }"
       />
     </div>
-    <span
-      class="text-xs text-ink-gray-5 line-clamp-1 ml-2"
-      :class="isExpanded ? 'opacity-100' : 'opacity-0'"
-      >{{ formattedString }}</span
-    >
+    <span v-if="isExpanded" class="text-xs text-ink-gray-5 line-clamp-1 ml-2">
+      {{ formattedString }}
+    </span>
   </div>
 </template>
 
@@ -36,7 +34,6 @@ import { computed, inject, watch } from 'vue'
 import SidebarItem from './SidebarItem.vue'
 import { formatSize, base2BlockSize } from '@/apps/drive/utils/format'
 import { storageBar } from '@/apps/drive/resources/files'
-import { useRoute } from 'vue-router'
 import LucideCloud from '~icons/lucide/cloud'
 
 const emitter = inject('emitter')
@@ -58,17 +55,5 @@ const calculatePercent = computed(() => {
     maximumFractionDigits: 1,
   }).format(num / 100)
 })
-const route = useRoute()
-const team = computed(() => route.params.team)
-watch(
-  team,
-  (val) =>
-    storageBar.fetch({
-      team: val || '',
-      entity_name: route.params.entityName || '',
-    }),
-  {
-    immediate: true,
-  }
-)
+storageBar.fetch()
 </script>

@@ -54,12 +54,12 @@ import { Download } from 'lucide-vue-next'
 import { Badge, Breadcrumbs, Dropdown, createResource } from 'frappe-ui'
 
 import { formatBytes, getTheme } from '@/apps/mail/utils'
+import { formatSystemDateTime } from '@/apps/mail/utils/datetime'
 import CopyCode from '@/apps/mail/components/CopyCode.vue'
 
 const { id } = defineProps<{ id: string }>()
 
 const user = inject('$user')
-const dayjs = inject('$dayjs')
 
 const router = useRouter()
 
@@ -90,7 +90,7 @@ const operationDetails = computed(() => {
 		mailExchange.data?.operation === 'Import'
 			? mailExchange.data?.import_format
 			: mailExchange.data?.export_format
-	return `${format.toUpperCase()} · ${dayjs(mailExchange.data?.started_at).format('MMM D, YYYY [at] h:mm A')}`
+	return `${format.toUpperCase()} · ${formatSystemDateTime(mailExchange.data?.started_at, 'MMM D, YYYY [at] h:mm A')}`
 })
 
 const attachment = createResource({

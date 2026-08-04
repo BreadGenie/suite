@@ -139,10 +139,10 @@ function removeTag(tag: string) {
           <template v-else>
             {{ item.label }}
             <span
-              v-if="item.value && item.value !== item.label"
+              v-if="item.description || (item.value && item.value !== item.label)"
               class="text-ink-gray-5"
             >
-              ({{ item.value }})
+              ({{ item.description || item.value }})
             </span>
           </template>
         </template>

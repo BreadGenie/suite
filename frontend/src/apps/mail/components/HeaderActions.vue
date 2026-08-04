@@ -1,5 +1,8 @@
 <template>
-	<div class="flex space-x-2">
+	<!-- On mobile the tab bar owns these actions (Search tab, Compose FAB, Profile
+	     tab); the header is CSS-hidden there but stays mounted so these modals
+	     remain reachable via v-model from views. -->
+	<div v-if="!isMobile" class="flex space-x-2">
 		<Button
 			icon="search"
 			:tooltip="__('Search ({0}+K)', [modifier])"
@@ -26,8 +29,11 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Button } from 'frappe-ui'
 
 import { isMac } from '@/apps/mail/utils'
+import { useScreenSize } from '@/apps/mail/utils/composables'
 import SearchModal from '@/apps/mail/components/Modals/SearchModal.vue'
 import SendMail from '@/apps/mail/components/SendMail.vue'
+
+const { isMobile } = useScreenSize()
 
 const emit = defineEmits(['reloadMails'])
 

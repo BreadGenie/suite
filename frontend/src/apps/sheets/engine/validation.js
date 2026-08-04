@@ -6,6 +6,7 @@
 // Pure state, no DOM dependency.
 
 import { parseCellId, colLabel } from '../utils/cells.js'
+import { remapCellKeys } from './ref-remap.js'
 import { deepClone } from '../utils/deep-clone.js'
 
 function _checkNumOp(n, op, min, max) {
@@ -151,6 +152,14 @@ export function createValidationEngine() {
     }
   }
 
+  function remapCols(mapCol, sheet = 'Sheet1') {
+    if (store[sheet]) store[sheet] = remapCellKeys(store[sheet], mapCol, null)
+  }
+
+  function remapRows(mapRow, sheet = 'Sheet1') {
+    if (store[sheet]) store[sheet] = remapCellKeys(store[sheet], null, mapRow)
+  }
+
   function renameSheet(oldName, newName) {
     if (!store[oldName] || store[newName] || oldName === newName) return
     store[newName] = store[oldName]
@@ -174,6 +183,7 @@ export function createValidationEngine() {
   return {
     get, set, clear, getAll, validate,
     insertRow, deleteRow, insertCol, deleteCol,
+    remapCols, remapRows,
     renameSheet, duplicateSheet, deleteSheet,
     snapshot, restore,
   }

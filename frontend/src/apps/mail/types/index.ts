@@ -38,7 +38,8 @@ export interface ScreeningSender {
 	from_name: string
 	subject: string
 	preview: string
-	received_at: number
+	// UTC "...Z" wire timestamp, not an epoch.
+	received_at: string
 	count: number
 	unread: number
 }
@@ -52,13 +53,17 @@ export interface User {
 	username: string | null
 	user_image: string | null
 	api_key: string | null
+	// The zone every timestamp is shown in and typed in; see utils/datetime.ts.
+	time_zone: string
+	// The site's zone — what plain DB datetime fields are stored in; see formatSystemDateTime.
+	system_time_zone: string
 	user_settings?: string
 	color_scheme?: COLOR_SCHEME
 	group_messages_by?: 'None' | 'Day' | 'Month'
 	show_reading_pane?: 0 | 1
 
 	enabled: boolean
-	is_mail_admin: boolean
+	is_suite_admin: boolean
 	is_system_manager: boolean
 	is_jmap_configured: boolean
 
@@ -84,6 +89,14 @@ export interface Recipient {
 	type: 'To' | 'Cc' | 'Bcc'
 	email: string
 	display_name: string | null
+}
+
+// Everyone who has written in a thread, in the order they first wrote. Derived from the thread's own
+// messages rather than served with it (see utils/participants), `is_self` included.
+export interface ThreadParticipant {
+	name: string
+	email: string
+	is_self: boolean
 }
 
 export interface Mailbox {
@@ -213,4 +226,13 @@ export interface NotificationPayload {
 		notification_icon?: string
 		click_action?: string
 	}
+}
+
+export interface QuotaUsage {
+	total: number
+	used: number
+	available: number
+	used_percentage: number
+	available_percentage: number
+	unlimited: boolean
 }

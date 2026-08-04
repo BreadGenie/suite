@@ -2,18 +2,23 @@
 	<component
 		:is="to ? RouterLink : 'div'"
 		:to="to"
-		class="sm:hover:bg-surface-gray-1 group flex cursor-default select-none space-x-2.5 border-b px-3.5 py-2.5 sm:space-x-5 sm:px-5"
+		class="sm:hover:bg-surface-gray-1 group flex cursor-default select-none space-x-2.5 border-b px-3.5 py-2.5 [-webkit-touch-callout:none] sm:space-x-5 sm:px-5"
 		:class="{ '!bg-surface-blue-1': isSelected || isTouching, '!py-2': isFullWidth }"
 		@mouseenter="isHovered = true"
 		@mouseleave="isHovered = false"
 		@touchstart="onTouchStart"
 		@touchend="clearTouchTimer"
 		@touchcancel="clearTouchTimer"
+		@contextmenu="onContextMenu"
+		@click.capture="onRowClick"
 	>
 		<!-- Selection column: checkbox on desktop, sender avatar on mobile or where the list has no
 		     bulk selection. Long-pressing the row anywhere selects it on touch. -->
+		<!-- max-sm:justify-start pins the avatar/checkbox to the row's 14px padding
+		     axis; centered, the 40px column left them 2-4px "inside" it. -->
 		<div
-			class="flex shrink-0 items-center justify-center max-sm:w-10"
+			v-if="showLeading"
+			class="flex shrink-0 items-center justify-center max-sm:w-10 max-sm:justify-start"
 			:class="isFullWidth ? 'h-8' : 'h-10 sm:-mt-1.5'"
 		>
 			<div
@@ -25,22 +30,31 @@
 			</div>
 			<div
 				v-else-if="isSelected"
-				class="bg-surface-gray-10 hitbox flex h-8 w-8 shrink-0 rounded-full"
+				class="bg-surface-gray-10 hitbox flex h-8 w-8 shrink-0 rounded-full max-sm:h-10 max-sm:w-10"
 				@click.stop.prevent="emit('setSelected', false)"
 			>
-				<Check class="text-ink-base m-auto h-5 w-5 stroke-[3px]" />
+				<Check class="text-ink-base m-auto h-5 w-5 stroke-[4px]" />
 			</div>
 			<Avatar
-				v-show="!isSelected && (isMobile || !selectable)"
+				v-show="showAvatar"
 				:label="avatarLabel"
 				:image="avatarImage"
 				size="xl"
-				class="hitbox"
+				class="hitbox max-sm:!h-10 max-sm:!w-10"
 				@click.stop.prevent="emit('setSelected', true)"
 			/>
 		</div>
 
-		<div class="grow truncate" :class="isFullWidth ? 'flex items-center space-x-3' : 'space-y-1'">
+		<!-- The leading column set the row's height in the wide layout; without it (hideAvatar)
+		     rows shrank to their text and no longer lined up with the day headers. Hold that
+		     height here so the rhythm survives the column going away. -->
+		<div
+			class="grow truncate"
+			:class="[
+				isFullWidth ? 'flex items-center space-x-3' : 'space-y-1',
+				{ 'min-h-8': isFullWidth && !showLeading },
+			]"
+		>
 			<div
 				v-if="showSender"
 				class="flex items-center"
@@ -55,6 +69,16 @@
 						<slot name="sender" />
 					</h3>
 					<slot name="badges" />
+					<!-- The account keeps the sender company in both layouts. It stays affordable
+					     in the sender column because only the odd accounts out are labelled, and
+					     by their short names. -->
+					<div
+						v-if="accountLabel"
+						class="text-ink-blue-6 flex shrink-0 items-center gap-1 text-xs"
+					>
+						<span aria-hidden="true">·</span>
+						<span>{{ __('in {0}', [accountLabel]) }}</span>
+					</div>
 				</div>
 				<MailDate v-if="!isFullWidth" :datetime :in-list="true" />
 			</div>
@@ -128,6 +152,9 @@ const {
 	datetime,
 	subjectItalic = false,
 	previewItalic = false,
+	selectionMode = false,
+	hideAvatar = false,
+	accountLabel,
 } = defineProps<{
 	// Renders the row as a link when set, and as a plain div when not — a thread opens, a stack expands.
 	to?: RouteLocationRaw
@@ -144,6 +171,14 @@ const {
 	datetime: string
 	subjectItalic?: boolean
 	previewItalic?: boolean
+	// Drops the sender avatar, and with it the whole leading column — the merged list is narrow
+	// beside the pane, and the reclaimed width goes to sender and subject. Mobile keeps it.
+	hideAvatar?: boolean
+	// Mobile selection mode (a selection exists): rows swap avatars for checkboxes,
+	// hide trailing actions, and a tap toggles selection instead of navigating.
+	selectionMode?: boolean
+	// Which account received the mail (merged lists), shown beside the sender.
+	accountLabel?: string
 }>()
 
 const emit = defineEmits<{ setSelected: [selected: boolean] }>()
@@ -151,7 +186,24 @@ const emit = defineEmits<{ setSelected: [selected: boolean] }>()
 const user = inject('$user') as UserResource
 const { isMobile } = useScreenSize()
 
+const showAvatar = computed(() => !isSelected && (isMobile.value || !selectable) && !hideAvatar)
+// With no checkbox, no check circle and no avatar there is nothing left to reserve space for.
+const showLeading = computed(
+	() => (!isMobile.value && selectable) || isSelected || showAvatar.value,
+)
+
 const isHovered = ref(false)
+
+// In selection mode a row tap toggles membership; capture-phase so the
+// RouterLink navigation never fires. Real buttons inside the row (the trailing
+// star) are exempt and keep their own action.
+const onRowClick = (e: MouseEvent) => {
+	if (!selectionMode) return
+	if ((e.target as HTMLElement).closest('button')) return
+	e.preventDefault()
+	e.stopPropagation()
+	emit('setSelected', !isSelected)
+}
 
 // With the reading pane hidden the list has the window to itself, so a row lays out as one wide line
 // instead of a stacked block.
@@ -193,6 +245,14 @@ const clearTouchTimer = () => {
 		clearTimeout(touchTimer)
 		touchTimer = null
 	}
+}
+
+// The row is an anchor, so a long press also summons the browser's link menu on top of the
+// selection the row already handles. Suppress it for touch presses only — a desktop right-click
+// keeps its menu. (iOS shows a callout instead of firing contextmenu; -webkit-touch-callout on
+// the row covers that.)
+const onContextMenu = (e: Event) => {
+	if (isTouching.value) e.preventDefault()
 }
 
 const onTouchMove = (e: TouchEvent) => {

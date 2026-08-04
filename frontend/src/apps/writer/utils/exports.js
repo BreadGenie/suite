@@ -11,7 +11,7 @@ export const exportMedia = async (editor) => {
     const ext = await getExtension.fetch({ entity_name: urls[i].name })
     if (ext) urls[i].title += '.' + ext
   }
-  entitiesDownload(null, urls)
+  entitiesDownload(urls)
 }
 
 export const exportBlog = async () => {

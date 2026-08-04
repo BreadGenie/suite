@@ -15,6 +15,7 @@ import {
 } from '@/apps/slides/stores/element'
 import { getElementDiv } from '@/apps/slides/stores/elementRegistry'
 import { useDrawRect } from '@/apps/slides/composables/useDrawRect'
+import { selectionColor } from '@/apps/slides/utils/constants'
 
 const slideDiv = inject('slideDiv')
 const slideContainerDiv = inject('slideContainerDiv')
@@ -27,8 +28,7 @@ const { isDrawing, drawRect, startDrawing, cancelDrawing } = useDrawRect()
 
 const marqueeStyles = computed(() => ({
 	position: 'absolute',
-	backgroundColor: '#70b6f025',
-	outline: `#70B6F092 solid ${0.1 / slideBounds.scale}px`,
+	backgroundColor: `${selectionColor}25`,
 	width: `${drawRect.width}px`,
 	height: `${drawRect.height}px`,
 	left: `${drawRect.left}px`,

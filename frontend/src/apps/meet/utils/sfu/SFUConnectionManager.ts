@@ -64,6 +64,7 @@ export interface SFUEventHandlers {
 			| "failed",
 		detail?: string,
 	) => void;
+	onRecoveryExhausted?: () => void;
 }
 
 interface ConnectionManagerOptions {
@@ -92,6 +93,8 @@ export class SFUConnectionManager {
 	private lastJoinUserData: unknown = null;
 	private lastJoinMediaState: Record<string, unknown> = {};
 	private activeRejoin: Promise<void> | null = null;
+	private activeReceiveReset: Promise<void> | null = null;
+	private lifecycleGeneration = 0;
 
 	constructor(options: ConnectionManagerOptions) {
 		this.sfuClient = options.sfuClient;
@@ -328,15 +331,31 @@ export class SFUConnectionManager {
 	}
 
 	async resetReceiveSide(): Promise<void> {
+		if (this.activeReceiveReset) return this.activeReceiveReset;
+
+		const generation = this.lifecycleGeneration;
+		this.activeReceiveReset = this.performReceiveReset(generation).finally(() => {
+			this.activeReceiveReset = null;
+		});
+		return this.activeReceiveReset;
+	}
+
+	private async performReceiveReset(generation: number): Promise<void> {
+		const pendingSubscriptions = this.mediaManager.cancelPendingSubscriptions();
 		this.transportManager.closeReceiveTransport();
 		this.mediaManager.consumerManager.clear();
 		this.mediaManager.processedConsumers.clear();
 		this.mediaManager.isScreenShareActive = false;
+		await pendingSubscriptions;
+		if (generation !== this.lifecycleGeneration) return;
 		if (!(await this.waitForE2EEContextIfRequired())) {
 			return;
 		}
-		await this.createReceiveTransport();
+		if (generation !== this.lifecycleGeneration) return;
+		if (!(await this.createReceiveTransport())) return;
+		if (generation !== this.lifecycleGeneration) return;
 		await this.requestExistingProducers();
+		if (generation !== this.lifecycleGeneration) return;
 		await this.flushBufferedProducers();
 	}
 
@@ -366,29 +385,41 @@ export class SFUConnectionManager {
 			throw new Error("Cannot rejoin before joining a meeting");
 		}
 		this.recoveryManager.reset();
+		const generation = this.lifecycleGeneration;
 
 		const rejoin = (async () => {
 			this.reportRecoveryState("rejoining", "signaling reconnected");
+			const pendingSubscriptions =
+				this.mediaManager.cancelPendingSubscriptions();
 			this.transportManager.closeReceiveTransport();
 			this.mediaManager.consumerManager.clear();
 			this.mediaManager.processedConsumers.clear();
 			this.mediaManager.isScreenShareActive = false;
+			await pendingSubscriptions;
+			if (generation !== this.lifecycleGeneration) return;
 
 			await this.sfuClient.joinRoom(
 				this.meetingId as string,
 				this.lastJoinUserData,
 				this.getCurrentRejoinMediaState(),
 			);
+			if (generation !== this.lifecycleGeneration) return;
 			if (!(await this.waitForE2EEContextIfRequired())) {
 				throw new Error("E2EE context is not ready after signaling reconnect");
 			}
+			if (generation !== this.lifecycleGeneration) return;
 
 			await this.transportManager.initializeDevice();
+			if (generation !== this.lifecycleGeneration) return;
 			if (!(await this.createReceiveTransport())) {
 				throw new Error("Failed to recreate receive transport after reconnect");
 			}
+			if (generation !== this.lifecycleGeneration) return;
 			await this.mediaManager.rebuildSendSide();
+			if (generation !== this.lifecycleGeneration) return;
 			await this.setupExistingParticipants();
+			if (generation !== this.lifecycleGeneration) return;
+			this.recoveryManager.setupTransportEventHandlers();
 			this.reportRecoveryState("healthy", "session rebuilt");
 		})()
 			.catch((error) => {
@@ -496,6 +527,9 @@ export class SFUConnectionManager {
 		});
 
 		this.mediaManager.setEventHandlers({
+			onRecoveryExhausted: () => {
+				this.eventHandlers.onRecoveryExhausted?.();
+			},
 			onScreenShareStarted: (data: unknown) => {
 				if (this.eventHandlers.onScreenShareStarted) {
 					this.eventHandlers.onScreenShareStarted(data);
@@ -511,6 +545,7 @@ export class SFUConnectionManager {
 
 	private setupSFUEventHandlers(): void {
 		this.sfuClient.on("reconnect_attempt", () => {
+			this.recoveryManager.reset();
 			this.reportRecoveryState("reconnecting", "signaling reconnect attempt");
 		});
 
@@ -772,6 +807,7 @@ export class SFUConnectionManager {
 
 	async disconnect(): Promise<void> {
 		try {
+			this.lifecycleGeneration++;
 			this.recoveryManager.reset();
 			this.mediaManager.cleanup();
 			this.transportManager?.cleanup?.();
@@ -785,6 +821,7 @@ export class SFUConnectionManager {
 	}
 
 	reset(): void {
+		this.lifecycleGeneration++;
 		this.meetingId = null;
 		this.currentUser = { value: null };
 		this.eventHandlers = {};

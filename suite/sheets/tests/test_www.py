@@ -33,9 +33,7 @@ class AssetManifestResolution(unittest.TestCase):
         # structure under tmpdir.
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.manifest_dir = os.path.join(
-            self.tmp.name, "public", "sheets", ".vite"
-        )
+        self.manifest_dir = os.path.join(self.tmp.name, "public", "sheets", ".vite")
         os.makedirs(self.manifest_dir, exist_ok=True)
         self.manifest_path = os.path.join(self.manifest_dir, "manifest.json")
 
@@ -57,12 +55,14 @@ class AssetManifestResolution(unittest.TestCase):
             json.dump(payload, fh)
 
     def test_resolves_hashed_paths_from_manifest(self):
-        self._write_manifest({
-            "index.html": {
-                "file": "index.ABCDEF.js",
-                "css":  ["index.GHIJKL.css"],
-            },
-        })
+        self._write_manifest(
+            {
+                "index.html": {
+                    "file": "index.ABCDEF.js",
+                    "css": ["index.GHIJKL.css"],
+                },
+            }
+        )
         from suite.sheets.www import sheets as www
 
         paths = www._asset_paths()
@@ -90,21 +90,25 @@ class AssetManifestResolution(unittest.TestCase):
     def test_caches_within_a_single_mtime(self):
         # First call populates the cache; second call should return the
         # cached object without re-reading. We assert via the cache flag.
-        self._write_manifest({
-            "index.html": {"file": "index.A.js", "css": ["index.A.css"]},
-        })
+        self._write_manifest(
+            {
+                "index.html": {"file": "index.A.js", "css": ["index.A.css"]},
+            }
+        )
         from suite.sheets.www import sheets as www
 
-        first  = www._read_asset_manifest()
+        first = www._read_asset_manifest()
         second = www._read_asset_manifest()
         self.assertIs(first, second)  # exact object identity → cache hit
 
     def test_invalidates_cache_when_manifest_mtime_changes(self):
         # Simulates `vite build` overwriting the manifest. The cache
         # should pick up the new content without a worker restart.
-        self._write_manifest({
-            "index.html": {"file": "index.OLD.js", "css": []},
-        })
+        self._write_manifest(
+            {
+                "index.html": {"file": "index.OLD.js", "css": []},
+            }
+        )
         from suite.sheets.www import sheets as www
 
         first = www._read_asset_manifest()
@@ -113,9 +117,11 @@ class AssetManifestResolution(unittest.TestCase):
         # Bump mtime explicitly — writing a file on a fast disk can land
         # on the same second as the previous write and silently fool the
         # cache check.
-        self._write_manifest({
-            "index.html": {"file": "index.NEW.js", "css": []},
-        })
+        self._write_manifest(
+            {
+                "index.html": {"file": "index.NEW.js", "css": []},
+            }
+        )
         new_mtime = os.path.getmtime(self.manifest_path) + 5
         os.utime(self.manifest_path, (new_mtime, new_mtime))
 
@@ -133,17 +139,15 @@ class BootContext(unittest.TestCase):
         self.frappe = patcher.start()
         self.addCleanup(patcher.stop)
         self.frappe.session.user = "alice@example.com"
-        self.frappe.session.sid  = "sid-xyz"
-        self.frappe.db.get_value.side_effect = (
-            lambda doctype, name, field: {
-                "full_name":  "Alice",
-                "user_image": "",
-                "enabled":    1,
-            }.get(field)
-        )
+        self.frappe.session.sid = "sid-xyz"
+        self.frappe.db.get_value.side_effect = lambda doctype, name, field: {
+            "full_name": "Alice",
+            "user_image": "",
+            "enabled": 1,
+        }.get(field)
         self.frappe.local.site = "test.localhost"
         self.frappe.conf.get.side_effect = lambda key, default=None: {
-            "collab_v2":     0,
+            "collab_v2": 0,
             "collab_ws_url": None,
             "socketio_port": 9001,
         }.get(key, default)
@@ -152,6 +156,7 @@ class BootContext(unittest.TestCase):
         # Class-style context object — what Frappe's www renderer hands in.
         class _Context:
             pass
+
         self.ctx = _Context()
 
     def test_guest_is_redirected_to_login(self):
@@ -185,7 +190,7 @@ class BootContext(unittest.TestCase):
     def test_sentry_dsn_picked_up_from_site_config(self):
         self.frappe.conf.get.side_effect = lambda key, default=None: {
             "sheets_sentry_dsn": "https://k@o.ingest.sentry.io/p",
-            "developer_mode":         0,
+            "developer_mode": 0,
         }.get(key, default)
         from suite.sheets.www import sheets as www
 

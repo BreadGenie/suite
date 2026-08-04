@@ -9,6 +9,7 @@ import BulletList from '@tiptap/extension-bullet-list'
 import OrderedList from '@tiptap/extension-ordered-list'
 import ListItem from '@tiptap/extension-list-item'
 import Color from '@tiptap/extension-color'
+import { Selection } from '@tiptap/extensions'
 
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { joinBackward } from 'prosemirror-commands'
@@ -689,4 +690,5 @@ export const extensions = [
 	}),
 	StyledEmptyLine,
 	LineHeight,
+	Selection.configure({ className: 'persisted-selection' }),
 ]

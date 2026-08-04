@@ -17,12 +17,24 @@
 			@prev-thread="emit('prevThread')"
 			@next-thread="emit('nextThread')"
 		/>
+		<!-- The swipe slide (`slide` prop) pages only the thread-specific part — subject,
+		     messages, reply bar — while the toolbar above stays put. Keyed per thread on
+		     mobile: the outgoing thread's frozen DOM slides away as the incoming one
+		     slides in. Desktop keys statically, so switching threads never remounts. -->
+		<div class="relative min-h-0 flex-1 overflow-hidden">
+		<Transition :name="slide || ''" @after-enter="emit('slideDone')">
+		<div :key="isMobile ? threadID : 'thread'" class="flex h-full flex-col">
+		<!-- Mobile: the subject is part of the fixed chrome — scrolling starts below it,
+		     and its border is the separator content passes under. -->
+		<div v-if="isMobile && thread?.length" class="shrink-0 border-b px-3.5 pb-3.5 pt-1.5">
+			<!-- !leading-7: subjects wrap, and both text-xl-semibold (line-height 1.15
+			     baked in) and the global body.mail-app h2 rule outrank a plain leading-*
+			     utility — wrapped lines sat nearly touching. -->
+			<h2 class="text-xl-semibold !leading-7">
+				{{ thread[0].subject || __('[No subject]') }}
+			</h2>
+		</div>
 		<div ref="threadContainer" class="flex-1 overflow-y-auto">
-			<div v-if="isMobile && thread?.length" class="border-b px-3 py-3.5">
-				<h2 class="text-xl-semibold leading-5">
-					{{ thread[0].subject || __('[No subject]') }}
-				</h2>
-			</div>
 
 			<div
 				class="sm:space-y-4 sm:px-5 sm:py-6"
@@ -56,7 +68,7 @@
 							v-if="!collapsedMailNames.has(mail.name)"
 							:data-mail-name="mail.name"
 							:class="{
-								'px-3 py-5': isMobile,
+								'px-3.5 py-5': isMobile,
 								'max-sm:border-b':
 									(thread.length > 1 || mail.draft) &&
 									mail.name !== mailBeforeCollapsedGroup &&
@@ -123,11 +135,14 @@
 										@delete-mail="(m: Mail) => emit('deleteMail', m)"
 									/>
 								</div>
+								<!-- An expanded mail always needs the gap between header and body —
+								     keying it on the preview alone left image-only mails (empty text
+								     preview) flush. Collapsed rows keep the preview-keyed padding. -->
 								<div
 									class="flex items-center space-x-3"
 									:class="{
 										'cursor-pointer': mail !== thread[thread.length - 1],
-										'pb-6': mail.preview,
+										'pb-6': mail.preview || !isCollapsed(mail),
 									}"
 									@click.stop="mail.collapsed = !mail.collapsed"
 								>
@@ -260,6 +275,12 @@
 											</div>
 										</template>
 									</Alert>
+									<CalendarInviteBanner
+										v-if="!readonly && !isCollapsed(mail) && icsAttachment(mail)"
+										:key="`invite-${mail.name}`"
+										:attachment="icsAttachment(mail)"
+										:account="scopeAccountId"
+									/>
 									<EmailContent
 										v-if="hasHtmlContent(mail.html_body)"
 										:content="mail.html_body"
@@ -311,6 +332,7 @@
 												:file-name="attachment.filename"
 												:blob-i-d="attachment.blob_id"
 												:type="attachment.type"
+												:account="scopeAccountId"
 												class="mb-2 mr-2"
 												@click.stop.prevent="
 													openAttachment(
@@ -349,6 +371,9 @@
 				</div>
 			</div>
 		</div>
+		</div>
+		</Transition>
+		</div>
 		<SendMail
 			v-if="focusedDraft"
 			v-model="showSendModal"
@@ -360,6 +385,7 @@
 			v-model="showAttachmentViewer"
 			:attachments="attachments"
 			:initial-index="attachmentIndex"
+			:account="scopeAccountId"
 		/>
 	</div>
 
@@ -400,16 +426,18 @@ import {
 	getFormattedDate,
 	getFormattedRecipients,
 	getGroupedRecipients,
-	getSenderInitial,
 	hasHtmlContent,
 	matchesScreenedValue,
 	raiseToast,
 	shouldIgnoreKeypress,
 } from '@/apps/mail/utils'
+import { getSenderInitial } from '@/apps/mail/utils/participants'
 import { useFilterBySender, useScreenSize, useSettings, useTheme } from '@/apps/mail/utils/composables'
+import { provideAccountScope } from '@/apps/mail/utils/accountScope'
 import { userStore } from '@/apps/mail/stores/user'
 import AttachmentCapsule from '@/apps/mail/components/AttachmentCapsule.vue'
 import AttachmentViewer from '@/apps/mail/components/AttachmentViewer.vue'
+import CalendarInviteBanner from '@/apps/mail/components/CalendarInviteBanner.vue'
 import ComposeMailEditor from '@/apps/mail/components/ComposeMailEditor.vue'
 import EmailContent from '@/apps/mail/components/EmailContent.vue'
 import NoMails from '@/apps/mail/components/Icons/NoMails.vue'
@@ -428,19 +456,30 @@ import type {
 	Identity,
 	Mail,
 	Mailbox,
+	MailboxData,
 	ScreenedAddress,
 } from '@/apps/mail/types'
 
-const { mailbox, threadID, threads, messages, canGoNext, readonly } = defineProps<{
-	mailbox: string
-	threadID?: string
-	threads: string[]
-	messages?: Mail[]
-	canGoNext?: boolean
-	// Read-only thread (e.g. the Screener): renders the messages but hides every action — the thread
-	// toolbar, per-message actions, the block banner and the reply/forward bar — and never marks read.
-	readonly?: boolean
-}>()
+const { mailbox, threadID, threads, messages, canGoNext, readonly, slide, account } =
+	defineProps<{
+		mailbox: string
+		threadID?: string
+		threads: string[]
+		messages?: Mail[]
+		canGoNext?: boolean
+		// The thread's owning account, when it isn't the active one (All Inboxes opens
+		// cross-account threads without switching): the pane and everything inside it —
+		// folder menus, reply identities, screened-sender banners — act as this account
+		// via the provided scope (see utils/accountScope).
+		account?: string
+		// Read-only thread (e.g. the Screener): renders the messages but hides every action — the thread
+		// toolbar, per-message actions, the block banner and the reply/forward bar — and never marks read.
+		readonly?: boolean
+		// Transition name for the mobile swipe paging ('page-next' / 'page-prev', styled in
+		// MailLayout); the owner arms it per swipe and clears it on slideDone, so other thread
+		// changes swap instantly.
+		slide?: string
+	}>()
 
 const emit = defineEmits([
 	'reloadMails',
@@ -458,6 +497,7 @@ const emit = defineEmits([
 	'moveMail',
 	'markMailSpam',
 	'deleteMail',
+	'slideDone',
 ])
 
 const { isMobile } = useScreenSize()
@@ -465,26 +505,38 @@ const { openSettings } = useSettings()
 const { filterBySender } = useFilterBySender()
 const dayjs = inject('$dayjs')
 const user = inject('$user')
-const store = userStore()
-const { mailboxes, mailboxIds, identities, screenedAddresses } = store
+// The pane acts as the thread's owning account (the active one unless the `account`
+// prop says otherwise) — provided so ThreadHeader's folder menus and the reply
+// editors below resolve the same account.
+const scope = provideAccountScope(() => account)
+const { accountId: scopeAccountId, identities, screenedAddresses, mailboxIds } = scope
+// Global screening rules are admin-managed and the same whichever account you are reading, so
+// they come from the store rather than the pane's scope.
+const { globalScreenedAddresses } = userStore()
 
 // A sender is "blocked" when screened with the Reject action (their mail is discarded) — either by their
 // exact address or by an accepted/blocked '@domain' entry covering them.
 const isSenderBlocked = (email: string) =>
-	!!screenedAddresses.data?.some(
+	!!screenedAddresses.value.data?.some(
 		(a: ScreenedAddress) => a.action === 'Reject' && matchesScreenedValue(email, a.email),
 	)
 
 // Trusted senders — you, or anyone you've accepted — load images normally. For everyone else, the
 // account's "Block Remote Images" setting withholds remote images (read-tracking pixels) until you opt in.
-const blockRemoteImagesEnabled = computed(
-	() =>
-		store.userResource?.data?.accounts?.find((a) => a.id === store.accountId)
-			?.block_remote_images ?? true,
-)
+const blockRemoteImagesEnabled = computed(() => scope.account.value?.block_remote_images ?? true)
+// The screening rules in effect for the account: the admin-managed global rules overlaid with the
+// account's own, the account's rule winning when both screen the same address or domain — mirroring
+// the backend's `get_effective_screened_email_addresses`, which the automation sieve is built from.
+// Read through the pane's scope, so a thread from another account is judged by that account's rules.
+const effectiveScreenedAddresses = computed(() => {
+	const merged = new Map<string, ScreenedAddress>()
+	for (const a of globalScreenedAddresses.data ?? []) merged.set(a.email.toLowerCase(), a)
+	for (const a of screenedAddresses.value.data ?? []) merged.set(a.email.toLowerCase(), a)
+	return [...merged.values()]
+})
 const isScreenedIn = (email: string) =>
-	!!identities.data?.some((i: Identity) => i.email === email) ||
-	!!screenedAddresses.data?.some(
+	!!identities.value.data?.some((i: Identity) => i.email === email) ||
+	effectiveScreenedAddresses.value.some(
 		(a: ScreenedAddress) => a.action === 'Accepted' && matchesScreenedValue(email, a.email),
 	)
 const shouldBlockImages = (mail: { from_email: string }) =>
@@ -546,7 +598,14 @@ const unseenMessage = computed(() =>
 const shouldShowUnseenMarker = (id: string) =>
 	isSomeSeen.value && firstUnseenMail.value && id == firstUnseenMail.value
 
-const goToMailbox = () => router.push({ name: 'mail-mailbox', params: { mailbox }, query: route.query })
+// Bail to the list the thread was opened from — the merged All Inboxes list on
+// its thread route, the mailbox list otherwise.
+const goToMailbox = () =>
+	router.push(
+		route.name === 'mail-all-inboxes-mail'
+			? { name: 'mail-all-inboxes', query: route.query }
+			: { name: 'mail-mailbox', params: { mailbox }, query: route.query },
+	)
 
 // The thread's messages normally arrive from the parent (loaded via `get_threads`). When the open
 // thread isn't in that list (e.g. a search result, or one on another page), fall back to fetching it
@@ -555,7 +614,7 @@ const thread = ref<Mail[]>([])
 
 const threadFallback = createResource({
 	url: 'suite.mail.api.mail.get_thread',
-	makeParams: () => ({ account: store.accountId, thread_id: threadID }),
+	makeParams: () => ({ account: scopeAccountId.value, thread_id: threadID }),
 	onSuccess: (mails: Mail[]) => {
 		// Thread no longer exists (e.g. deleted) — bail to the mailbox instead of a blank page.
 		if (!mails?.length) {
@@ -702,10 +761,10 @@ const filterRelevantMails = (mail: Mail) => {
 	if (mailbox === 'search') return true
 
 	const mailboxes = mail.mailboxes.map((m) => m.mailbox_id)
-	const trash = mailboxIds.trash
+	const trash = mailboxIds.value.trash
 	if (mailbox === trash) return mailboxes.includes(trash)
 
-	if (mailbox === mailboxIds.junk) return !!mail.junk
+	if (mailbox === mailboxIds.value.junk) return !!mail.junk
 
 	return !mailboxes.includes(trash) && !mail.junk
 }
@@ -750,10 +809,10 @@ onMounted(() => loadThread())
 
 const unblockEmailAddress = createResource({
 	url: 'suite.mail.api.mail.unscreen_email_addresses',
-	makeParams: (email) => ({ account: store.accountId, emails: [email] }),
+	makeParams: (email) => ({ account: scopeAccountId.value, emails: [email] }),
 	onSuccess: () => {
 		raiseToast(__('Sender unblocked.'))
-		screenedAddresses.reload()
+		screenedAddresses.value.reload()
 	},
 })
 
@@ -761,13 +820,13 @@ const unblockEmailAddress = createResource({
 const trustSender = createResource({
 	url: 'suite.mail.api.mail.screen_email_addresses',
 	makeParams: (email: string) => ({
-		account: store.accountId,
+		account: scopeAccountId.value,
 		emails: [email],
 		action: 'Accepted',
 	}),
 	onSuccess: () => {
 		raiseToast(__('Sender marked as trusted.'))
-		screenedAddresses.reload()
+		screenedAddresses.value.reload()
 	},
 })
 
@@ -810,6 +869,17 @@ const filteredAttachments = (mail: Mail) =>
 		(a: Attachment) => a.disposition === 'attachment' || !a.type.startsWith('image/'),
 	)
 
+// The message's calendar invite, if it carries one — as a text/calendar (or application/ics)
+// part or a file merely named *.ics.
+const icsAttachment = (mail: Mail) =>
+	mail.attachments?.find(
+		(a: Attachment) =>
+			a.blob_id &&
+			(a.type?.toLowerCase().startsWith('text/calendar') ||
+				a.type?.toLowerCase() === 'application/ics' ||
+				a.filename?.toLowerCase().endsWith('.ics')),
+	)
+
 const showAttachmentViewer = ref(false)
 const attachments = ref<Attachment[]>([])
 const attachmentIndex = ref(0)
@@ -831,8 +901,10 @@ const downloadAttachmentsAsZip = async (mail: Mail) => {
 
 	downloadingZipMail.value = mail.name
 	try {
-		const url = await getAttachmentsZipUrl(mailAttachments)
+		const url = await getAttachmentsZipUrl(mailAttachments, scopeAccountId.value)
 		downloadUrlAsFile(url, `${mail.subject || 'attachments'}.zip`)
+	} catch {
+		// the resource's onError already raised a toast; just stop spinning
 	} finally {
 		downloadingZipMail.value = null
 	}
@@ -892,17 +964,20 @@ const createLocalDraft = (mail: Mail, draftDetails: ComposeMailData) => {
 
 	nextTick(() => {
 		draftMails[name] = { name, ...draftDetails }
+		// The thread entry only hosts the inline desktop editor. On mobile the draft
+		// lives in the slide-up sheet instead — splicing it in anyway would hide the
+		// reply bar (it's suppressed while the thread ends in a draft) until a reload
+		// cleans the entry up, well after the sheet has slid out.
+		if (isMobile.value) return popOutDraft(draftMails[name])
 		const index = thread.value.indexOf(mail)
 		const draft = thread.value.find((m: Mail) => m.name === name)
 		if (index !== -1 && !draft)
 			thread.value.splice(index + 1, 0, { ...draftMails[name], draft: 1, show: true })
-		if (isMobile.value) popOutDraft(draftMails[name])
-		else
-			setTimeout(() =>
-				threadContainerRef.value
-					?.querySelector(`[data-mail-name="${name}"]`)
-					?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-			)
+		setTimeout(() =>
+			threadContainerRef.value
+				?.querySelector(`[data-mail-name="${name}"]`)
+				?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+		)
 	})
 }
 
@@ -946,7 +1021,7 @@ const syncFlagged = (ids: string[], flagged: boolean) =>
 
 const syncMailboxMembership = (mailboxId: string, add: boolean) => {
 	if (add) {
-		const mb = mailboxes.data?.find((m) => m.id === mailboxId)
+		const mb = scope.mailboxes.value.data?.find((m: MailboxData) => m.id === mailboxId)
 		if (!mb) return
 		const entry: Mailbox = { mailbox: mb.name, mailbox_id: mb.id, mailbox_name: mb._name }
 		thread.value?.forEach((mail: Mail) => {
@@ -1023,7 +1098,7 @@ const getReplyAllRecipients = (mail: Mail) => {
 }
 
 const isUserEmail = (email: string) =>
-	identities.data.map((i: Identity) => i.email).includes(email)
+	identities.value.data?.map((i: Identity) => i.email).includes(email)
 
 const getBodyContent = (mail: Mail) => {
 	if (hasHtmlContent(mail.html_body)) return mail.html_body
@@ -1057,3 +1132,4 @@ const getForwardedContent = (mail: Mail) => {
 	`
 }
 </script>
+

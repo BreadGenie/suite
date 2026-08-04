@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, h, inject, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Check, Eye, EyeOff, LayoutGrid, LogOut, Settings, User } from 'lucide-vue-next'
+import { useRoute, useRouter } from 'vue-router'
+import { Check, Eye, EyeOff, LogOut, Settings, User } from 'lucide-vue-next'
 import { Avatar, Sidebar } from 'frappe-ui'
+import { useStorage } from '@vueuse/core'
 
-import { getAppSwitcherItems } from '@/apps/registry'
 import { useSessionStore } from '@/boot/session'
+import { useAppSwitcher } from '@/composables/useAppSwitcher'
 import { toTitleCase } from '@/apps/calendar/utils/format'
 import { brandingStore } from '@/apps/calendar/stores/branding'
 import { userStore } from '@/apps/calendar/stores/user'
@@ -39,32 +40,15 @@ const subtitle = computed(() => {
 	return currentAccount._name
 })
 
-const apps = { get data() { return getAppSwitcherItems('calendar') } }
+const appsMenuOption = useAppSwitcher('calendar')
 
 const showSettings = ref(false)
+const isSidebarCollapsed = useStorage('isSidebarCollapsed', false)
 
 const menuItems = computed(() => [
 	{
 		group: '',
-		items: [
-			{
-				icon: LayoutGrid,
-				label: __('Apps'),
-				submenu: apps.data?.map?.((app) => ({
-					component: h(
-						app.spa ? RouterLink : 'a',
-						{
-							class: 'flex items-center gap-2 p-1.5 rounded hover:bg-surface-gray-2',
-							...(app.spa ? { to: app.route } : { href: app.route }),
-						},
-						[
-							h('img', { src: app.logo, class: 'size-6' }),
-							h('span', { class: 'text-ink-gray-8 max-w-18 text-sm w-full truncate' }, app.title),
-						],
-					),
-				})),
-			},
-		],
+		items: [appsMenuOption.value],
 	},
 	{
 		group: '',
@@ -127,6 +111,7 @@ const sidebarItems = computed(() => [
 
 <template>
 	<Sidebar
+		v-model:collapsed="isSidebarCollapsed"
 		:header="{
 			title,
 			subtitle,
@@ -134,7 +119,6 @@ const sidebarItems = computed(() => [
 			logo: branding.data?.brand_html || CalendarLogo,
 		}"
 		:sections="sidebarItems"
-		:disable-collapse="true"
 	/>
 	<SettingsModal v-model="showSettings" />
 </template>

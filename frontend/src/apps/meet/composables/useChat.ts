@@ -6,9 +6,16 @@ import type { ChatMessage, ChatStore } from "./useChatStore";
 import type { CurrentUser } from "./useCurrentUser";
 
 interface ChatAPI {
-	setupChatEvents: (notificationQueue: unknown) => void;
+	setupChatEvents: (notify: (notification: ChatNotification) => void) => void;
 	onSendChat: (text: string) => void;
 	toggleRestriction: (enabled: boolean) => void;
+}
+
+interface ChatNotification {
+	message: string;
+	fromUser: string;
+	fromName: string;
+	type: "chat";
 }
 
 const E2EE_CHAT_PREFIX = "e2ee:";
@@ -80,7 +87,7 @@ export function useChat(deps: {
 		return E2EEMeeting.instance.getE2EEChatKey();
 	}
 
-	const setupChatEvents = (notificationQueue: unknown) => {
+	const setupChatEvents = (notify: (notification: ChatNotification) => void) => {
 		sfuClient.on("chat:message", async (data: Record<string, unknown>) => {
 			if (data.fromUser === currentUser.currentUser.value?.user_id) {
 				return;
@@ -113,7 +120,9 @@ export function useChat(deps: {
 				user_id: data.fromUser as string,
 				user_name: (data.fromName || data.fromUser) as string,
 				message: plaintext,
-				timestamp: new Date().toISOString(),
+				timestamp:
+					(typeof data.timestamp === "string" && data.timestamp) ||
+					new Date().toISOString(),
 			};
 
 			chatStore.addMessage(message);
@@ -124,13 +133,11 @@ export function useChat(deps: {
 			) {
 				chatStore.hasUnreadMessages = true;
 
-				(
-					notificationQueue as { addNotification?: (n: unknown) => void }
-				)?.addNotification?.({
+				notify({
 					message: plaintext,
-					fromUser: data.fromUser,
-					fromName: data.fromName || data.fromUser,
-					timestamp: message.timestamp,
+					fromUser: data.fromUser as string,
+					fromName: (data.fromName || data.fromUser) as string,
+					type: "chat",
 				});
 				audioNotificationManager.playChatNotification();
 			}
@@ -169,6 +176,14 @@ export function useChat(deps: {
 				}
 			}
 
+			let timestamp = new Date().toISOString();
+			if (sfuClient.isConnected()) {
+				const response = await sfuClient.sendChatMessage(messageToSend, {
+					clientId: currentUser.currentUser.value?.user_id,
+				});
+				timestamp = response.timestamp;
+			}
+
 			const message: ChatMessage = {
 				id: Date.now() + Math.random(),
 				user_id: currentUser.currentUser.value?.user_id as string,
@@ -177,15 +192,9 @@ export function useChat(deps: {
 					(currentUser.currentUser.value?.name as string) ||
 					(currentUser.currentUser.value?.user_id as string),
 				message: text,
-				timestamp: new Date().toISOString(),
+				timestamp,
 			};
 			chatStore.addMessage(message);
-
-			if (sfuClient.isConnected()) {
-				sfuClient.sendChatMessage(messageToSend, {
-					clientId: currentUser.currentUser.value?.user_id,
-				});
-			}
 		} catch (error) {
 			console.error("Failed to send chat message:", error);
 			toast.error("Failed to send message");

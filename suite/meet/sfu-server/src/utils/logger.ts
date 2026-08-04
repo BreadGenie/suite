@@ -54,6 +54,20 @@ class Logger {
 			console.error(this.formatMessage('ERROR', message, ...args));
 		}
 	}
+
+	event(name: string, fields: Record<string, unknown> = {}): void {
+		if (this.shouldLog(LogLevel.INFO)) {
+			console.log(
+				JSON.stringify({
+					timestamp: new Date().toISOString(),
+					level: 'info',
+					component: this.component,
+					event: name,
+					...fields,
+				}),
+			);
+		}
+	}
 }
 
 function parseLogLevel(env?: string): LogLevel {
@@ -87,4 +101,5 @@ export const loggers = {
 	server: new Logger('Server', defaultLevel),
 	config: new Logger('Config', defaultLevel),
 	stt: new Logger('STT', defaultLevel),
+	telemetry: new Logger('Telemetry', defaultLevel),
 } as const;

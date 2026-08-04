@@ -1,6 +1,6 @@
 <template>
 	<div
-		class="flex h-screen w-screen select-none flex-col overflow-hidden"
+		class="isolate flex h-screen w-screen select-none flex-col overflow-hidden"
 		@click="focusedSlide = null"
 	>
 		<EditorNavbar
@@ -8,39 +8,30 @@
 			@performDropdownAction="performNavbarDropdownAction"
 		/>
 
-		<div class="relative flex h-screen bg-gray-300">
+		<div class="relative flex h-screen bg-surface-gray-1">
 			<SlideContainer
 				ref="slideContainer"
 				v-if="presentationDoc"
-				:highlight="slideHighlight"
 				v-model:hasOngoingInteraction="isSlideInteractionActive"
 			/>
 
 			<NavigationPanel
 				class="absolute bottom-0 top-0"
 				@changeSlide="changeEditorSlide"
-				@openLayoutDialog="openLayoutDialog('insert')"
-			/>
-
-			<Toolbar
-				v-if="!inReadonlyMode && presentationDoc"
-				@setHighlight="setHighlight"
-				@openLayoutDialog="openLayoutDialog('insert')"
+				@openLayoutDialog="openLayoutDialog"
 				@duplicate="duplicateSlide"
-				@delete="deleteSlide(true)"
+				@delete="(index) => deleteSlide(false, index)"
 			/>
 
-			<PropertiesPanel
-				v-if="!inReadonlyMode"
-				class="absolute bottom-0 right-0 top-0"
-				@openLayoutDialog="openLayoutDialog('replace')"
-			/>
+			<Toolbar v-if="!inReadonlyMode && presentationDoc" />
+
+			<PropertiesPanel v-if="!inReadonlyMode" class="absolute bottom-0 right-0 top-0" />
 		</div>
 	</div>
 
 	<LayoutDialog
 		v-model="showLayoutDialog"
-		@insert="(layoutObj) => handleInsertSlide(null, layoutObj)"
+		@insert="(layoutObj) => handleInsertSlide(insertIndex, layoutObj)"
 	/>
 
 	<ThemeDialog
@@ -49,6 +40,32 @@
 		@update="(theme) => updatePresentationTheme(theme)"
 		:update="themeDialogAction == 'update'"
 	/>
+
+	<Dialog v-model="showDeleteDialog" class="pb-0" size="sm">
+		<template #title>
+			<div class="font-semibold">Delete Presentation</div>
+		</template>
+		<template #default>
+			<div class="text-base">
+				This action will permanently delete
+				<strong>{{ presentationDoc?.title }}</strong
+				>. Are you sure you want to continue?
+			</div>
+		</template>
+		<template #actions>
+			<Button
+				class="w-full"
+				variant="solid"
+				theme="red"
+				label="Delete Presentation"
+				@click="confirmDelete"
+			>
+				<template #prefix>
+					<Trash size="14" class="stroke-[1.5]" />
+				</template>
+			</Button>
+		</template>
+	</Dialog>
 
 	<teleport to="body">
 		<ExportView v-if="showExportView" :slides="slides" />
@@ -60,6 +77,8 @@
 		:slide="slides[0]"
 		:disableCapture="isSlideInteractionActive"
 	/>
+
+	<KeyboardShortcutsModal v-model:open="showShortcutsModal" />
 </template>
 
 <script setup>
@@ -74,12 +93,13 @@ import {
 } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 
-import { call, usePageMeta } from 'frappe-ui'
+import { call, usePageMeta, KeyboardShortcutsModal, Dialog, Button } from 'frappe-ui'
 
 import ExportView from '@/apps/slides/pages/ExportView.vue'
 import EditorNavbar from '@/apps/slides/components/EditorNavbar.vue'
 import NavigationPanel from '@/apps/slides/components/NavigationPanel.vue'
 import PropertiesPanel from '@/apps/slides/components/PropertiesPanel.vue'
+
 import SlideContainer from '@/apps/slides/components/SlideContainer.vue'
 import Toolbar from '@/apps/slides/components/Toolbar.vue'
 import ThemeDialog from '@/apps/slides/components/ThemeDialog.vue'
@@ -90,7 +110,6 @@ import {
 	presentationId,
 	initPresentationDoc,
 	presentationDoc,
-	unsyncedPresentationRecord,
 	templateList,
 	templateListResource,
 	inReadonlyMode,
@@ -120,10 +139,10 @@ import {
 	actionOrder as historyMetaActionOrder,
 } from '@/apps/slides/stores/historyMeta'
 
-import { useShortcuts } from '@/apps/slides/composables/useShortcuts'
+import { useShortcuts, showShortcutsModal } from '@/apps/slides/composables/useShortcuts'
 import { saveChanges, saveCurrentState, dirty } from '@/apps/slides/stores/saving'
 import { inSlideShowMode, startSlideShow } from '@/apps/slides/stores/slideshow'
-import { Layout } from 'lucide-vue-next'
+import { Layout, Trash } from 'lucide-vue-next'
 import { useCommandHistory } from '@/apps/slides/composables/useCommandHistory'
 
 
@@ -148,13 +167,12 @@ const props = defineProps({
 
 const showThemeDialog = ref(false)
 const themeDialogAction = ref('update')
-const slideHighlight = ref(false)
 const isSlideInteractionActive = ref(false)
 
 const showLayoutDialog = ref(false)
-const layoutAction = ref('')
 const insertIndex = ref(null)
 const showExportView = ref(false)
+const showDeleteDialog = ref(false)
 
 const historyMetaForCommandHistory = {
 	actions: historyMetaActions,
@@ -170,10 +188,6 @@ usePageMeta(() => {
 		title: presentationDoc.value?.title || 'Slides',
 	}
 })
-
-const setHighlight = (value) => {
-	slideHighlight.value = value
-}
 
 const handleAutoSave = () => {
 	if (isSlideInteractionActive.value || focusElementId.value != null) return
@@ -195,15 +209,6 @@ const initAutoSave = () => {
 
 const loadPresentation = async (id) => {
 	presentationDoc.value = await initPresentationDoc(id, inReadonlyMode.value)
-}
-
-const updateUnsyncedRecord = () => {
-	unsyncedPresentationRecord.value = {
-		...unsyncedPresentationRecord.value,
-		modified: presentationDoc.value.modified,
-		thumbnail: presentationDoc.value.thumbnail,
-		slide_count: slides.value.length,
-	}
 }
 
 const handleBeforeUnload = (e) => {
@@ -260,7 +265,6 @@ const hideOpenDialogs = () => {
 
 const handleBeforeUnmount = () => {
 	thumbnailCaptureRef.value?.reset()
-	updateUnsyncedRecord()
 	clearInterval(autosaveInterval)
 
 	if (router.currentRoute.value.name !== 'slides-slideshow') {
@@ -381,9 +385,7 @@ const performNavbarDropdownAction = async (action) => {
 		const newPresentation = await duplicatePresentation(presentationId.value)
 		navigateToPresentation(newPresentation)
 	} else if (action == 'delete') {
-		await deletePresentation(presentationId.value)
-		unsyncedPresentationRecord.value = { name: presentationId.value, deleted: true }
-		router.push({ name: 'slides-home' })
+		showDeleteDialog.value = true
 	} else if (action == 'updateTheme') {
 		themeDialogAction.value = 'update'
 		showThemeDialog.value = true
@@ -392,9 +394,15 @@ const performNavbarDropdownAction = async (action) => {
 	}
 }
 
-const openLayoutDialog = (action, index) => {
+const confirmDelete = async () => {
+	showDeleteDialog.value = false
+	await deletePresentation(presentationId.value)
+	thumbnailCaptureRef.value?.reset()
+	router.push({ name: 'slides-home' })
+}
+
+const openLayoutDialog = (index) => {
 	showLayoutDialog.value = true
-	layoutAction.value = action
 	insertIndex.value = index
 }
 

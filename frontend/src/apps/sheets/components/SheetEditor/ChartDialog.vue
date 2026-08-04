@@ -62,6 +62,14 @@
             @update:model-value="onXAxisChange"
           />
 
+          <p class="cd-label" style="margin-top:14px">
+            {{ chartType === 'pie' ? 'Aggregate slices' : 'Aggregate' }}
+          </p>
+          <FormControl type="select" v-model="opts.aggregate" :options="CHART_AGGREGATIONS" />
+          <p v-if="opts.aggregate !== 'none'" class="cd-hint">
+            Rows sharing the same {{ chartType === 'pie' ? 'label' : 'X value' }} are grouped and summarised.
+          </p>
+
           <div class="cd-series-head" style="margin-top:14px">
             <p class="cd-label" style="margin:0">
               {{ chartType === 'pie' ? 'Values' : 'Series' }}
@@ -120,6 +128,44 @@
             <FormControl v-if="chartType === 'line' || chartType === 'area'" type="checkbox" v-model="opts.smooth"  label="Smooth curves" />
             <FormControl v-if="chartType === 'bar'  || chartType === 'area'" type="checkbox" v-model="opts.stacked" label="Stacked" />
           </div>
+
+          <div class="cd-colors-head" style="margin-top:14px">
+            <p class="cd-label" style="margin:0">Colors</p>
+            <Button v-if="hasCustomColors" size="sm" variant="ghost" label="Reset" @click="resetColors" />
+          </div>
+          <div class="cd-palettes">
+            <button
+              v-for="p in CHART_PALETTES"
+              :key="p.name"
+              type="button"
+              class="cd-palette"
+              :class="{ 'cd-palette--active': activePaletteName === p.name }"
+              :title="p.name"
+              @click="applyPalette(p)"
+            >
+              <span
+                v-for="(c, i) in p.colors.slice(0, 5)"
+                :key="i"
+                class="cd-palette-stop"
+                :style="{ background: c }"
+              />
+            </button>
+          </div>
+          <!-- Per-series overrides only make sense for cartesian charts, where
+               the colour array maps positionally to series. A pie maps colours
+               to slices (rows), not series, so the palette presets above are the
+               only meaningful control there. -->
+          <div v-if="chartType !== 'pie' && selectedSeries.length" class="cd-series-colors">
+            <label v-for="s in selectedSeries" :key="s.idx" class="cd-series-color">
+              <input
+                type="color"
+                class="cd-color-input"
+                :value="s.color"
+                @input="setSeriesColor(s.idx, $event.target.value)"
+              />
+              <span class="cd-series-color-label">{{ s.label }}</span>
+            </label>
+          </div>
         </div>
 
         <div class="cd-preview">
@@ -152,7 +198,7 @@ import { computed, defineAsyncComponent, reactive, ref, watch } from 'vue'
 import { Autocomplete, Button, Dialog, FormControl, FeatherIcon } from 'frappe-ui'
 // Lazy-load — same rationale as in ChartOverlay.
 const ChartView = defineAsyncComponent(() => import('./ChartView.vue'))
-import { CHART_TYPES } from '../../engine/charts.js'
+import { CHART_TYPES, CHART_PALETTES, ESPRESSO_PALETTE, CHART_AGGREGATIONS } from '../../engine/charts.js'
 
 const CHART_ICONS = {
   line:    'trending-up',
@@ -186,7 +232,7 @@ const title       = ref('')
 const hasHeader   = ref(true)
 const xCol        = ref(0)
 const yCols       = ref([])             // selected column indices
-const opts        = reactive({ showLegend: true, smooth: false, stacked: false, dataLabels: true, gridLines: true })
+const opts        = reactive({ showLegend: true, smooth: false, stacked: false, dataLabels: true, gridLines: true, colorScheme: undefined, aggregate: 'none' })
 
 // Resolved each `detect()` — the actual values backing the preview.
 const matrix      = ref([])
@@ -205,7 +251,7 @@ watch(show, (open) => {
     hasHeader.value  = c.hasHeader !== false
     xCol.value       = c.encoding?.x ?? 0
     yCols.value      = c.encoding?.y ? [...c.encoding.y] : []
-    Object.assign(opts, { showLegend: true, smooth: false, stacked: false, dataLabels: false, gridLines: true, ...c.options })
+    Object.assign(opts, { showLegend: true, smooth: false, stacked: false, dataLabels: false, gridLines: true, colorScheme: undefined, aggregate: 'none', ...c.options })
     detect()
   } else {
     rangeInput.value = props.initialRange || ''
@@ -214,7 +260,7 @@ watch(show, (open) => {
     hasHeader.value  = true
     xCol.value       = 0
     yCols.value      = []
-    Object.assign(opts, { showLegend: true, smooth: false, stacked: false, dataLabels: true, gridLines: true })
+    Object.assign(opts, { showLegend: true, smooth: false, stacked: false, dataLabels: true, gridLines: true, colorScheme: undefined, aggregate: 'none' })
     if (rangeInput.value) detect()
   }
 })
@@ -308,6 +354,61 @@ function selectNumericSeries() {
     .map(c => c.idx)
 }
 
+// ── Colors ─────────────────────────────────────────────────────────────────-
+//
+// `opts.colorScheme` is either undefined (→ default Espresso palette) or an
+// explicit hex array used verbatim as ECharts `color`. The array maps
+// positionally to series in encoding.y order, so series `pos` uses
+// colours[pos % len]. Editing one series materialises the palette into an
+// explicit array; picking a preset replaces it wholesale.
+
+const effectiveColors = computed(() =>
+  (opts.colorScheme && opts.colorScheme.length) ? opts.colorScheme : ESPRESSO_PALETTE,
+)
+const hasCustomColors = computed(() => Array.isArray(opts.colorScheme) && opts.colorScheme.length > 0)
+
+// Highlight the matching preset chip. With no override we're on the default
+// (Espresso); an explicit array highlights whichever preset it equals, or none
+// once the user hand-tweaks an individual series.
+const activePaletteName = computed(() => {
+  if (!hasCustomColors.value) return 'Espresso'
+  const cur = opts.colorScheme
+  const match = CHART_PALETTES.find(p =>
+    p.colors.length === cur.length
+    && p.colors.every((c, i) => c.toLowerCase() === String(cur[i]).toLowerCase()),
+  )
+  return match ? match.name : null
+})
+
+const selectedSeries = computed(() =>
+  yCols.value.map((idx, pos) => ({
+    idx,
+    label: columns.value.find(c => c.idx === idx)?.label || `Column ${_colLetter(idx)}`,
+    color: effectiveColors.value[pos % effectiveColors.value.length],
+  })),
+)
+
+function applyPalette(p) {
+  opts.colorScheme = [...p.colors]
+}
+
+function setSeriesColor(colIdx, hex) {
+  const pos = yCols.value.indexOf(colIdx)
+  if (pos < 0) return
+  const base = (opts.colorScheme && opts.colorScheme.length)
+    ? [...opts.colorScheme]
+    : [...ESPRESSO_PALETTE]
+  // Grow the array from the default palette so a high series index is still
+  // addressable without leaving holes.
+  while (base.length <= pos) base.push(ESPRESSO_PALETTE[base.length % ESPRESSO_PALETTE.length])
+  base[pos] = hex
+  opts.colorScheme = base
+}
+
+function resetColors() {
+  opts.colorScheme = undefined
+}
+
 // ── Master "select all visible" checkbox ──────────────────────────────────-
 //
 // "Visible" = whatever passes the current filter (and isn't the X-axis).
@@ -375,7 +476,11 @@ function onConfirm() {
     title:       title.value,
     hasHeader:   hasHeader.value,
     encoding:    { x: xCol.value, y: [...yCols.value] },
-    options:     { ...opts },
+    // JSON round-trip strips Vue reactivity — the engine's history snapshot
+    // deep-clones configs with structuredClone, which throws DataCloneError on
+    // any reactive proxy (e.g. options.colorScheme). This drops undefined keys,
+    // which is exactly what we want (a missing colorScheme → default palette).
+    options:     JSON.parse(JSON.stringify({ ...opts })),
   })
   show.value = false
 }
@@ -422,6 +527,7 @@ function _autoDetectRange() {
    `flex-shrink: 0` + bottom-alignment to keep it level with the Detect button. */
 .cd-header-toggle { flex-shrink: 0; }
 .cd-error         { font-size: 12px; color: var(--ink-red-5); margin: 4px 0 0; }
+.cd-hint          { font-size: 11px; color: var(--ink-gray-5); margin: 5px 0 0; line-height: 1.4; }
 
 .cd-type-grid {
   display: grid;
@@ -508,6 +614,30 @@ function _autoDetectRange() {
 }
 
 .cd-options { display: flex; flex-direction: column; gap: 4px; }
+
+.cd-colors-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.cd-palettes { display: flex; flex-wrap: wrap; gap: 6px; }
+.cd-palette {
+  display: flex; overflow: hidden; cursor: pointer;
+  height: 24px; width: 56px; padding: 0;
+  background: none; border: 1px solid var(--outline-gray-2); border-radius: 6px;
+  transition: border-color .12s, box-shadow .12s;
+}
+.cd-palette:hover { border-color: var(--outline-gray-3); }
+.cd-palette--active { border-color: var(--outline-gray-4); box-shadow: 0 0 0 2px var(--surface-gray-3); }
+.cd-palette-stop { flex: 1; }
+
+.cd-series-colors { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.cd-series-color { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--ink-gray-8); min-width: 0; }
+.cd-color-input {
+  width: 22px; height: 22px; flex-shrink: 0; padding: 0;
+  background: none; border: 1px solid var(--outline-gray-2); border-radius: 5px; cursor: pointer;
+}
+/* Native color input renders an inset swatch with default chrome padding —
+   trim it so the whole control reads as one clean colour chip. */
+.cd-color-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.cd-color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+.cd-series-color-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .cd-preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .cd-preview-frame {

@@ -1,7 +1,7 @@
 <template>
-	<div v-if="activeElementIds.length" :style="boxStyles">
-		<Resizer
-			v-if="showResizers"
+	<div v-if="activeElementIds.length" data-selection-box :style="boxStyles">
+		<SelectionControls
+			v-if="showControls"
 			:elementType="activeElement?.shapeType || activeElement?.type"
 			:dimensions="selectionBounds"
 			:style="{ pointerEvents: 'auto' }"
@@ -11,37 +11,35 @@
 <script setup>
 import { computed } from 'vue'
 
-import Resizer from '@/apps/slides/components/Resizer.vue'
+import SelectionControls from '@/apps/slides/components/SelectionControls.vue'
 
 import { slideBounds, selectionBounds } from '@/apps/slides/stores/slide'
-import { rotationDelta } from '@/apps/slides/composables/useRotator'
+import { interactionOffset } from '@/apps/slides/stores/interaction'
+import { rotationDelta } from '@/apps/slides/stores/interaction'
 import {
 	activeElementIds,
 	focusElementId,
 	activeElement,
 	cropSelectionToFitContent,
 } from '@/apps/slides/stores/element'
+import { selectionColor } from '@/apps/slides/utils/constants'
 
 const props = defineProps({
 	isDragging: {
 		type: Boolean,
 		default: false,
 	},
-	elementOffset: {
-		type: Object,
-		default: () => ({ left: 0, top: 0 }),
-	},
 })
 
-const showResizers = computed(() => {
+const showControls = computed(() => {
 	return activeElementIds.value.length == 1 && !focusElementId.value && !props.isDragging
 })
 
 const outline = computed(() => {
 	if (activeElement.value?.shapeType == 'line') return 'none'
 
-	if (activeElementIds.value.length == 1) return `#70B6F0 solid ${2 / slideBounds.scale}px`
-	return `#70B6F092 solid ${0.1 / slideBounds.scale}px`
+	if (activeElementIds.value.length == 1) return `${selectionColor} solid ${2 / slideBounds.scale}px`
+	return 'none'
 })
 
 const isRotatable = computed(() => {
@@ -54,8 +52,8 @@ const selectionRotation = computed(() => {
 })
 
 const boxStyles = computed(() => {
-	const offsetLeft = props.elementOffset.left
-	const offsetTop = props.elementOffset.top
+	const offsetLeft = interactionOffset.left
+	const offsetTop = interactionOffset.top
 
 	// selectionBounds track the live position; rendering subtracts the
 	// transient offset and reapplies it as a transform so moving the box
@@ -66,7 +64,7 @@ const boxStyles = computed(() => {
 
 	return {
 		position: 'absolute',
-		backgroundColor: activeElementIds.value.length == 1 ? '' : '#70b6f025',
+		backgroundColor: activeElementIds.value.length == 1 ? '' : `${selectionColor}25`,
 		outline: outline.value,
 		width: `${selectionBounds.width}px`,
 		height: `${selectionBounds.height}px`,

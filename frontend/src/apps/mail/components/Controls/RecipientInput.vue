@@ -40,12 +40,13 @@
 		</span>
 		<Combobox
 			v-model="input"
+			v-model:open="showSuggestions"
 			placeholder=""
 			variant="ghost"
 			:options
 			:open-on-click="false"
 			class="recipient-combobox border-none !bg-inherit !ring-0"
-			@input="handleInput"
+			@update:query="handleInput"
 			@keydown.delete.capture.stop="handleDelete($event.target.value)"
 			@paste="handlePaste"
 			@focusin="isSearchFocused = true"
@@ -109,9 +110,25 @@ onClickOutside(containerRef, () => (isClicked.value = false))
 
 const selectedEmails = computed(() => selectedRecipients.value.map((v) => v.email))
 
-const handleInput = useDebounceFn((text: string) => {
+const searchText = ref('')
+const showSuggestions = ref(false)
+
+const fetchSuggestions = useDebounceFn((text: string) => {
 	if (text) mailContacts.reload(text)
 }, 200)
+
+const handleInput = (text: string) => {
+	searchText.value = text
+	if (!text) showSuggestions.value = false
+	fetchSuggestions(text)
+}
+
+// Suggestions only exist for a typed query — with an empty input the popover
+// would show stale results from the previous query (or a bare "No results"
+// panel), so block reka's focus/arrow-key opens too, not just hide options.
+watch(showSuggestions, (open) => {
+	if (open && !searchText.value) showSuggestions.value = false
+})
 
 const handleDelete = (currentValue: string) => {
 	if (!currentValue && selectedRecipients.value.length) tagsRef.value?.at(-1)?.focus()
@@ -214,31 +231,34 @@ const handleDrop = (e: DragEvent) => {
 }
 
 const mailContacts = createResource({
-	url: 'suite.mail.api.contacts.get_contacts',
+	url: 'suite.mail.api.mail.get_email_suggestions',
 	auto: false,
 	makeParams: (text: string) => ({
 		account: store.accountId,
-		filter: { operator: 'OR', conditions: [{ text }, { email: text }] },
+		text,
 	}),
 	transform: (data) =>
 		data.map((option) => ({
-			label: option.full_name || option.email,
+			label: option.name || option.email,
 			value: option.email,
 			email: option.email,
-			display_name: option.full_name,
+			display_name: option.name,
 			image: option.user_image,
 		})),
 })
 
-const options = computed(() => [
-	...(mailContacts.data?.filter((option) => !selectedEmails.value.includes(option.email)) || []),
-	{
-		type: 'custom',
-		slot: 'create',
-		condition: () => !mailContacts?.data?.length,
-		onClick: ({ query }: { query: string }) => addValues(query),
-	},
-])
+const options = computed(() => {
+	if (!searchText.value) return []
+	return [
+		...(mailContacts.data?.filter((option) => !selectedEmails.value.includes(option.email)) || []),
+		{
+			type: 'custom',
+			slot: 'create',
+			condition: () => !mailContacts?.data?.length,
+			onClick: ({ query }: { query: string }) => addValues(query),
+		},
+	]
+})
 </script>
 
 <style>

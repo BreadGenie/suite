@@ -18,7 +18,11 @@
                 <EditorBubbleMenu :editor :items="bubbleMenuButtons" :options="bubbleMenuOpts" />
                 <EditorTableMenu :editor />
                 <EditorDropZone :editor :disabled="!editable" class="grow flex flex-col">
-                  <EditorContent :editor
+                  <EditorContent
+                    :editor
+                    role="textbox"
+                    aria-label="Document editor"
+                    aria-multiline="true"
                     class="grow w-full bg-surface-base overflow-x-auto pt-10 pb-24 px-5 prose prose-sm prose-v3 prose-table:table-fixed prose-td:p-2 prose-th:p-2 prose-td:border prose-th:border prose-td:relative prose-th:relative prose-th:bg-surface-gray-2"
                     :class="isPainting && 'cursor-crosshair'" :style="editorStyle" />
                 </EditorDropZone>
@@ -79,10 +83,12 @@ import { bubbleMenuOptions } from './core-editor/bubble-menu'
 import { CoreEditorExtension } from '@/apps/writer/extensions/core-editor'
 import { PageBreakExtension } from '@/apps/writer/extensions/page-break'
 import CleanStyles from '@/apps/writer/extensions/clean-styles'
+import { cssLineHeight } from '@/apps/writer/utils/typography'
 import MediaDownload from '@/apps/writer/extensions/media-download'
 import OldCommentExtension from '@/apps/writer/extensions/old-comment'
 import { TabsExtension } from '@/apps/writer/extensions/tabs'
 import TabTrailingNode from '@/apps/writer/extensions/tab-trailing-node'
+import { JoinAdjacentLists } from '@/apps/writer/extensions/join-adjacent-lists'
 import { CommentExtension, rebuild } from '@/apps/writer/extensions/comments'
 
 
@@ -228,6 +234,7 @@ const editorExtensions = [
   }),
   TabsExtension,
   TabTrailingNode,
+  JoinAdjacentLists,
   OldCommentExtension.configure({ onCommentActivated }),
   TableOfContents.configure({
     onUpdate: (val) => (anchors.value = val),
@@ -279,7 +286,7 @@ const editorStyle = computed(() => ({
   fontFamily:
     props.settings?.font_family && `var(--font-${props.settings.font_family})`,
   '--editor-font-size': `${props.settings?.font_size || 15}px`,
-  '--editor-line-height': props.settings?.line_height || 1.5,
+  '--editor-line-height': cssLineHeight(props.settings?.line_height),
   '--paragraph-spacing-before': `${props.settings?.paragraph_spacing_before || 0}px`,
   '--paragraph-spacing-after': `${props.settings?.paragraph_spacing_after || 0}px`,
 }))
@@ -417,13 +424,5 @@ onBeforeUnmount(() => {
 
 iframe {
   border: 1px solid var(--surface-gray-4) !important;
-}
-
-.prose-v3 p+p {
-  margin-top: var(--paragraph-spacing-before, 0);
-}
-
-.prose-v3 p {
-  margin-bottom: var(--paragraph-spacing-after, 0);
 }
 </style>

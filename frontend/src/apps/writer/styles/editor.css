@@ -8,6 +8,14 @@
   line-height: var(--editor-line-height, 1.5);
 }
 
+.prose-v3 p + p {
+  margin-top: var(--paragraph-spacing-before, 0);
+}
+
+.prose-v3 p {
+  margin-bottom: var(--paragraph-spacing-after, 0);
+}
+
 .prose strong,
 b {
   color: inherit !important;

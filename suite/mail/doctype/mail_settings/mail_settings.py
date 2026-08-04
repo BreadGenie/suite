@@ -9,298 +9,300 @@ from frappe import _
 from frappe.model.document import Document
 
 from suite.mail.doctype.dns_record.dns_record import get_dns_provider
-from suite.mail.stalwart import get_domain_by_name
+from suite.mail.stalwart import get_domain_service
 from suite.mail.utils import is_stalwart_configured
 
 
 class MailSettings(Document):
-	# begin: auto-generated types
-	# This code is auto-generated. Do not modify anything in this block.
+    # begin: auto-generated types
+    # This code is auto-generated. Do not modify anything in this block.
 
-	from typing import TYPE_CHECKING
+    from typing import TYPE_CHECKING
 
-	if TYPE_CHECKING:
-		from frappe.types import DF
+    if TYPE_CHECKING:
+        from frappe.types import DF
 
-		from suite.mail.doctype.mail_client_configuration.mail_client_configuration import (
-			MailClientConfiguration,
-		)
+        from suite.mail.doctype.mail_client_configuration.mail_client_configuration import (
+            MailClientConfiguration,
+        )
 
-		allow_signup: DF.Check
-		ansible_play_timeout: DF.Int
-		default_disk_quota_gb: DF.Int
-		default_dns_ttl: DF.Int
-		default_gravatar: DF.Literal["404"]
-		disabled_account_role: DF.Data | None
-		dns_provider: DF.Literal[
-			"", "AmazonRoute53", "DigitalOcean", "Cloudflare", "Hetzner", "Linode", "Namecheap", "GoDaddy"
-		]
-		dns_provider_access_key: DF.Data | None
-		dns_provider_access_secret: DF.Password | None
-		dns_provider_client_ip: DF.Data | None
-		dns_provider_key: DF.Data | None
-		dns_provider_private_zone: DF.Check
-		dns_provider_secret: DF.Password | None
-		dns_provider_token: DF.Password | None
-		dns_provider_username: DF.Data | None
-		dns_provider_zone_id: DF.Data | None
-		enable_gravatar: DF.Check
-		enable_jmap_push_encryption: DF.Check
-		exchange_export_batch_size: DF.Int
-		exchange_export_timeout: DF.Int
-		exchange_import_timeout: DF.Int
-		exchange_log_file_count: DF.Int
-		exchange_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
-		exchange_log_max_file_size: DF.Int
-		exchange_max_export: DF.Int
-		exchange_max_import: DF.Int
-		inbound_log_file_count: DF.Int
-		inbound_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
-		inbound_log_max_file_size: DF.Int
-		jmap_push_auth: DF.Password | None
-		jmap_push_p256dh: DF.Data | None
-		jmap_push_private_key: DF.Password | None
-		mail_client_configurations: DF.Table[MailClientConfiguration]
-		max_email_sync: DF.Int
-		max_message_payload_size_mb: DF.Int
-		max_push_notifications: DF.Int
-		outbound_log_file_count: DF.Int
-		outbound_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
-		outbound_log_max_file_size: DF.Int
-		password: DF.Password | None
-		process_pending_emails_batch_size: DF.Int
-		process_pending_emails_max_batch_size: DF.Int
-		process_pending_emails_timeout: DF.Int
-		push_log_file_count: DF.Int
-		push_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
-		push_log_max_file_size: DF.Int
-		root_domain_name: DF.Data | None
-		scan_message_timeout: DF.Int
-		server_deployment_timeout: DF.Int
-		server_job_timeout: DF.Int
-		server_url: DF.Data | None
-		show_mail_client_config: DF.Check
-		signup_domains: DF.SmallText | None
-		spamd_host: DF.Data | None
-		spamd_hybrid_scanning_threshold: DF.Float
-		spamd_port: DF.Int
-		spamd_scanning_mode: DF.Literal["Exclude Attachments", "Include Attachments", "Hybrid Approach"]
-		stalwart_cli_command_timeout: DF.Int
-		stalwart_cli_version: DF.Data
-		stalwart_version: DF.Data
-		storage_log_file_count: DF.Int
-		storage_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
-		storage_log_max_file_size: DF.Int
-		username: DF.Data | None
-		verify_ssl: DF.Check
-	# end: auto-generated types
+        admin_log_file_count: DF.Int
+        admin_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
+        admin_log_max_file_size: DF.Int
+        allow_signup: DF.Check
+        ansible_play_timeout: DF.Int
+        custom_event_invites: DF.Check
+        default_disk_quota_gb: DF.Int
+        default_dns_ttl: DF.Int
+        default_gravatar: DF.Literal["404"]
+        disabled_account_role: DF.Data | None
+        dns_provider: DF.Literal[
+            "", "AmazonRoute53", "DigitalOcean", "Cloudflare", "Hetzner", "Linode", "Namecheap", "GoDaddy"
+        ]
+        dns_provider_access_key: DF.Data | None
+        dns_provider_access_secret: DF.Password | None
+        dns_provider_client_ip: DF.Data | None
+        dns_provider_key: DF.Data | None
+        dns_provider_private_zone: DF.Check
+        dns_provider_secret: DF.Password | None
+        dns_provider_token: DF.Password | None
+        dns_provider_username: DF.Data | None
+        dns_provider_zone_id: DF.Data | None
+        enable_gravatar: DF.Check
+        enable_jmap_push_encryption: DF.Check
+        exchange_export_batch_size: DF.Int
+        exchange_export_timeout: DF.Int
+        exchange_import_timeout: DF.Int
+        exchange_log_file_count: DF.Int
+        exchange_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
+        exchange_log_max_file_size: DF.Int
+        exchange_max_export: DF.Int
+        exchange_max_import: DF.Int
+        inbound_log_file_count: DF.Int
+        inbound_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
+        inbound_log_max_file_size: DF.Int
+        jmap_push_auth: DF.Password | None
+        jmap_push_p256dh: DF.Data | None
+        jmap_push_private_key: DF.Password | None
+        mail_client_configurations: DF.Table[MailClientConfiguration]
+        max_email_sync: DF.Int
+        max_message_payload_size_mb: DF.Int
+        max_push_notifications: DF.Int
+        outbound_log_file_count: DF.Int
+        outbound_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
+        outbound_log_max_file_size: DF.Int
+        password: DF.Password | None
+        process_pending_emails_batch_size: DF.Int
+        process_pending_emails_max_batch_size: DF.Int
+        process_pending_emails_timeout: DF.Int
+        push_log_file_count: DF.Int
+        push_log_level: DF.Literal["ERROR", "WARNING", "INFO", "DEBUG"]
+        push_log_max_file_size: DF.Int
+        root_domain_name: DF.Data | None
+        scan_message_timeout: DF.Int
+        server_deployment_timeout: DF.Int
+        server_job_timeout: DF.Int
+        server_url: DF.Data | None
+        show_calendar_client_config: DF.Check
+        show_mail_client_config: DF.Check
+        signup_domains: DF.SmallText | None
+        spamd_host: DF.Data | None
+        spamd_hybrid_scanning_threshold: DF.Float
+        spamd_port: DF.Int
+        spamd_scanning_mode: DF.Literal["Exclude Attachments", "Include Attachments", "Hybrid Approach"]
+        stalwart_cli_command_timeout: DF.Int
+        stalwart_cli_version: DF.Data
+        stalwart_version: DF.Data
+        username: DF.Data | None
+        verify_ssl: DF.Check
+    # end: auto-generated types
 
-	def validate(self) -> None:
-		if not frappe.flags.in_migrate:
-			self.validate_root_domain_name()
-			self.validate_dns_provider()
-			self.validate_jmap_push_subscription_keys()
-			self.validate_signup()
+    def validate(self) -> None:
+        if not frappe.flags.in_migrate:
+            self.validate_root_domain_name()
+            self.validate_dns_provider()
+            self.validate_jmap_push_subscription_keys()
+            self.validate_signup()
 
-	def on_update(self) -> None:
-		self.clear_cache()
-		frappe.clear_document_cache(self.doctype)
+    def on_update(self) -> None:
+        self.clear_cache()
+        frappe.clear_document_cache(self.doctype)
 
-		if self.has_value_changed("root_domain_name"):
-			self.handle_root_domain_change()
+        if self.has_value_changed("root_domain_name"):
+            self.handle_root_domain_change()
 
-	def validate_root_domain_name(self) -> None:
-		"""Validates the Root Domain Name."""
+    def validate_root_domain_name(self) -> None:
+        """Validates the Root Domain Name."""
 
-		if self.root_domain_name:
-			self.root_domain_name = self.root_domain_name.lower()
+        if self.root_domain_name:
+            self.root_domain_name = self.root_domain_name.lower()
 
-	def validate_dns_provider(self) -> None:
-		"""Validates the DNS Provider."""
+    def validate_dns_provider(self) -> None:
+        """Validates the DNS Provider."""
 
-		if not self.dns_provider:
-			return
+        if not self.dns_provider:
+            return
 
-		if not self.root_domain_name:
-			frappe.throw(_("Please set the Root Domain Name before configuring the DNS Provider."))
+        if not self.root_domain_name:
+            frappe.throw(_("Please set the Root Domain Name before configuring the DNS Provider."))
 
-		match self.dns_provider:
-			case "AmazonRoute53":
-				if not self.dns_provider_access_key or not self.dns_provider_access_secret:
-					frappe.throw(_("Please set the DNS Provider Access Key and Secret."))
+        match self.dns_provider:
+            case "AmazonRoute53":
+                if not self.dns_provider_access_key or not self.dns_provider_access_secret:
+                    frappe.throw(_("Please set the DNS Provider Access Key and Secret."))
 
-			case "DigitalOcean" | "Cloudflare" | "Hetzner" | "Linode" | "Namecheap":
-				if not self.dns_provider_token:
-					frappe.throw(_("Please set the DNS Provider Token."))
-				elif self.dns_provider == "Namecheap":
-					if not self.dns_provider_username or not self.dns_provider_client_ip:
-						frappe.throw(_("Please set the DNS Provider Username and Client IP."))
+            case "DigitalOcean" | "Cloudflare" | "Hetzner" | "Linode" | "Namecheap":
+                if not self.dns_provider_token:
+                    frappe.throw(_("Please set the DNS Provider Token."))
+                elif self.dns_provider == "Namecheap":
+                    if not self.dns_provider_username or not self.dns_provider_client_ip:
+                        frappe.throw(_("Please set the DNS Provider Username and Client IP."))
 
-			case "GoDaddy":
-				if not self.dns_provider_key or not self.dns_provider_secret:
-					frappe.throw(_("Please set the DNS Provider Key and Secret."))
+            case "GoDaddy":
+                if not self.dns_provider_key or not self.dns_provider_secret:
+                    frappe.throw(_("Please set the DNS Provider Key and Secret."))
 
-		verify_dns_provider = (
-			self.has_value_changed("root_domain_name")
-			or self.has_value_changed("dns_provider")
-			or self.has_value_changed("dns_provider_access_key")
-			or self.has_value_changed("dns_provider_access_secret")
-			or self.has_value_changed("dns_provider_token")
-			or self.has_value_changed("dns_provider_username")
-			or self.has_value_changed("dns_provider_client_ip")
-			or self.has_value_changed("dns_provider_key")
-			or self.has_value_changed("dns_provider_secret")
-		)
+        verify_dns_provider = (
+            self.has_value_changed("root_domain_name")
+            or self.has_value_changed("dns_provider")
+            or self.has_value_changed("dns_provider_access_key")
+            or self.has_value_changed("dns_provider_access_secret")
+            or self.has_value_changed("dns_provider_token")
+            or self.has_value_changed("dns_provider_username")
+            or self.has_value_changed("dns_provider_client_ip")
+            or self.has_value_changed("dns_provider_key")
+            or self.has_value_changed("dns_provider_secret")
+        )
 
-		if verify_dns_provider:
-			dns_provider = get_dns_provider(self)
-			dns_provider.read_dns_records("MX")
+        if verify_dns_provider:
+            dns_provider = get_dns_provider(self)
+            dns_provider.read_dns_records("MX")
 
-	def validate_signup(self) -> None:
-		"""Validates the Signup."""
+    def validate_signup(self) -> None:
+        """Validates the Signup."""
 
-		if not self.allow_signup:
-			self.signup_domains = ""
-			return
+        if not self.allow_signup:
+            self.signup_domains = ""
+            return
 
-		is_stalwart_configured(raise_exception=True)
+        is_stalwart_configured(raise_exception=True)
 
-		if not self.signup_domains:
-			frappe.throw(_("Please add at least one Signup Domain."))
+        if not self.signup_domains:
+            frappe.throw(_("Please add at least one Signup Domain."))
 
-		signup_domains = self.signup_domains.split("\n")
+        signup_domains = self.signup_domains.split("\n")
 
-		if not signup_domains:
-			frappe.throw(_("Invalid Signup Domains format. Please provide one domain per line."))
+        if not signup_domains:
+            frappe.throw(_("Invalid Signup Domains format. Please provide one domain per line."))
 
-		valid_signup_domains = []
-		for domain in signup_domains:
-			domain = domain.strip().lower()
-			if domain:
-				get_domain_by_name(domain, raise_exception=True)
-				valid_signup_domains.append(domain)
+        valid_signup_domains = []
+        for domain in signup_domains:
+            domain = domain.strip().lower()
+            if domain:
+                get_domain_service().get_by_name(domain, raise_exception=True)
+                valid_signup_domains.append(domain)
 
-		self.signup_domains = "\n".join(valid_signup_domains)
+        self.signup_domains = "\n".join(valid_signup_domains)
 
-	def validate_jmap_push_subscription_keys(self) -> None:
-		"""Validates site-level JMAP push subscription encryption keys."""
+    def validate_jmap_push_subscription_keys(self) -> None:
+        """Validates site-level JMAP push subscription encryption keys."""
 
-		p256dh = (self.jmap_push_p256dh or "").strip()
-		auth = (self.get_password("jmap_push_auth") if self.jmap_push_auth else "").strip()
-		private_key = (
-			self.get_password("jmap_push_private_key") if self.jmap_push_private_key else ""
-		).strip()
+        p256dh = (self.jmap_push_p256dh or "").strip()
+        auth = (self.get_password("jmap_push_auth") if self.jmap_push_auth else "").strip()
+        private_key = (
+            self.get_password("jmap_push_private_key") if self.jmap_push_private_key else ""
+        ).strip()
 
-		set_count = sum([bool(p256dh), bool(auth), bool(private_key)])
-		if set_count not in (0, 3):
-			frappe.throw(
-				_(
-					"JMAP Push Subscription keys are incomplete. Use Actions → Generate JMAP Push Keys to regenerate them."
-				)
-			)
+        set_count = sum([bool(p256dh), bool(auth), bool(private_key)])
+        if set_count not in (0, 3):
+            frappe.throw(
+                _(
+                    "JMAP Push Subscription keys are incomplete. Use Actions → Generate JMAP Push Keys to regenerate them."
+                )
+            )
 
-		if self.enable_jmap_push_encryption and set_count != 3:
-			frappe.throw(
-				_(
-					"Push encryption is enabled but the JMAP Push Subscription keys are not configured. Use Actions → Generate JMAP Push Keys to generate them, or disable Enable Push Encryption."
-				)
-			)
+        if self.enable_jmap_push_encryption and set_count != 3:
+            frappe.throw(
+                _(
+                    "Push encryption is enabled but the JMAP Push Subscription keys are not configured. Use Actions → Generate JMAP Push Keys to generate them, or disable Enable Push Encryption."
+                )
+            )
 
-		if set_count == 0:
-			return
+        if set_count == 0:
+            return
 
-		for value, label in (
-			(p256dh, _("P256DH")),
-			(private_key, _("Private Key")),
-			(auth, _("Auth")),
-		):
-			if not self._is_urlsafe_base64(value):
-				frappe.throw(
-					_("The JMAP Push Subscription {0} key must be URL-safe base64 encoded.").format(
-						frappe.bold(label)
-					)
-				)
+        for value, label in (
+            (p256dh, _("P256DH")),
+            (private_key, _("Private Key")),
+            (auth, _("Auth")),
+        ):
+            if not self._is_urlsafe_base64(value):
+                frappe.throw(
+                    _("The JMAP Push Subscription {0} key must be URL-safe base64 encoded.").format(
+                        frappe.bold(label)
+                    )
+                )
 
-		try:
-			from cryptography.hazmat.primitives.asymmetric import ec
-			from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-			def _b64decode(s: str) -> bytes:
-				return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+            def _b64decode(s: str) -> bytes:
+                return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
-			priv_bytes = _b64decode(private_key)
-			priv = ec.derive_private_key(int.from_bytes(priv_bytes, "big"), ec.SECP256R1())
-			computed_pub = priv.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
-			expected_pub = _b64decode(p256dh)
-			if computed_pub != expected_pub:
-				frappe.throw(
-					_("The JMAP Push Subscription Private Key does not correspond to the P256DH public key.")
-				)
-		except frappe.exceptions.ValidationError:
-			raise
-		except Exception as e:
-			frappe.throw(_("Invalid JMAP Push Subscription keys: {0}").format(str(e)))
+            priv_bytes = _b64decode(private_key)
+            priv = ec.derive_private_key(int.from_bytes(priv_bytes, "big"), ec.SECP256R1())
+            computed_pub = priv.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+            expected_pub = _b64decode(p256dh)
+            if computed_pub != expected_pub:
+                frappe.throw(
+                    _("The JMAP Push Subscription Private Key does not correspond to the P256DH public key.")
+                )
+        except frappe.exceptions.ValidationError:
+            raise
+        except Exception as e:
+            frappe.throw(_("Invalid JMAP Push Subscription keys: {0}").format(str(e)))
 
-	@frappe.whitelist()
-	def generate_jmap_push_keys(self) -> None:
-		"""Generates new JMAP push subscription encryption keys and saves them."""
+    @frappe.whitelist()
+    def generate_jmap_push_keys(self) -> None:
+        """Generates new JMAP push subscription encryption keys and saves them."""
 
-		self._generate_jmap_push_keys()
-		frappe.msgprint(_("JMAP Push keys generated successfully."), alert=True)
+        self._generate_jmap_push_keys()
+        frappe.msgprint(_("JMAP Push keys generated successfully."), alert=True)
 
-	def _generate_jmap_push_keys(self) -> None:
-		"""Generates a new ECDH P-256 key pair and auth secret for JMAP push encryption and saves them."""
+    def _generate_jmap_push_keys(self) -> None:
+        """Generates a new ECDH P-256 key pair and auth secret for JMAP push encryption and saves them."""
 
-		from cryptography.hazmat.primitives.asymmetric import ec
-		from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-		private_key = ec.generate_private_key(ec.SECP256R1())
-		private_key_bytes = private_key.private_numbers().private_value.to_bytes(32, "big")
-		public_key_bytes = private_key.public_key().public_bytes(
-			Encoding.X962, PublicFormat.UncompressedPoint
-		)
-		auth_bytes = os.urandom(16)
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        private_key_bytes = private_key.private_numbers().private_value.to_bytes(32, "big")
+        public_key_bytes = private_key.public_key().public_bytes(
+            Encoding.X962, PublicFormat.UncompressedPoint
+        )
+        auth_bytes = os.urandom(16)
 
-		self.jmap_push_p256dh = base64.urlsafe_b64encode(public_key_bytes).decode()
-		self.jmap_push_private_key = base64.urlsafe_b64encode(private_key_bytes).decode()
-		self.jmap_push_auth = base64.urlsafe_b64encode(auth_bytes).decode()
+        self.jmap_push_p256dh = base64.urlsafe_b64encode(public_key_bytes).decode()
+        self.jmap_push_private_key = base64.urlsafe_b64encode(private_key_bytes).decode()
+        self.jmap_push_auth = base64.urlsafe_b64encode(auth_bytes).decode()
 
-		self.flags.ignore_mandatory = True
-		self.flags.ignore_validate = True
-		self.save()
+        self.flags.ignore_mandatory = True
+        self.flags.ignore_validate = True
+        self.save()
 
-	@staticmethod
-	def _is_urlsafe_base64(value: str) -> bool:
-		"""Returns True if the given value is URL-safe base64 encoded."""
+    @staticmethod
+    def _is_urlsafe_base64(value: str) -> bool:
+        """Returns True if the given value is URL-safe base64 encoded."""
 
-		try:
-			padding = "=" * (-len(value) % 4)
-			base64.urlsafe_b64decode(f"{value}{padding}".encode())
-			return True
-		except Exception:
-			return False
+        try:
+            padding = "=" * (-len(value) % 4)
+            base64.urlsafe_b64decode(f"{value}{padding}".encode())
+            return True
+        except Exception:
+            return False
 
-	def handle_root_domain_change(self) -> None:
-		"""Resets DNS Record verification and notifies user after root domain change."""
+    def handle_root_domain_change(self) -> None:
+        """Resets DNS Record verification and notifies user after root domain change."""
 
-		frappe.db.set_value("DNS Record", {"is_verified": 1}, "is_verified", 0)
+        frappe.db.set_value("DNS Record", {"is_verified": 1}, "is_verified", 0)
 
-		if self.has_value_changed("root_domain_name"):
-			dns_record_list_link = f'<a href="/app/dns-record">{_("DNS Records")}</a>'
-			frappe.msgprint(
-				_("Please verify the {0} for the new {1}.").format(
-					dns_record_list_link, frappe.bold("Root Domain Name")
-				)
-			)
+        if self.has_value_changed("root_domain_name"):
+            dns_record_list_link = f'<a href="/app/dns-record">{_("DNS Records")}</a>'
+            frappe.msgprint(
+                _("Please verify the {0} for the new {1}.").format(
+                    dns_record_list_link, frappe.bold("Root Domain Name")
+                )
+            )
 
-	def clear_cache(self) -> None:
-		"""Clears the Cache."""
+    def clear_cache(self) -> None:
+        """Clears the Cache."""
 
-		frappe.cache.delete_value("mail-settings")
+        frappe.cache.delete_value("mail-settings")
 
 
 def get_signup_domains() -> list:
-	"""Returns the signup domains."""
+    """Returns the signup domains."""
 
-	settings = frappe.get_cached_doc("Mail Settings")
-	return settings.signup_domains.split("\n") if settings.signup_domains else []
+    settings = frappe.get_cached_doc("Mail Settings")
+    return settings.signup_domains.split("\n") if settings.signup_domains else []

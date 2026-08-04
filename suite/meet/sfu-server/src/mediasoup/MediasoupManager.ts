@@ -43,6 +43,9 @@ export class MediasoupManager {
 			quality: 'good' | 'poor' | 'critical',
 		) => void
 	> = [];
+	private mediaScoreListeners: Array<
+		(direction: 'send' | 'recv', kind: 'audio' | 'video', score: number) => void
+	> = [];
 
 	private peerScores = new Map<
 		string,
@@ -52,8 +55,20 @@ export class MediasoupManager {
 			lastOverallQuality?: 'good' | 'poor' | 'critical';
 		}
 	>();
+	private creatingConsumers = new Set<string>();
 
 	constructor() {
+		this.consumerManager.onClose(({ roomId, peerId, consumer }) => {
+			this.roomManager
+				.getRoom(roomId)
+				?.peers.get(peerId)
+				?.consumers.delete(consumer.id);
+		});
+		this.consumerManager.onScore((kind, score) => {
+			for (const listener of this.mediaScoreListeners) {
+				listener('recv', kind, score);
+			}
+		});
 		this.producerManager.on(
 			'score',
 			(
@@ -66,6 +81,9 @@ export class MediasoupManager {
 				// take avg of scores
 				const total = scores.reduce((sum, s) => sum + s.score, 0);
 				const avg = total / scores.length;
+				for (const listener of this.mediaScoreListeners) {
+					listener('send', kind, avg);
+				}
 
 				let peerState = this.peerScores.get(peerId);
 				if (!peerState) {
@@ -158,6 +176,48 @@ export class MediasoupManager {
 		) => void,
 	) {
 		this.networkQualityListeners.push(listener);
+	}
+
+	onTransportStateChange(
+		listener: Parameters<TransportManager['onStateChange']>[0],
+	): void {
+		this.transportManager.onStateChange(listener);
+	}
+
+	onMediaScore(
+		listener: (
+			direction: 'send' | 'recv',
+			kind: 'audio' | 'video',
+			score: number,
+		) => void,
+	): void {
+		this.mediaScoreListeners.push(listener);
+	}
+
+	async getWorkerResourceUsage(): Promise<{
+		userCpuSeconds: number;
+		systemCpuSeconds: number;
+		maxResidentMemoryBytes: number;
+	}> {
+		const usage = await Promise.allSettled(
+			this.workerManager
+				.getAllWorkers()
+				.map(({ worker }) => worker.getResourceUsage()),
+		);
+		return usage.reduce(
+			(total, result) => {
+				if (result.status === 'rejected') return total;
+				return {
+					userCpuSeconds:
+						total.userCpuSeconds + result.value.ru_utime / 1_000_000,
+					systemCpuSeconds:
+						total.systemCpuSeconds + result.value.ru_stime / 1_000_000,
+					maxResidentMemoryBytes:
+						total.maxResidentMemoryBytes + result.value.ru_maxrss * 1024,
+				};
+			},
+			{ userCpuSeconds: 0, systemCpuSeconds: 0, maxResidentMemoryBytes: 0 },
+		);
 	}
 
 	async init(): Promise<void> {
@@ -387,6 +447,15 @@ export class MediasoupManager {
 		}
 
 		const { roomId, peerId, transport } = transportData;
+		const consumerKey = `${roomId}:${peerId}:${producerId}`;
+		if (this.creatingConsumers.has(consumerKey)) {
+			throw new Error(
+				`Consumer for producer ${producerId} is already being created`,
+			);
+		}
+		const existingConsumer = this.consumerManager
+			.getConsumersByPeer(roomId, peerId)
+			.find((data) => data.consumer.producerId === producerId);
 
 		if (producerData.peerId === peerId) {
 			throw new Error(`Cannot consume own producer ${producerId}`);
@@ -404,17 +473,27 @@ export class MediasoupManager {
 			);
 		}
 
-		const result = await this.consumerManager.createConsumer(
-			transport,
-			producerData.producer,
-			producerId,
-			roomId,
-			peerId,
-			rtpCapabilities,
-		);
+		this.creatingConsumers.add(consumerKey);
+		let result: Awaited<ReturnType<ConsumerManager['createConsumer']>>;
+		try {
+			result = await this.consumerManager.createConsumer(
+				transport,
+				producerData.producer,
+				producerId,
+				roomId,
+				peerId,
+				rtpCapabilities,
+			);
+		} finally {
+			this.creatingConsumers.delete(consumerKey);
+		}
+		if (existingConsumer) {
+			this.consumerManager.closeConsumer(existingConsumer.consumer.id);
+		}
 
 		const peer = room.peers.get(peerId);
 		if (!peer) {
+			this.consumerManager.closeConsumer(result.id);
 			throw new Error(`Peer ${peerId} not found in room ${roomId}`);
 		}
 
@@ -431,6 +510,10 @@ export class MediasoupManager {
 					? producerData.producer.appData.senderId
 					: undefined,
 		};
+	}
+
+	getProducer(producerId: string) {
+		return this.producerManager.getProducer(producerId);
 	}
 
 	closeProducer(producerId: string): CloseProducerResult {
@@ -889,6 +972,17 @@ export class MediasoupManager {
 
 	get peers() {
 		return this.peerManager;
+	}
+
+	getResourceCounts(): Record<string, number> {
+		return {
+			rooms: this.roomManager.getRoomCount(),
+			peers: this.peerManager.getPeerCount(),
+			transports: this.transportManager.getTransportCount(),
+			producers: this.producerManager.getProducerCount(),
+			consumers: this.consumerManager.getConsumerCount(),
+			workers: this.workerManager.getAllWorkers().length,
+		};
 	}
 
 	async cleanup(): Promise<void> {

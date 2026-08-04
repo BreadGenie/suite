@@ -49,8 +49,8 @@ export interface MailAccountRequest extends DocType {
   is_expired: 0 | 1;
   /** Account: Data */
   account: string;
-  /** Domain: Data */
-  domain_name: string;
+  /** Aliases: Small Text */
+  aliases?: string;
   /** Send Invite: Check */
   send_invite: 0 | 1;
   /** IP Address: Data */

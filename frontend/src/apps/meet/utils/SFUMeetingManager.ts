@@ -56,7 +56,6 @@ export class SFUMeetingManager {
 					reason,
 				),
 			onRecovered: async (reason) => {
-				await this.connectionManager?.resetReceiveSide();
 				this.connectionManager?.reportRecoveryState("healthy", reason);
 			},
 			onFailed: async (_reason, result) => {
@@ -150,6 +149,7 @@ export class SFUMeetingManager {
 			const hadVideo = !!mediaHandler.videoProducer;
 			const hadAudio = !!mediaHandler.audioProducer;
 
+			await this.mediaManager.cancelPendingSubscriptions();
 			mediaHandler.cleanup();
 			this.consumerManager.clear();
 			this.mediaManager.processedConsumers.clear();

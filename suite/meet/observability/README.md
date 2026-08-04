@@ -1,0 +1,137 @@
+# Frappe Meet Observability
+
+Central Prometheus and Grafana deployment for one or more SFU servers. Prometheus is available only inside the Docker network; Caddy exposes Grafana over automatic HTTPS.
+
+## Prerequisites
+
+- A Linux server with Docker and the Docker Compose plugin.
+- DNS for the Grafana domain pointing to the server.
+- TCP ports 80 and 443 open on the server firewall.
+- Each SFU reachable from this server over HTTPS with the same `METRICS_TOKEN`.
+
+## Setup
+
+```bash
+cp .env.example .env
+mkdir -p secrets
+openssl rand -hex 32 > secrets/sfu_metrics_token
+# Prometheus must be able to read this bind-mounted file.
+PROMETHEUS_IDS="$(docker compose run --rm --no-deps --entrypoint sh prometheus -c 'printf "%s:%s" "$(id -u)" "$(id -g)"')"
+sudo chown "$PROMETHEUS_IDS" secrets/sfu_metrics_token
+sudo chmod 400 secrets/sfu_metrics_token
+```
+
+Set the same token as `METRICS_TOKEN` on every SFU. Edit `.env` with the Grafana domain and a strong admin password. Generate a password with:
+
+```bash
+openssl rand -base64 32
+```
+
+Copy the target template, then list every SFU hostname in the ignored runtime file:
+
+```bash
+cp prometheus/targets/sfu.yml.example prometheus/targets/sfu.yml
+```
+
+```yaml
+- targets:
+    - sfu-1.example.com
+    - sfu-2.example.com
+  labels:
+    environment: production
+```
+
+Start the stack:
+
+```bash
+docker compose config
+docker compose up -d
+```
+
+On Linux, if the SFU target reports `unable to read authorization credentials`, verify the mounted secret is readable by Prometheus:
+
+```bash
+docker compose exec prometheus sh -lc 'cat /run/secrets/sfu_metrics_token >/dev/null && echo readable'
+```
+
+Open `https://<GRAFANA_DOMAIN>`, sign in, and use the provisioned Prometheus datasource. Check scrape health at **Connections > Data sources > Prometheus > Explore** with:
+
+```promql
+up{job="frappe-meet-sfu"}
+```
+
+Each SFU appears under Prometheus's automatic `instance` label.
+
+## Local test
+
+Set these values in `.env`:
+
+```env
+GRAFANA_DOMAIN=localhost
+GRAFANA_ROOT_URL=http://localhost:3001
+GRAFANA_PORT=3001
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=local-test-password
+PROMETHEUS_RETENTION=7d
+```
+
+Put the same local test token in `secrets/sfu_metrics_token` and configure `prometheus/targets/local.yml` to scrape the host machine from Docker:
+
+```yaml
+- targets:
+    - host.docker.internal:3000
+  labels:
+    environment: local
+    __scheme__: http
+```
+
+Start the local SFU so that Docker can reach it:
+
+```bash
+cd ../sfu-server
+METRICS_TOKEN="$(cat ../observability/secrets/sfu_metrics_token)" HOST=0.0.0.0 yarn dev
+```
+
+In another terminal, start only Prometheus and Grafana. Caddy is not needed locally:
+
+```bash
+cd ../observability
+docker compose up -d prometheus grafana
+```
+
+Open Prometheus at `http://localhost:9090/targets` and Grafana at `http://localhost:3001`. The `frappe-meet-sfu` target should be `UP`. Test the datasource in Grafana Explore with:
+
+```promql
+up{job="frappe-meet-sfu"}
+```
+
+Stop the local stack with:
+
+```bash
+docker compose down
+```
+
+## Operations
+
+```bash
+docker compose ps
+docker compose logs -f prometheus grafana caddy
+docker compose pull
+docker compose up -d
+```
+
+Back up the `prometheus-data`, `grafana-data`, `caddy-data`, and `caddy-config` Docker volumes. Do not expose Prometheus port 9090 publicly.
+
+## Error tracking
+
+Use three Sentry projects so ownership, alerting, and releases remain independent:
+
+- Frontend: set `SUITE_FRONTEND_SENTRY_DSN` in the Frappe web process environment.
+- Backend: set `FRAPPE_SENTRY_DSN` in the Frappe web and worker process environments.
+- SFU: set `SENTRY_DSN` in each SFU deployment.
+
+Enable telemetry in System Settings to permit frontend and backend reporting. Frappe Framework provides backend coverage for Suite requests, background workers, Desk, and errors passed to `frappe.log_error()`. The unified Suite browser application reads its separate frontend DSN at runtime.
+
+The SFU is deployed separately; see `../sfu-server/deploy/.env.example`. Set `SENTRY_RELEASE` to the deployed commit or image version to make regressions actionable. The Suite frontend release defaults to the installed Suite version, while Frappe supplies its own backend release metadata.
+
+Sentry is reserved for unexpected exceptions and process failures. Prometheus remains the source for failure rates and service health, while operational and expected client/WebRTC failures remain in metrics and logs.

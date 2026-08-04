@@ -132,7 +132,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-30 09:46:15.738855",
+ "modified": "2026-07-21 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Mail",
  "name": "Mailbox Settings",
@@ -151,10 +151,16 @@
    "write": 1
   },
   {
+   "delete": 1,
+   "read": 1,
+   "role": "Suite Admin",
+   "write": 1
+  },
+  {
    "create": 1,
    "delete": 1,
    "read": 1,
-   "role": "All",
+   "role": "Suite User",
    "write": 1
   }
  ],

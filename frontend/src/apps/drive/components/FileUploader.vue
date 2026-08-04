@@ -124,7 +124,6 @@ onMounted(() => {
     },
     addRemoveLinks: true,
     accept: function (file, done) {
-      file.team = currentFolder.value.team || ''
       if (file.size == 0) {
         done('Empty files will not be uploaded.')
       } else {
@@ -132,7 +131,6 @@ onMounted(() => {
       }
     },
     sending: function (file, _, formData) {
-      formData.append('team', file.team)
       if (file.lastModified) formData.append('file_modified', file.lastModified)
       if (file.parent) formData.append('parent', file.parent)
       const path = file.newFullPath || file.webkitRelativePath || file.fullPath
@@ -151,6 +149,7 @@ onMounted(() => {
       }
     },
   })
+  dropzone.value.hiddenFileInput.dataset.testid = 'drive-file-input'
 
   dropzone.value.on('addedfile', function (file) {
     file.parent = currentFolder.value.name

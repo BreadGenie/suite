@@ -39,7 +39,7 @@ repos:
         pass_filenames: false
         files: |
           (?x)^(
-              suite/meet/e2e/.*|
+              e2e/.*|
               knip\.json|
               package\.json|
               yarn\.lock

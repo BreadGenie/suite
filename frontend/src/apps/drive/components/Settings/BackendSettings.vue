@@ -19,18 +19,6 @@
         description="Where to store Drive files, defaults to the root folder."
       />
       <FormControl
-        v-model="generalSettings.team_prefix"
-        type="select"
-        label="Team Prefix"
-        :options="[
-          { label: 'Team ID', value: 'team_id' },
-          { label: 'Team Name', value: 'team_name' },
-          { label: 'None', value: 'none' },
-        ]"
-        description="The folder name for each team, defaults to the team name."
-      />
-
-      <FormControl
         v-model="generalSettings.backend_type"
         type="select"
         label="Backend Type"
@@ -105,7 +93,6 @@ import SyncBreakdown from '@/apps/drive/components/SyncBreakdown.vue'
 const edited = ref(false)
 
 const generalSettings = reactive({
-  team_prefix: 'team_id',
   root_folder: '',
   backend_type: 'disk',
 })
@@ -153,9 +140,7 @@ const updateSettings = createResource({
   makeParams: () => ({ ...generalSettings, ...s3Settings }),
   onSuccess() {
     edited.value = false
-    toast({
-      title: 'S3 settings updated successfully',
-    })
+    toast.success('S3 settings updated successfully')
   },
 })
 </script>

@@ -16,9 +16,7 @@
 import { ref, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { call } from 'frappe-ui'
-
-import { unsyncedPresentationRecord, updatePresentationTitle } from '@/apps/slides/stores/presentation'
+import { updatePresentationTitle } from '@/apps/slides/stores/presentation'
 import { setCursorPositionAtEnd } from '@/apps/slides/utils/helpers'
 
 const props = defineProps({
@@ -35,14 +33,14 @@ const editingTitle = ref(false)
 const inputClasses = computed(() => {
 	const baseClasses = [
 		'p-1 px-2',
-		'text-base font-medium cursor-text',
+		'text-base font-medium cursor-text text-ink-gray-8',
 		'outline-none rounded-sm',
-		'focus:ring-1 focus:ring-gray-400',
+		'focus:ring-1 focus:ring-outline-gray-3',
 		'transition ease-in-out duration-400',
 		'whitespace-nowrap',
 	]
 	if (editingTitle.value) {
-		return [...baseClasses, 'text-gray-800', 'max-w-[500px]']
+		return [...baseClasses, 'max-w-[500px]']
 	} else {
 		return [...baseClasses, 'truncate', 'max-w-[500px]']
 	}
@@ -68,7 +66,6 @@ const saveTitle = async (e) => {
 
 	if (newTitle != props.title) {
 		const slug = await updatePresentationTitle(route.params.presentationId, newTitle)
-		unsyncedPresentationRecord.value.title = newTitle
 		router.replace({
 			name: 'slides-editor',
 			params: { presentationId: route.params.presentationId, slug: slug },

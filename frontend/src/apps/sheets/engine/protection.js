@@ -10,6 +10,7 @@
 // range that collapses to nothing is dropped. This matches Google Sheets and,
 // unlike the cond-format engine, handles ranges that *span* the pivot line.
 
+import { remapRect } from './ref-remap.js'
 import { deepClone } from '../utils/deep-clone.js'
 
 let _nextId = 1
@@ -103,6 +104,16 @@ export function createProtectionEngine() {
   function insertCol(at, sheet = 'Sheet1') { _shift(sheet, 'col', at, +1) }
   function deleteCol(at, sheet = 'Sheet1') { _shift(sheet, 'col', at, -1) }
 
+  function _remap(sheet, mapCol, mapRow) {
+    const s = store[sheet]
+    if (!s?.ranges) return
+    s.ranges = s.ranges
+      .map(r => { const box = remapRect(r, mapCol, mapRow); return box ? { ...r, ...box } : null })
+      .filter(Boolean)
+  }
+  function remapCols(mapCol, sheet = 'Sheet1') { _remap(sheet, mapCol, null) }
+  function remapRows(mapRow, sheet = 'Sheet1') { _remap(sheet, null, mapRow) }
+
   // ── Sheet lifecycle ──────────────────────────────────────────────────────────
 
   function renameSheet(oldName, newName) {
@@ -137,6 +148,7 @@ export function createProtectionEngine() {
     getRanges, isSheetLocked, isProtected, isAnyProtected,
     setSheetLocked, addRange, removeRange,
     insertRow, deleteRow, insertCol, deleteCol,
+    remapCols, remapRows,
     renameSheet, duplicateSheet, deleteSheet,
     snapshot, restore,
   }

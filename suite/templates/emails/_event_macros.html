@@ -1,0 +1,78 @@
+{#- Reusable blocks shared by the calendar event emails. Import with context so the macros can
+    read `font` from the render context:  {% import "templates/emails/_event_macros.html" as m with context %} -#}
+
+{#- The event details card: a labelled When/Where/Organizer table. `bold` renders the date value
+    in bold (used by invite/update; the cancel email passes bold=false and label="Was"). -#}
+{%- macro details_table(when_label, when_value, timezone, location, organizer_name, organizer_email, bold=false) -%}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f8f8f8; border-radius: 12px; margin: 22px 0;">
+	<tr>
+		<td style="padding: 6px 18px;">
+			<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-family: {{ font }};">
+				<tr>
+					<td style="padding: 12px 0; font-size: 14px; color: #7c7c7c; width: 88px; vertical-align: top; border-bottom: 1px solid #ededed;">{{ when_label }}</td>
+					<td style="padding: 12px 0; font-size: 14px; color: #383838; line-height: 1.5; border-bottom: 1px solid #ededed;">{% if bold %}<b style="font-weight: 600; color: #171717;">{{ when_value }}</b>{% else %}{{ when_value }}{% endif %}{% if timezone %}<br />{{ timezone }}{% endif %}</td>
+				</tr>
+				{% if location %}
+				<tr>
+					<td style="padding: 12px 0; font-size: 14px; color: #7c7c7c; vertical-align: top; border-bottom: 1px solid #ededed;">Where</td>
+					<td style="padding: 12px 0; font-size: 14px; color: #383838; line-height: 1.5; border-bottom: 1px solid #ededed;">{{ location }}</td>
+				</tr>
+				{% endif %}
+				<tr>
+					<td style="padding: 12px 0; font-size: 14px; color: #7c7c7c; vertical-align: top;">Organizer</td>
+					<td style="padding: 12px 0; font-size: 14px; color: #383838; line-height: 1.5;">{% if organizer_name and organizer_name != organizer_email %}{{ organizer_name }} &middot; <a href="mailto:{{ organizer_email }}" style="color: #007be0; text-decoration: none;">{{ organizer_email }}</a>{% else %}<a href="mailto:{{ organizer_email }}" style="color: #007be0; text-decoration: none;">{{ organizer_email }}</a>{% endif %}</td>
+				</tr>
+			</table>
+		</td>
+	</tr>
+</table>
+{%- endmacro -%}
+
+{#- The Frappe Meet card (logo + link + Join). Renders nothing when the event has no meet link. -#}
+{%- macro meet_card(meet) -%}
+{% if meet %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f8f8f8; border-radius: 12px; margin-top: 20px;">
+	<tr>
+		<td style="padding: 14px 16px; font-family: {{ font }};">
+			<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+				<tr>
+					<td width="24" style="vertical-align: middle; padding-right: 12px;">
+						<img src="cid:meetlogo" width="24" height="24" alt="Frappe Meet" style="display: block; border: 0; width: 24px; height: 24px;" />
+					</td>
+					<td style="vertical-align: middle;">
+						<div style="font-size: 14px; font-weight: 600; color: #171717;">Frappe Meet</div>
+						<div style="font-size: 13px; color: #7c7c7c; margin-top: 1px;">{{ meet.label }}</div>
+					</td>
+					<td style="vertical-align: middle; text-align: right; white-space: nowrap;">
+						<a href="{{ meet.url }}" style="display: inline-block; padding: 7px 15px; background-color: #ffffff; color: #383838; border: 1px solid #e2e2e2; text-decoration: none; border-radius: 10px; font-family: {{ font }}; font-size: 14px; font-weight: 500;">Join</a>
+					</td>
+				</tr>
+			</table>
+		</td>
+	</tr>
+</table>
+{% endif %}
+{%- endmacro -%}
+
+{#- The RSVP prompt + Yes/Maybe/No buttons. Renders nothing when there are no rsvp links. -#}
+{%- macro rsvp_block(rsvp, prompt) -%}
+{% if rsvp %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin: 26px 0;">
+	<tr><td style="height: 1px; line-height: 1px; font-size: 0; background-color: #e2e2e2;">&nbsp;</td></tr>
+</table>
+<p style="margin: 0 0 12px; font-size: 14px; color: #7c7c7c;">{{ prompt }}</p>
+<table role="presentation" cellpadding="0" cellspacing="0">
+	<tr>
+		<td style="padding-right: 10px;">
+			<a href="{{ rsvp.accept }}" style="display: inline-block; padding: 10px 20px; background-color: #171717; color: #ffffff; text-decoration: none; border-radius: 10px; font-family: {{ font }}; font-size: 14px; font-weight: 600;">Yes</a>
+		</td>
+		<td style="padding-right: 10px;">
+			<a href="{{ rsvp.tentative }}" style="display: inline-block; padding: 9px 19px; background-color: #ffffff; color: #383838; border: 1px solid #e2e2e2; text-decoration: none; border-radius: 10px; font-family: {{ font }}; font-size: 14px; font-weight: 500;">Maybe</a>
+		</td>
+		<td>
+			<a href="{{ rsvp.decline }}" style="display: inline-block; padding: 9px 19px; background-color: #ffffff; color: #383838; border: 1px solid #e2e2e2; text-decoration: none; border-radius: 10px; font-family: {{ font }}; font-size: 14px; font-weight: 500;">No</a>
+		</td>
+	</tr>
+</table>
+{% endif %}
+{%- endmacro -%}

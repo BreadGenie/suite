@@ -3,23 +3,29 @@
 		:to
 		:is-selected
 		:selectable
+		:selection-mode
+		:hide-avatar
 		:unread="!mail.seen"
 		:hide-sender
-		:avatar-label="getSenderInitial(mail)"
+		:avatar-label="avatarLabel"
 		:avatar-image="mail.user_image"
 		:datetime="mail.received_at"
 		:subject-italic="!mail.subject"
 		:preview-italic="!mail.preview"
+		:account-label="accountLabel"
 		@set-selected="(selected: boolean) => emit('setSelected', selected)"
 	>
 		<template #sender><span v-html="highlight(header)" /></template>
 
 		<template #badges>
-			<!-- All Inboxes: which account received this mail. -->
-			<div v-if="accountLabel" class="text-ink-gray-4 flex shrink-0 items-center gap-1 text-xs">
-				<span aria-hidden="true">·</span>
-				<span>{{ __('in {0}', [accountLabel]) }}</span>
-			</div>
+			<!-- How many messages the thread holds — only worth saying once it holds more than one. -->
+			<span
+				v-if="messageCount > 1"
+				class="text-ink-gray-5 shrink-0 text-xs"
+				:aria-label="__('{0} messages', [messageCount])"
+			>
+				{{ messageCount }}
+			</span>
 			<Badge v-if="mail.draft" size="sm" :label="__('Draft')" theme="red" />
 		</template>
 
@@ -60,8 +66,9 @@
 						:file-name="attachment.filename"
 						:blob-i-d="attachment.blob_id"
 						:type="attachment.type"
+						:account="accountId"
 						class="mr-2"
-						:class="isFullWidth ? 'max-w-32' : 'max-w-20'"
+						:class="isFullWidth ? 'max-w-32' : 'max-w-44 sm:max-w-20'"
 						@click.stop.prevent="openAttachment(idx)"
 					/>
 				</Tooltip>
@@ -135,6 +142,7 @@
 			v-model="showAttachmentViewer"
 			:attachments="mail.attachments"
 			:initial-index="attachmentIndex"
+			:account="accountId"
 		/>
 	</MailRow>
 </template>
@@ -146,7 +154,13 @@ import { Download, Loader } from 'lucide-vue-next'
 import { Badge, Popover, Tooltip } from 'frappe-ui'
 
 import { getAttachmentUrl } from '@/apps/mail/resources'
-import { downloadUrlAsFile, getFileIcon, getFormattedRecipients, getSenderInitial } from '@/apps/mail/utils'
+import { downloadUrlAsFile, getFileIcon, getFormattedRecipients } from '@/apps/mail/utils'
+import {
+	threadAvatarLabel,
+	threadDisplayName,
+	threadParticipants,
+} from '@/apps/mail/utils/participants'
+import { useOwnEmails } from '@/apps/mail/utils/composables'
 import { userStore } from '@/apps/mail/stores/user'
 import AttachmentCapsule from '@/apps/mail/components/AttachmentCapsule.vue'
 import AttachmentViewer from '@/apps/mail/components/AttachmentViewer.vue'
@@ -163,6 +177,9 @@ const {
 	accountLabel,
 	selectable = true,
 	hideSender = false,
+	selectionMode = false,
+	threadRouteName = 'mail-mail',
+	hideAvatar = false,
 } = defineProps<{
 	mailbox: string
 	mail: Thread
@@ -176,6 +193,13 @@ const {
 	selectable?: boolean
 	// Set on the members of an expanded stack, whose stack row already names the sender.
 	hideSender?: boolean
+	// Mobile selection mode — forwarded to MailRow.
+	selectionMode?: boolean
+	// Which route the row links to. All Inboxes points at its own thread route so opening a
+	// mail stays in the merged list instead of navigating into one account's mailbox.
+	threadRouteName?: string
+	// Forwarded to MailRow — see there.
+	hideAvatar?: boolean
 }>()
 
 const emit = defineEmits([
@@ -189,9 +213,10 @@ const emit = defineEmits([
 
 const route = useRoute()
 const { mailboxIds } = userStore()
+const ownEmails = useOwnEmails()
 
 const to = computed(() => ({
-	name: 'mail-mail',
+	name: threadRouteName,
 	params: {
 		accountId: accountId || route.params.accountId,
 		mailbox,
@@ -200,22 +225,45 @@ const to = computed(() => ({
 	query: route.query,
 }))
 
-const mailboxes = computed(() => mail.mailboxes.map((m) => m.mailbox_id))
-
 const mailboxesToShow = computed(() => mail.mailboxes.filter((m) => m.mailbox_id !== mailbox))
 
 const attachments = computed(
 	() => mail.attachments.filter((m) => m.filename && m.disposition === 'attachment') || [],
 )
 
-const header = computed(() => {
-	const isOutgoing =
-		mailboxes.value.includes(mailboxIds.sent) || mailboxes.value.includes(mailboxIds.drafts)
-
-	return isOutgoing
-		? getFormattedRecipients(mail.recipients) || __('To:')
-		: mail.from_name || mail.from_email
+// Sent and Drafts are about who the mail is going to, so those rows name the recipients. Everywhere
+// else the row names the thread's participants.
+//
+// In a mailbox it is the VIEW that decides this, not whether the thread happens to hold a sent
+// message: a thread you have answered carries a sent copy wherever it sits, so testing the row's
+// mailboxes named recipients all over Inbox and Archive. Worse, those mailboxes come from the
+// thread's message in the current mailbox while `recipients` comes from its latest message anywhere
+// — on an archived thread whose newest mail is an incoming reply, the row took "outgoing" from its
+// own sent copy and then named that reply's recipient: you.
+//
+// Search results are the exception: they are single messages with no thread behind them and no
+// participants to name, so there the message's own mailboxes still answer it — otherwise a mail you
+// sent, found in search, would go by your own name rather than by who you sent it to.
+const isOutgoing = computed(() => {
+	if (mailbox === 'search')
+		return mail.mailboxes.some(
+			(m) => m.mailbox_id === mailboxIds.sent || m.mailbox_id === mailboxIds.drafts,
+		)
+	return mailbox === mailboxIds.sent || mailbox === mailboxIds.drafts
 })
+
+// Read off the conversation the row already carries; empty for a search result, which has none.
+const participants = computed(() => threadParticipants(mail.messages, ownEmails.value))
+
+const header = computed(() => {
+	if (isOutgoing.value) return getFormattedRecipients(mail.recipients) || __('To:')
+	return threadDisplayName(participants.value, mail)
+})
+
+// Gmail-style count of how many messages the conversation holds, shown once there's more than one.
+const messageCount = computed(() => mail.messages?.length ?? 0)
+
+const avatarLabel = computed(() => threadAvatarLabel(participants.value, mail))
 
 // In search results, highlight the matched query term. Escape the text first (so any markup in the
 // content is neutralized), then wrap matches in <mark> — the only HTML we inject — for safe v-html.
@@ -234,7 +282,7 @@ const highlight = (text?: string) => {
 	if (!term) return escaped
 	return escaped.replace(
 		new RegExp(`(${escapeRegExp(escapeHtml(term))})`, 'gi'),
-		'<mark class="bg-surface-yellow-5 text-ink-gray-9">$1</mark>',
+		'<mark class="bg-surface-yellow-5 text-ink-gray-8">$1</mark>',
 	)
 }
 
@@ -252,17 +300,15 @@ const currentlyDownloading = ref<string[]>([])
 
 const downloadAttachment = async (attachment: Attachment) => {
 	currentlyDownloading.value.push(attachment.blob_id)
-	const url = await getAttachmentUrl(attachment.blob_id, attachment.type)
-	if (!url) {
+	try {
+		const url = await getAttachmentUrl(attachment.blob_id, attachment.type, accountId)
+		if (url) downloadUrlAsFile(url, attachment.filename || 'attachment')
+	} catch {
+		// the resource's onError already raised a toast; just stop spinning
+	} finally {
 		currentlyDownloading.value = currentlyDownloading.value.filter(
 			(id) => id !== attachment.blob_id,
 		)
-		return
 	}
-
-	downloadUrlAsFile(url, attachment.filename || 'attachment')
-	currentlyDownloading.value = currentlyDownloading.value.filter(
-		(id) => id !== attachment.blob_id,
-	)
 }
 </script>

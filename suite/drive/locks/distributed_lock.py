@@ -6,7 +6,7 @@ class FileLockedError(Exception):
     pass
 
 
-class DistributedLock(object):
+class DistributedLock:
     def __init__(self, path, exclusive, ttl=60):
         self.path = path
         self.exclusive = exclusive

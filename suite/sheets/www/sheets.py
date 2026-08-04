@@ -3,7 +3,6 @@ import os
 
 import frappe
 
-
 # Bundle URL resolution ─────────────────────────────────────────────────────
 #
 # Vite emits content-hashed filenames (e.g. `index.abc123.js`) plus a manifest
@@ -23,7 +22,10 @@ def _read_asset_manifest() -> dict:
     global _ASSET_CACHE, _ASSET_CACHE_MTIME
     path = os.path.join(
         frappe.get_app_path("suite", "sheets"),
-        "public", "sheets", ".vite", "manifest.json",
+        "public",
+        "sheets",
+        ".vite",
+        "manifest.json",
     )
     try:
         mtime = os.path.getmtime(path)
@@ -44,10 +46,10 @@ def _read_asset_manifest() -> dict:
 def _asset_paths() -> dict:
     manifest = _read_asset_manifest()
     entry = manifest.get("index.html") or {}
-    js  = entry.get("file") or "index.js"
-    css = entry.get("css")  or ["index.css"]
+    js = entry.get("file") or "index.js"
+    css = entry.get("css") or ["index.css"]
     return {
-        "js":  _ASSET_BASE + js,
+        "js": _ASSET_BASE + js,
         "css": [_ASSET_BASE + c for c in css],
     }
 
@@ -77,16 +79,16 @@ def get_context(context):
     # `sid` is treated the same way Frappe Desk does — injected into the
     # rendered HTML so JS can read it; an XSS already implies full session
     # compromise via cookie auth, so this doesn't widen the blast radius.
-    context.collab_v2     = bool(frappe.conf.get("collab_v2") or False)
+    context.collab_v2 = bool(frappe.conf.get("collab_v2") or False)
     context.collab_ws_url = frappe.conf.get("collab_ws_url") or None
-    context.session_sid   = getattr(frappe.session, "sid", "") or ""
+    context.session_sid = getattr(frappe.session, "sid", "") or ""
 
     # Sitename + socketio_port let the SPA stand up its own `frappe.realtime`
     # against the site's socket.io namespace. Without these, the legacy
     # presence path silently has no transport on the public www page and
     # the avatar pile stays empty even with concurrent users on the sheet.
-    context.sitename       = frappe.local.site
-    context.socketio_port  = frappe.conf.get("socketio_port") or 9000
+    context.sitename = frappe.local.site
+    context.socketio_port = frappe.conf.get("socketio_port") or 9000
 
     # AI Assist gating for the SPA topbar. `extend_bootinfo` is desk-only, so —
     # like the collab flags above — these are seeded here into the SPA's boot:
@@ -102,9 +104,7 @@ def get_context(context):
         # The keyless "mock"/"demo" model counts as configured so the button
         # shows for a local, no-spend trial.
         model = (ai.model or "").strip().lower()
-        has_creds = model in ("mock", "demo") or bool(
-            ai.get_password("api_key", raise_exception=False)
-        )
+        has_creds = model in ("mock", "demo") or bool(ai.get_password("api_key", raise_exception=False))
         context.ai_assist_enabled = bool(ai.enabled and has_creds)
     except Exception:
         pass
@@ -116,9 +116,8 @@ def get_context(context):
     # `sheets_sentry_dsn` in site_config.json. The SPA's
     # frontend/src/utils/sentry.js reads these off window.frappe.boot
     # and short-circuits when the DSN is empty.
-    context.sentry_dsn         = frappe.conf.get("sheets_sentry_dsn") or ""
-    context.sentry_environment = (
-        frappe.conf.get("sheets_sentry_environment")
-        or ("development" if frappe.conf.get("developer_mode") else "production")
+    context.sentry_dsn = frappe.conf.get("sheets_sentry_dsn") or ""
+    context.sentry_environment = frappe.conf.get("sheets_sentry_environment") or (
+        "development" if frappe.conf.get("developer_mode") else "production"
     )
     context.sentry_release = frappe.conf.get("sheets_sentry_release") or ""

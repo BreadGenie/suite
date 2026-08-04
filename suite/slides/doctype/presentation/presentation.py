@@ -11,6 +11,7 @@ import uuid
 import frappe
 from frappe.core.doctype.file.file import get_local_image
 from frappe.model.document import Document
+from frappe.query_builder.functions import Count
 from frappe.utils.caching import redis_cache
 
 from suite.drive.api.permissions import user_has_permission
@@ -22,512 +23,559 @@ MAX_THUMBNAIL_BYTES = 6 * 1024 * 1024
 
 
 class Presentation(Document):
-	def before_save(self):
-		self.slug = slug(self.title)
+    def before_save(self):
+        self.slug = slug(self.title)
 
-	def validate(self):
-		if self.is_composite:
-			if not self.reference_presentations:
-				frappe.throw(
-					"Please add at least one reference presentation to create a composite presentation."
-				)
+    def validate(self):
+        if self.is_composite:
+            if not self.reference_presentations:
+                frappe.throw(
+                    "Please add at least one reference presentation to create a composite presentation."
+                )
 
-			for ref in self.reference_presentations:
-				ref_doc = frappe.get_cached_doc("Presentation", ref.presentation)
-				if not is_public_presentation(ref_doc.name):
-					frappe.throw(
-						f"Reference presentation '{ref_doc.title}' must be public to create a composite presentation."
-					)
+            for ref in self.reference_presentations:
+                ref_doc = frappe.get_cached_doc("Presentation", ref.presentation)
+                if not is_public_presentation(ref_doc.name):
+                    frappe.throw(
+                        f"Reference presentation '{ref_doc.title}' must be public to create a composite presentation."
+                    )
 
-	def after_insert(self):
-		if self.is_template:
-			return
-		self.create_drive_file()
+    def after_insert(self):
+        if self.is_template:
+            return
+        self.create_drive_file()
 
-	def on_update(self):
-		# composite decks are always public — a system invariant, enforced directly
-		# since File.share() would require the saver to hold a share grant
-		if self.is_composite and not is_public_presentation(self.name):
-			file = DriveFile.get_for_doc("Presentation", self.name)
-			if not file:
-				return
-			existing = frappe.db.get_value("Drive Permission", {"entity": file, "user": "", "team": 0})
-			perm = (
-				frappe.get_doc("Drive Permission", existing)
-				if existing
-				else frappe.new_doc("Drive Permission").update({"entity": file, "user": ""})
-			)
-			perm.read = 1
-			perm.save(ignore_permissions=True)
+    def on_update(self):
+        # composite decks are always public — a system invariant, enforced directly
+        # since File.share() would require the saver to hold a share grant
+        if self.is_composite and not is_public_presentation(self.name):
+            file = DriveFile.get_for_doc("Presentation", self.name)
+            if not file:
+                return
+            existing = frappe.db.get_value("Drive Permission", {"entity": file, "user": "", "deny": 0})
+            perm = (
+                frappe.get_doc("Drive Permission", existing)
+                if existing
+                else frappe.new_doc("Drive Permission").update({"entity": file, "user": ""})
+            )
+            perm.read = 1
+            perm.save(ignore_permissions=True)
 
-	def create_drive_file(self, parent: str | None = None):
-		return DriveFile.create_for_doc(
-			self,
-			parent=parent or self.flags.get("drive_parent"),
-			mime_type="frappe/slides",
-			file_type="Presentation",
-		)
+    def create_drive_file(self, parent: str | None = None):
+        return DriveFile.create_for_doc(
+            self,
+            parent=parent or self.flags.get("drive_parent"),
+            mime_type="frappe/slides",
+            file_type="Presentation",
+        )
+
+
+ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
 @frappe.whitelist()
 def save_base64_image(base64_data: str, presentation_name: str, prefix: str) -> str:
-	header, b64 = base64_data.split(",", 1)
-	ext = header.split("/")[1].split(";")[0]
-	filename = f"{prefix}-{uuid.uuid4().hex[:6]}.{ext}"
+    presentation = frappe.get_doc("Presentation", presentation_name)
+    presentation.check_permission("write")
 
-	file_doc = frappe.get_doc(
-		{
-			"doctype": "File",
-			"file_name": filename,
-			"content": base64.b64decode(b64),
-			"is_private": 1,
-			"attached_to_doctype": "Presentation",
-			"attached_to_name": presentation_name,
-		}
-	).insert()
+    match = re.match(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.+)$", base64_data or "", re.DOTALL)
+    if not match:
+        frappe.throw("Invalid image data")
 
-	return file_doc.file_url
+    ext = match.group(1).lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        frappe.throw("Unsupported image type")
+
+    try:
+        content = base64.b64decode(match.group(2), validate=True)
+    except Exception:
+        frappe.throw("Malformed base64 image content")
+
+    filename = f"{prefix}-{uuid.uuid4().hex[:6]}.{ext}"
+
+    file_doc = frappe.get_doc(
+        {
+            "doctype": "File",
+            "file_name": filename,
+            "content": content,
+            "is_private": 1,
+            "attached_to_doctype": "Presentation",
+            "attached_to_name": presentation_name,
+        }
+    ).insert()
+
+    return file_doc.file_url
 
 
 def get_thumbnail_content(base64_data: str) -> tuple[bytes, str]:
-	match = re.match(r"^data:(image/[^;]+);base64,(.+)$", base64_data or "", re.DOTALL)
-	if not match:
-		frappe.throw("Invalid thumbnail data")
+    match = re.match(r"^data:(image/[^;]+);base64,(.+)$", base64_data or "", re.DOTALL)
+    if not match:
+        frappe.throw("Invalid thumbnail data")
 
-	mime_type, encoded_content = match.groups()
-	if mime_type != "image/webp":
-		frappe.throw("Unsupported thumbnail image type")
+    mime_type, encoded_content = match.groups()
+    if mime_type != "image/webp":
+        frappe.throw("Unsupported thumbnail image type")
 
-	try:
-		content = base64.b64decode(encoded_content, validate=True)
-	except Exception:
-		frappe.throw("Invalid thumbnail image data")
+    try:
+        content = base64.b64decode(encoded_content, validate=True)
+    except Exception:
+        frappe.throw("Invalid thumbnail image data")
 
-	if len(content) > MAX_THUMBNAIL_BYTES:
-		frappe.throw("Thumbnail image is too large")
+    if len(content) > MAX_THUMBNAIL_BYTES:
+        frappe.throw("Thumbnail image is too large")
 
-	return content, "webp"
+    return content, "webp"
 
 
 def replace_thumbnail_file(presentation: Document, base64_data: str) -> str:
-	content, ext = get_thumbnail_content(base64_data)
-	presentation_name = presentation.name
-	file_name = f"presentation-thumbnail-{presentation_name}.{ext}"
+    content, ext = get_thumbnail_content(base64_data)
+    presentation_name = presentation.name
+    file_name = f"presentation-thumbnail-{presentation_name}.{ext}"
 
-	delete_existing_thumbnail_files(presentation, file_name)
+    delete_existing_thumbnail_files(presentation, file_name)
 
-	return create_thumbnail_file(presentation_name, file_name, content)
+    return create_thumbnail_file(presentation_name, file_name, content)
 
 
 def delete_existing_thumbnail_files(presentation: Document, file_name: str) -> None:
-	file_doc_names = set()
+    file_doc_names = set()
 
-	file_doc_names.update(
-		frappe.get_all(
-			"File",
-			filters={
-				"attached_to_doctype": "Presentation",
-				"attached_to_name": presentation.name,
-				"file_name": file_name,
-				"is_private": 1,
-			},
-			pluck="name",
-		)
-	)
+    file_doc_names.update(
+        frappe.get_all(
+            "File",
+            filters={
+                "attached_to_doctype": "Presentation",
+                "attached_to_name": presentation.name,
+                "file_name": file_name,
+                "is_private": 1,
+            },
+            pluck="name",
+        )
+    )
 
-	for file_doc_name in file_doc_names:
-		frappe.delete_doc("File", file_doc_name)
+    for file_doc_name in file_doc_names:
+        frappe.delete_doc("File", file_doc_name)
 
 
 def create_thumbnail_file(presentation_name: str, file_name: str, content: bytes) -> str:
-	file = frappe.get_doc(
-		{
-			"doctype": "File",
-			"attached_to_doctype": "Presentation",
-			"attached_to_name": presentation_name,
-			"file_name": file_name,
-			"is_private": 1,
-			"content": content,
-		}
-	).insert()
+    file = frappe.get_doc(
+        {
+            "doctype": "File",
+            "attached_to_doctype": "Presentation",
+            "attached_to_name": presentation_name,
+            "file_name": file_name,
+            "is_private": 1,
+            "content": content,
+        }
+    ).insert()
 
-	return file.file_url
+    return file.file_url
 
 
 @frappe.whitelist()
 def save_presentation_thumbnail(presentation_name: str, base64_data: str) -> str:
-	presentation = frappe.get_doc("Presentation", presentation_name)
-	presentation.check_permission("write")
+    presentation = frappe.get_doc("Presentation", presentation_name)
+    presentation.check_permission("write")
 
-	file_url = replace_thumbnail_file(presentation, base64_data)
+    file_url = replace_thumbnail_file(presentation, base64_data)
 
-	if presentation.thumbnail != file_url:
-		presentation.db_set("thumbnail", file_url)
-	return file_url
+    if presentation.thumbnail != file_url:
+        presentation.db_set("thumbnail", file_url)
+    return file_url
 
 
 def slug(text: str) -> str:
-	return text.lower().replace(" ", "-")
+    return text.lower().replace(" ", "-")
 
 
 # whitelist needed for drive integration
 @frappe.whitelist()
 def get_presentation_thumbnail(presentation_name: str, index: int | None = 1) -> str:
-	"""Returns the thumbnail of a presentation."""
-	return frappe.get_value("Presentation", presentation_name, "thumbnail") or ""
+    """Returns the thumbnail of a presentation."""
+    return frappe.get_value("Presentation", presentation_name, "thumbnail") or ""
 
 
 @frappe.whitelist()
 def get_presentations() -> list[dict]:
-	"""
-	Returns a list of presentation details
-	- info and presentation thumbnail
-	"""
-	presentations = frappe.get_list(
-		"Presentation",
-		fields=["name", "title", "owner", "creation", "modified_by", "modified", "thumbnail"],
-		order_by="modified desc",
-		filters=[["owner", "=", frappe.session.user], ["is_template", "=", 0]],
-	)
+    """
+    Returns a list of presentation details
+    - info and presentation thumbnail
+    """
+    presentations = frappe.get_list(
+        "Presentation",
+        fields=["name", "title", "owner", "creation", "modified_by", "modified", "thumbnail"],
+        order_by="modified desc",
+        filters=[["owner", "=", frappe.session.user], ["is_template", "=", 0]],
+    )
 
-	for presentation in presentations:
-		presentation["slide_count"] = frappe.db.count("Slide", {"parent": presentation["name"]})
+    counts = get_slide_counts([p["name"] for p in presentations])
+    for presentation in presentations:
+        presentation["slide_count"] = counts.get(presentation["name"], 0)
 
-	return presentations
+    return presentations
+
+
+def get_slide_counts(presentation_names: list[str]) -> dict[str, int]:
+    """Returns a dict mapping presentation names to their slide count."""
+    if not presentation_names:
+        return {}
+
+    Slide = frappe.qb.DocType("Slide")
+    return dict(
+        (
+            frappe.qb.from_(Slide)
+            .select(Slide.parent, Count("*"))
+            .where(Slide.parenttype == "Presentation")
+            .where(Slide.parent.isin(presentation_names))
+            .groupby(Slide.parent)
+        ).run()
+    )
 
 
 @frappe.whitelist()
 def update_slide_attachments(parent: str, slide: dict | str):
-	slide = json.loads(slide) if isinstance(slide, str) else slide
+    frappe.get_doc("Presentation", parent).check_permission("write")
 
-	elements_data = slide.get("elements") or "[]"
-	elements = elements_data if isinstance(elements_data, list) else json.loads(elements_data)
-	for element in elements:
-		element["id"] = "".join(random.choices(string.ascii_lowercase + string.digits, k=9))
-		if element.get("src") and element["src"].startswith("/private"):
-			element["attachmentName"] = get_attachment(parent, element["src"])
+    slide = json.loads(slide) if isinstance(slide, str) else slide
 
-	slide["elements"] = json.dumps(elements)
+    elements_data = slide.get("elements") or "[]"
+    elements = elements_data if isinstance(elements_data, list) else json.loads(elements_data)
+    for element in elements:
+        element["id"] = "".join(random.choices(string.ascii_lowercase + string.digits, k=9))
+        if element.get("src") and element["src"].startswith("/private"):
+            element["attachmentName"] = get_attachment(parent, element["src"])
 
-	return slide
+    slide["elements"] = json.dumps(elements)
+
+    return slide
 
 
 def apply_slide_layout(slide, ref_id, parent):
-	layout_slide = frappe.get_doc("Slide", ref_id)
+    layout_slide = frappe.get_doc("Slide", ref_id)
 
-	slide_dict = layout_slide.as_dict()
-	slide_dict = update_slide_attachments(parent, slide_dict)
+    slide_dict = layout_slide.as_dict()
+    slide_dict = update_slide_attachments(parent, slide_dict)
 
-	for key, value in slide_dict.items():
-		setattr(slide, key, value)
+    for key, value in slide_dict.items():
+        setattr(slide, key, value)
 
 
 def create_new_slide(parent, ref_id):
-	"""
-	Creates a new slide with the given reference slide id.
-	"""
-	slide = frappe.new_doc("Slide")
+    """
+    Creates a new slide with the given reference slide id.
+    """
+    slide = frappe.new_doc("Slide")
 
-	apply_slide_layout(slide, ref_id, parent)
+    apply_slide_layout(slide, ref_id, parent)
 
-	slide.parent = parent
-	slide.parentfield = "slides"
-	slide.parenttype = "Presentation"
-	slide.save()
+    slide.parent = parent
+    slide.parentfield = "slides"
+    slide.parenttype = "Presentation"
+    slide.save()
 
-	return slide
+    return slide
 
 
 def get_slides_from_ref(parent, theme, duplicate_from):
-	ref_name = duplicate_from or theme or "Light"
-	ref_presentation = frappe.get_doc("Presentation", ref_name)
+    ref_name = duplicate_from or theme or "Light"
+    ref_presentation = frappe.get_doc("Presentation", ref_name)
 
-	slides = []
+    slides = []
 
-	if duplicate_from:
-		for slide in ref_presentation.slides:
-			new_slide = create_new_slide(parent, slide.name)
-			new_slide.idx = slide.idx
-			slides.append(new_slide)
-	else:
-		first_index = 2 if ref_presentation.title in ("Light", "Dark") else 0
-		first_slide = create_new_slide(parent, ref_presentation.slides[first_index].name)
-		first_slide.idx = 1
-		slides.append(first_slide)
+    if duplicate_from:
+        for slide in ref_presentation.slides:
+            new_slide = create_new_slide(parent, slide.name)
+            new_slide.idx = slide.idx
+            slides.append(new_slide)
+    else:
+        first_index = 2 if ref_presentation.title in ("Light", "Dark") else 0
+        first_slide = create_new_slide(parent, ref_presentation.slides[first_index].name)
+        first_slide.idx = 1
+        slides.append(first_slide)
 
-	return slides
+    return slides
 
 
 def is_system_template(template_title: str) -> bool:
-	return template_title in SYSTEM_TEMPLATE_TITLES
+    return template_title in SYSTEM_TEMPLATE_TITLES
 
 
 def get_template_thumbnail(template_title: str, index: int) -> str:
-	template_title = (template_title or "light").lower()
-	return f"/assets/suite/slides/frontend/images/layouts/{template_title}/thumbnail-{index}.webp"
+    template_title = (template_title or "light").lower()
+    return f"/assets/suite/slides/frontend/images/layouts/{template_title}/thumbnail-{index}.webp"
 
 
 def get_template_cover_thumbnail(template):
-	template_title, template_thumbnail = frappe.get_value(
-		"Presentation",
-		template,
-		["title", "thumbnail"],
-	)
-	return (
-		get_template_thumbnail(template_title, 3)
-		if is_system_template(template_title)
-		else template_thumbnail
-	)
+    template_title, template_thumbnail = frappe.get_value(
+        "Presentation",
+        template,
+        ["title", "thumbnail"],
+    )
+    return (
+        get_template_thumbnail(template_title, 3)
+        if is_system_template(template_title)
+        else template_thumbnail
+    )
 
 
 def set_duplicate_metadata(presentation, duplicate_from):
-	src_title, src_theme, src_thumbnail = frappe.get_value(
-		"Presentation",
-		duplicate_from,
-		["title", "theme", "thumbnail"],
-	)
-	presentation.title = f"Copy of {src_title}"
-	presentation.theme = src_theme
-	presentation.thumbnail = src_thumbnail
+    src_title, src_theme, src_thumbnail = frappe.get_value(
+        "Presentation",
+        duplicate_from,
+        ["title", "theme", "thumbnail"],
+    )
+    presentation.title = f"Copy of {src_title}"
+    presentation.theme = src_theme
+    presentation.thumbnail = src_thumbnail
 
 
 def set_template_metadata(presentation, template):
-	presentation.title = "Untitled"
-	presentation.theme = template
-	presentation.thumbnail = get_template_cover_thumbnail(template)
+    presentation.title = "Untitled"
+    presentation.theme = template
+    presentation.thumbnail = get_template_cover_thumbnail(template)
 
 
 @frappe.whitelist()
 def create_presentation(
-	template: str | None = None, duplicate_from: str | None = None, parent: str | None = None
+    template: str | None = None, duplicate_from: str | None = None, parent: str | None = None
 ):
-	if parent and not user_has_permission(parent, "upload"):
-		frappe.throw(
-			"Cannot access folder due to insufficient permissions",
-			frappe.PermissionError,
-		)
+    if parent and not user_has_permission(parent, "upload"):
+        frappe.throw(
+            "Cannot access folder due to insufficient permissions",
+            frappe.PermissionError,
+        )
 
-	presentation = frappe.new_doc("Presentation")
-	if duplicate_from:
-		if not frappe.has_permission("Presentation", "read", duplicate_from):
-			frappe.throw("You cannot duplicate this presentation", frappe.PermissionError)
-		set_duplicate_metadata(presentation, duplicate_from)
-	else:
-		set_template_metadata(presentation, template)
-	presentation.flags.drive_parent = parent
-	presentation.insert()
+    presentation = frappe.new_doc("Presentation")
+    if duplicate_from:
+        if not frappe.has_permission("Presentation", "read", duplicate_from):
+            frappe.throw("You cannot duplicate this presentation", frappe.PermissionError)
+        set_duplicate_metadata(presentation, duplicate_from)
+    else:
+        set_template_metadata(presentation, template)
+    presentation.flags.drive_parent = parent
+    presentation.insert()
 
-	presentation.slides = get_slides_from_ref(presentation.name, template, duplicate_from)
+    presentation.slides = get_slides_from_ref(presentation.name, template, duplicate_from)
 
-	presentation.save()
-	return presentation
+    presentation.save()
+    return presentation
 
 
 @frappe.whitelist()
 def delete_presentation(name: str):
-	return frappe.delete_doc("Presentation", name)
+    return frappe.delete_doc("Presentation", name)
 
 
 @frappe.whitelist()
 def update_title(name: str, title: str):
-	presentation = frappe.get_doc("Presentation", name)
-	presentation.check_permission("write")
-	presentation.title = title
-	presentation.save()
-	return slug(title)
+    presentation = frappe.get_doc("Presentation", name)
+    presentation.check_permission("write")
+    presentation.title = title
+    presentation.save()
+    return slug(title)
 
 
 def get_attachment(presentation, file_url):
-	"""
-	Returns the attachment name for a file URL in a presentation.
-	"""
-	# if file is already attached to the presentation, return its name
-	attachment = frappe.get_value("File", {"file_url": file_url, "attached_to_name": presentation}, "name")
+    """
+    Returns the attachment name for a file URL in a presentation.
+    """
+    # if file is already attached to the presentation, return its name
+    attachment = frappe.get_value("File", {"file_url": file_url, "attached_to_name": presentation}, "name")
 
-	# if not, create a File doc from the source presentation's attachment from where this element was copied
-	if not attachment:
-		source_doc = frappe.get_all("File", filters={"file_url": file_url}, limit=1)
-		if source_doc:
-			new_attachment_doc = frappe.copy_doc(frappe.get_doc("File", source_doc[0].name))
-			new_attachment_doc.attached_to_name = presentation
-			new_attachment_doc.insert()
-			attachment = new_attachment_doc.name
+    # if not, create a File doc from the source presentation's attachment from where this element was copied
+    if not attachment:
+        source_doc = frappe.get_all("File", filters={"file_url": file_url}, limit=1)
+        if source_doc:
+            source_file = frappe.get_doc("File", source_doc[0].name)
+            source_file.check_permission("read")
+            new_attachment_doc = frappe.copy_doc(source_file)
+            new_attachment_doc.attached_to_name = presentation
+            new_attachment_doc.insert()
+            attachment = new_attachment_doc.name
 
-	return attachment
+    return attachment
 
 
 @frappe.whitelist()
-def get_updated_json(presentation: str, json: list[dict]):
-	for element in json:
-		if element.get("type") in ["image", "video"]:
-			file_url = element.get("src").replace(frappe.local.site_name, "")
-			name = get_attachment(presentation, file_url)
-			element["attachmentName"] = name
+def get_updated_json(presentation: str, elements: list[dict]):
+    frappe.get_doc("Presentation", presentation).check_permission("write")
 
-	return json
+    for element in elements:
+        if element.get("type") in ["image", "video"] and element.get("src"):
+            file_url = element["src"].replace(frappe.local.site_name, "")
+            name = get_attachment(presentation, file_url)
+            element["attachmentName"] = name
+
+    return elements
 
 
 def get_permission_query_conditions(user):
-	return content_query_conditions("Presentation", user, extra="`tabPresentation`.is_template = 1")
+    return content_query_conditions("Presentation", user, extra="`tabPresentation`.is_template = 1")
 
 
 def has_permission(doc, ptype="read", user=None):
-	user = user or frappe.session.user
-	if doc.is_template and user != "Administrator":
-		return ptype == "read" or doc.owner == user
-	return content_has_permission(doc, ptype, user)
+    user = user or frappe.session.user
+    if doc.is_template and user != "Administrator":
+        return ptype == "read" or doc.owner == user
+    return content_has_permission(doc, ptype, user)
 
 
 @frappe.whitelist(allow_guest=True)
 def is_public_presentation(name: str):
-	file = DriveFile.get_for_doc("Presentation", name)
-	if not file:
-		return False
-	return frappe.get_doc("File", file).is_public()
+    file = DriveFile.get_for_doc("Presentation", name)
+    if not file:
+        return False
+    return frappe.get_doc("File", file).is_public()
 
 
 @frappe.whitelist(allow_guest=True)
 def is_composite_presentation(name: str):
-	return frappe.db.get_value("Presentation", name, "is_composite") == 1
+    return frappe.db.get_value("Presentation", name, "is_composite") == 1
 
 
 @frappe.whitelist(allow_guest=True)
 def get_public_presentation(name: str):
-	if not frappe.has_permission("Presentation", "read", name):
-		frappe.throw("You cannot access this presentation", frappe.PermissionError)
+    if not frappe.has_permission("Presentation", "read", name):
+        frappe.throw("You cannot access this presentation", frappe.PermissionError)
 
-	return frappe.get_doc("Presentation", name).as_dict()
+    return frappe.get_doc("Presentation", name).as_dict()
 
 
 def set_layouts_in_template(template):
-	if template.get("is_template") is not None and not template.get("is_template"):
-		return
+    if template.get("is_template") is not None and not template.get("is_template"):
+        return
 
-	doc = frappe.get_doc("Presentation", template["name"])
-	template["layouts"] = [slide.as_dict() for slide in doc.slides]
-	title = doc.title
+    doc = frappe.get_doc("Presentation", template["name"])
+    template["layouts"] = [slide.as_dict() for slide in doc.slides]
+    title = doc.title
 
-	for layout in template["layouts"]:
-		if is_system_template(title):
-			layout["thumbnail"] = get_template_thumbnail(title, layout["idx"])
-		else:
-			layout["thumbnail"] = ""
+    for layout in template["layouts"]:
+        if is_system_template(title):
+            layout["thumbnail"] = get_template_thumbnail(title, layout["idx"])
+        else:
+            layout["thumbnail"] = ""
 
 
 @frappe.whitelist()
 @redis_cache()
 def get_templates():
-	templates = frappe.get_all(
-		"Presentation",
-		filters={"is_template": 1},
-		fields=["name", "title", "slug", "creation", "is_template"],
-		order_by="creation",
-	)
+    templates = frappe.get_all(
+        "Presentation",
+        filters={"is_template": 1},
+        fields=["name", "title", "slug", "creation", "is_template"],
+        order_by="creation",
+    )
 
-	for template in templates:
-		set_layouts_in_template(template)
+    for template in templates:
+        set_layouts_in_template(template)
 
-	return templates
+    return templates
 
 
 @frappe.whitelist(allow_guest=True)
 def get_composite_presentation(name: str):
-	doc = frappe.get_doc("Presentation", name)
+    if not (is_public_presentation(name) and is_composite_presentation(name)):
+        frappe.throw("Presentation is not public", frappe.PermissionError)
 
-	composite_slides = []
+    doc = frappe.get_doc("Presentation", name)
 
-	for reference in doc.reference_presentations:
-		ref_doc = frappe.get_cached_doc("Presentation", reference.presentation)
-		for slide in ref_doc.slides:
-			composite_slides.append(slide)
+    composite_slides = []
 
-	doc.slides = composite_slides
+    for reference in doc.reference_presentations:
+        # references are public when the composite is saved, but can be made private later
+        if not is_public_presentation(reference.presentation):
+            continue
+        ref_doc = frappe.get_cached_doc("Presentation", reference.presentation)
+        for slide in ref_doc.slides:
+            composite_slides.append(slide)
 
-	return doc.as_dict()
+    doc.slides = composite_slides
+
+    return doc.as_dict()
 
 
 def can_convert_image(extn):
-	return extn.lower() in ["png", "jpeg", "jpg"]
+    return extn.lower() in ["png", "jpeg", "jpg"]
 
 
 def convert_and_save_image(image, path):
-	image.save(path, "WEBP")
-	return path
+    image.save(path, "WEBP")
+    return path
 
 
 def create_new_webp_file_doc(presentation_name, file_url, image, extn):
-	files = frappe.get_all(
-		"File",
-		filters={
-			"attached_to_name": presentation_name,
-			"file_url": file_url,
-		},
-		fields=["name"],
-		limit=1,
-	)
-	if files:
-		_file = frappe.get_doc("File", files[0].name)
-		webp_path = _file.get_full_path().replace(extn, "webp")
-		convert_and_save_image(image, webp_path)
-		new_file = frappe.copy_doc(_file)
-		new_file.file_name = f"{_file.file_name.replace(extn, 'webp')}"
-		new_file.file_url = f"{_file.file_url.replace(extn, 'webp')}"
-		new_file.save()
-		_file.delete()
-		return new_file
-	return file_url
+    files = frappe.get_all(
+        "File",
+        filters={
+            "attached_to_name": presentation_name,
+            "file_url": file_url,
+        },
+        fields=["name"],
+        limit=1,
+    )
+    if files:
+        _file = frappe.get_doc("File", files[0].name)
+        webp_path = _file.get_full_path().replace(extn, "webp")
+        convert_and_save_image(image, webp_path)
+        new_file = frappe.copy_doc(_file)
+        new_file.file_name = f"{_file.file_name.replace(extn, 'webp')}"
+        new_file.file_url = f"{_file.file_url.replace(extn, 'webp')}"
+        new_file.save()
+        _file.delete()
+        return new_file
+    return file_url
 
 
 @frappe.whitelist()
 def get_webp_doc(presentation_name: str, file_doc: dict):
-	file_url = file_doc.get("file_url", "")
-	if file_url.endswith((".webp", ".svg")):
-		return file_doc
+    file_url = file_doc.get("file_url", "")
+    if file_url.endswith((".webp", ".svg")):
+        return file_doc
 
-	image, filename, extn = get_local_image(file_url)
+    image, filename, extn = get_local_image(file_url)
 
-	if can_convert_image(extn):
-		return create_new_webp_file_doc(presentation_name, file_url, image, extn)
+    if can_convert_image(extn):
+        return create_new_webp_file_doc(presentation_name, file_url, image, extn)
 
-	return file_doc
+    return file_doc
 
 
 def update_element_urls(presentation, element):
-	attribute = "poster" if element.get("type") == "video" else "src"
-	image_url = element.get(attribute, "")
+    attribute = "poster" if element.get("type") == "video" else "src"
+    image_url = element.get(attribute, "")
 
-	webp_doc = get_webp_doc(presentation, image_url)
+    webp_doc = get_webp_doc(presentation, image_url)
 
-	if webp_doc.file_url:
-		element["attachmentName"] = webp_doc.name
-		element[attribute] = webp_doc.file_url
+    if webp_doc.file_url:
+        element["attachmentName"] = webp_doc.name
+        element[attribute] = webp_doc.file_url
 
 
 @frappe.whitelist()
 def optimize_images(name: str):
-	doc = frappe.get_doc("Presentation", name)
+    doc = frappe.get_doc("Presentation", name)
 
-	for slide in doc.slides:
-		elements = json.loads(slide.elements or "[]")
+    for slide in doc.slides:
+        elements = json.loads(slide.elements or "[]")
 
-		for element in elements:
-			if element.get("type") in ["image", "video"]:
-				update_element_urls(doc.name, element)
+        for element in elements:
+            if element.get("type") in ["image", "video"]:
+                update_element_urls(doc.name, element)
 
-		slide.elements = json.dumps(elements, indent=2)
+        slide.elements = json.dumps(elements, indent=2)
 
-	return doc.save()
+    return doc.save()
 
 
 @frappe.whitelist(allow_guest=True)
 def get_editor_access(presentation_id: str) -> str:
-	is_composite = frappe.db.get_value("Presentation", presentation_id, "is_composite")
-	if is_composite:
-		return "view"
+    is_composite = frappe.db.get_value("Presentation", presentation_id, "is_composite")
+    if is_composite:
+        return "view"
 
-	if frappe.has_permission("Presentation", "write", presentation_id):
-		return "edit"
-	if frappe.has_permission("Presentation", "read", presentation_id):
-		return "view"
+    if frappe.has_permission("Presentation", "write", presentation_id):
+        return "edit"
+    if frappe.has_permission("Presentation", "read", presentation_id):
+        return "view"
 
-	return "none"
+    return "none"

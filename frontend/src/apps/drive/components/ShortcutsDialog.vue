@@ -46,7 +46,7 @@ const shortcutGroups = [
     title: 'General',
     shortcuts: [
       [[metaKey.value, 'K'], 'Find Files'],
-      [['Ctrl', ','], 'Open Settings'],
+      [[metaKey.value, 'Shift', ','], 'Open Settings'],
     ],
   },
   {
@@ -54,10 +54,9 @@ const shortcutGroups = [
     shortcuts: [
       [getLabel('i'), 'Inbox'],
       [getLabel('h'), 'Home'],
-      [getLabel('t'), 'Team'],
+      [getLabel('e'), 'Everyone'],
       [getLabel('r'), 'Recents'],
       [getLabel('f'), 'Favourites'],
-      [getLabel('s'), 'Shared'],
     ],
   },
   {

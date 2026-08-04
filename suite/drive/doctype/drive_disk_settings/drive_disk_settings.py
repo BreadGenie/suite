@@ -6,6 +6,12 @@ from frappe.model.document import Document
 
 
 class DriveDiskSettings(Document):
+    def validate(self):
+        # A mirrored tree on S3 means a folder move copies and deletes every object
+        # under it, which times out on large folders.
+        if self.enabled:
+            self.flat = 1
+
     def __getattribute__(self, attr):
         """
         We want explicit denial of , so require '/' at the DB level.

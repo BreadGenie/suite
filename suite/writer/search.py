@@ -1,6 +1,6 @@
+import frappe
 from frappe.search.sqlite_search import SQLiteSearch
 from frappe.utils import cstr
-import frappe
 
 
 class WriterSearch(SQLiteSearch):
@@ -19,5 +19,6 @@ class WriterSearch(SQLiteSearch):
     }
 
     def get_search_filters(self):
+        # No index-level filter: shared documents must stay searchable.
+        # Results are permission-filtered in suite.writer.api.general.search.
         return {}
-        return {"owner": frappe.session.user}

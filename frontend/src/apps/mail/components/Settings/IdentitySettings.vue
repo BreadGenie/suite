@@ -1,15 +1,24 @@
 <template>
 	<AppSettingsHeader :title="__('Identity')">
-		<template v-if="identity?.doc && !identity.loading" #actions>
+		<template #actions>
 			<Button
+				v-if="identity?.doc && !identity.loading"
 				:label="__('Save')"
 				variant="solid"
+				:size="isMobile ? 'md' : 'sm'"
 				:disabled="
 					identity.get.loading ||
 					JSON.stringify(identity.doc) === JSON.stringify(identity.originalDoc)
 				"
 				:loading="identity.save.loading"
 				@click="save"
+			/>
+			<Button
+				icon-left="lucide-plus"
+				:label="__('New')"
+				:size="isMobile ? 'md' : 'sm'"
+				variant="outline"
+				@click="showAddIdentity"
 			/>
 		</template>
 	</AppSettingsHeader>
@@ -20,11 +29,11 @@
 				<FormControl
 					v-model="identityName"
 					type="combobox"
-					:label="__('Email')"
+					:label="__('Identity')"
 					variant="outline"
 					:options="
 						identities.data.map((identity: Identity) => ({
-							label: identity.email,
+							label: `${identity.email} (${identity.id})`,
 							value: identity.name,
 						}))
 					"
@@ -133,6 +142,39 @@
 			</Dialog>
 		</div>
 	</template>
+
+	<Dialog
+		v-model="showAddIdentityDialog"
+		:options="{
+			title: __('New Identity'),
+			actions: [
+				{
+					label: __('Save'),
+					variant: 'solid',
+					disabled: !newEmail,
+					loading: addIdentity.loading,
+					onClick: () => addIdentity.submit(),
+				},
+			],
+		}"
+	>
+		<template #body-content>
+			<FormControl
+				v-model="newEmail"
+				:label="__('Email')"
+				placeholder="johndoe@example.com"
+				type="email"
+				class="mb-4 w-full"
+				:required="true"
+			/>
+			<FormControl
+				v-model="newDisplayName"
+				:label="__('Display Name')"
+				placeholder="John Doe"
+				class="w-full"
+			/>
+		</template>
+	</Dialog>
 	</AppSettingsBody>
 </template>
 
@@ -144,13 +186,14 @@ import {
 	FormControl,
 	TextEditor,
 	createDocumentResource,
+	createResource,
 	useList,
 } from 'frappe-ui'
 import AppSettingsHeader from '@/components/settings/AppSettingsHeader.vue'
 import AppSettingsBody from '@/components/settings/AppSettingsBody.vue'
 
 import { convertHtmlToText, raiseToast } from '@/apps/mail/utils'
-import { useTextEditorButtons } from '@/apps/mail/utils/composables'
+import { useScreenSize, useTextEditorButtons } from '@/apps/mail/utils/composables'
 import { CustomParagraphExtension } from '@/apps/mail/utils/text-editor'
 import { userStore } from '@/apps/mail/stores/user'
 import IdentitySettingsListView from '@/apps/mail/components/IdentitySettingsListView.vue'
@@ -158,9 +201,10 @@ import IdentitySettingsListView from '@/apps/mail/components/IdentitySettingsLis
 import type { Identity } from '@/apps/mail/types'
 
 const user = inject('$user')
-const { identities } = userStore()
+const { accountId, identities } = userStore()
 
 const { buttons } = useTextEditorButtons()
+const { isMobile } = useScreenSize()
 
 const signatures = useList({
 	doctype: 'Mail Signature',
@@ -211,6 +255,32 @@ const addEmailAddress = () => {
 	else identity.value.doc.bcc.push({ email: email.value, display_name: displayName.value })
 	showDialog.value = false
 }
+
+const showAddIdentityDialog = ref(false)
+const newEmail = ref('')
+const newDisplayName = ref('')
+
+const showAddIdentity = () => {
+	newEmail.value = ''
+	newDisplayName.value = ''
+	showAddIdentityDialog.value = true
+}
+
+const addIdentity = createResource({
+	url: 'suite.mail.doctype.identity.identity.add_identity',
+	makeParams: () => ({
+		account: accountId,
+		email: newEmail.value,
+		name: newDisplayName.value,
+	}),
+	onSuccess: (id: string) => {
+		raiseToast(__('Identity created.'))
+		showAddIdentityDialog.value = false
+		identityName.value = `${accountId}|${id}`
+		identities.reload()
+	},
+	onError: (error) => raiseToast(error.messages?.[0] || error.message, 'error'),
+})
 
 watch(identityName, (val) => {
 	if (val) identity.value = getIdentity()

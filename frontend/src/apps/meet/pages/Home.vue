@@ -1,5 +1,5 @@
 <template>
-	<div class="flex h-screen bg-surface-base" data-testid="home-page">
+	<div class="flex h-screen bg-surface-base">
 		<MeetSidebar />
 
 		<div class="flex flex-1 flex-col overflow-auto">

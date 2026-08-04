@@ -18,6 +18,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/apps/sheets/pages/Home.vue'),
   },
   {
+    path: 'trash',
+    name: 'sheets-trash',
+    component: () => import('@/apps/sheets/pages/Trash.vue'),
+  },
+  {
     path: ':id',
     name: 'sheets-editor',
     component: () => import('@/apps/sheets/pages/SheetEditor.vue'),

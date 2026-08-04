@@ -2,9 +2,10 @@
 # For license information, please see license.txt
 
 # import frappe
-from suite.drive.api.permissions import user_has_permission
-from frappe.model.document import Document
 import frappe
+from frappe.model.document import Document
+
+from suite.drive.api.permissions import user_has_permission
 
 
 class DriveFavourite(Document):

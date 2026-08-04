@@ -21,6 +21,7 @@ import {
   TextWrappingSide,
   VerticalAlign,
 } from 'docx'
+import { pxToTwips, toDocxLine } from '@/apps/writer/utils/typography'
 
 const CELL_PADDING = 240
 const TABLE_DXA = 8640
@@ -157,7 +158,19 @@ function inlineToRuns(node, inherited = {}) {
   return runs
 }
 
-function paragraphFromP(p, defaultFont) {
+// Mirror what the editor renders: spacing comes from the document settings, and
+// a paragraph's own inline style wins over them.
+function paragraphSpacing(el, defaults) {
+  const style = el?.style || {}
+  return {
+    before: style.marginTop ? pxToTwips(style.marginTop) : defaults.before,
+    after: style.marginBottom ? pxToTwips(style.marginBottom) : defaults.after,
+    line: style.lineHeight ? toDocxLine(style.lineHeight) : defaults.line,
+    lineRule: 'auto',
+  }
+}
+
+function paragraphFromP(p, defaultFont, spacing) {
   const runs = []
   p.childNodes.forEach((n) => runs.push(...inlineToRuns(n, { font: defaultFont })))
   if (!runs.length) runs.push(new TextRun({ text: '\u00A0', font: defaultFont }))
@@ -170,7 +183,7 @@ function paragraphFromP(p, defaultFont) {
   }
   return new Paragraph({
     alignment: alignMap[(p.style.textAlign || '').toLowerCase()],
-    spacing: { before: 120, after: 120 },
+    spacing: paragraphSpacing(p, spacing),
     children: runs,
   })
 }
@@ -187,7 +200,7 @@ function headingFromHx(hx, defaultFont) {
   })
 }
 
-function paragraphsFromUL(ul, defaultFont) {
+function paragraphsFromUL(ul, defaultFont, spacing) {
   const isTask = ul.getAttribute('data-type') === 'taskList'
   const out = []
 
@@ -209,7 +222,7 @@ function paragraphsFromUL(ul, defaultFont) {
       out.push(
         new Paragraph({
           indent: { left: 720 },
-          spacing: { before: 120, after: 120 },
+          spacing,
           children: [
             new TextRun({ text: checkbox, font: defaultFont, size: 28 }),
             ...(runs.length ? runs : [new TextRun({ text: '', font: defaultFont })]),
@@ -219,7 +232,7 @@ function paragraphsFromUL(ul, defaultFont) {
     } else {
       out.push(
         new Paragraph({
-          spacing: { before: 120, after: 120 },
+          spacing,
           children: runs.length ? runs : [new TextRun({ text: '', font: defaultFont })],
           numbering: { reference: 'bullets', level: 0 },
         }),
@@ -229,7 +242,7 @@ function paragraphsFromUL(ul, defaultFont) {
   return out
 }
 
-function paragraphsFromOL(ol, defaultFont) {
+function paragraphsFromOL(ol, defaultFont, spacing) {
   const out = []
   ol.querySelectorAll(':scope > li').forEach((li) => {
     const runs = []
@@ -243,7 +256,7 @@ function paragraphsFromOL(ol, defaultFont) {
     li.childNodes.forEach(collect)
     out.push(
       new Paragraph({
-        spacing: { before: 120, after: 120 },
+        spacing,
         children: runs.length ? runs : [new TextRun({ text: '', font: defaultFont })],
         numbering: { reference: 'numbers', level: 0 },
       }),
@@ -497,6 +510,13 @@ export async function downloadDocxFromHtml(html, filename, settings = {}) {
   const fontVar = fontMap[fontSetting] || fontSetting
   const defaultFont = cssFontToDocx(fontVar) || 'Inter'
 
+  const defaultSpacing = {
+    before: pxToTwips(settings?.paragraph_spacing_before),
+    after: pxToTwips(settings?.paragraph_spacing_after),
+    line: toDocxLine(settings?.line_height),
+    lineRule: 'auto',
+  }
+
   const numbering = {
     config: [
       {
@@ -547,9 +567,9 @@ export async function downloadDocxFromHtml(html, filename, settings = {}) {
     const el = node
     const tag = el.tagName.toLowerCase()
 
-    if (tag === 'p') children.push(paragraphFromP(el, defaultFont))
-    else if (tag === 'ul') children.push(...paragraphsFromUL(el, defaultFont))
-    else if (tag === 'ol') children.push(...paragraphsFromOL(el, defaultFont))
+    if (tag === 'p') children.push(paragraphFromP(el, defaultFont, defaultSpacing))
+    else if (tag === 'ul') children.push(...paragraphsFromUL(el, defaultFont, defaultSpacing))
+    else if (tag === 'ol') children.push(...paragraphsFromOL(el, defaultFont, defaultSpacing))
     else if (/^h[1-3]$/.test(tag)) children.push(headingFromHx(el, defaultFont))
     else if (tag === 'blockquote') children.push(...paragraphsFromBlockquote(el, defaultFont))
     else if (tag === 'pre') {
@@ -557,7 +577,7 @@ export async function downloadDocxFromHtml(html, filename, settings = {}) {
       el.childNodes.forEach((n) => runs.push(...inlineToRuns(n, { font: defaultFont })))
       children.push(
         new Paragraph({
-          spacing: { before: 120, after: 120 },
+          spacing: defaultSpacing,
           shading: { fill: '0D0D0D' },
           children: runs.length ? runs : [new TextRun({ text: '', font: defaultFont })],
         }),
@@ -586,7 +606,7 @@ export async function downloadDocxFromHtml(html, filename, settings = {}) {
         console.warn('Image fetch failed:', src, e)
       }
     } else {
-      children.push(paragraphFromP(el, defaultFont))
+      children.push(paragraphFromP(el, defaultFont, defaultSpacing))
     }
   }
 

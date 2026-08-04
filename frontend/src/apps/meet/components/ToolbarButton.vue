@@ -10,7 +10,6 @@ withDefaults(
 		variant?: "default" | "active" | "muted";
 		active?: boolean;
 		title?: string;
-		testId?: string;
 	}>(),
 	{
 		variant: "default",
@@ -29,7 +28,7 @@ defineEmits<{
 		size="lg"
 		variant="ghost"
 		theme="gray"
-		:data-testid="testId"
+		:label="title"
 		:tooltip="title"
 		:class="['relative', { '!bg-surface-gray-3': active }]"
 		@click="$emit('click')"

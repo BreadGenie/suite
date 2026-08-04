@@ -10,15 +10,14 @@ import { call } from 'frappe-ui'
 export { default as ShareDialog } from '@/apps/drive/ui/drive/components/ShareDialog.vue'
 export { default as MoveDialog } from '@/apps/drive/ui/drive/components/MoveDialog.vue'
 export { default as InfoDialog } from '@/apps/drive/ui/drive/components/InfoDialog.vue'
-export { default as RenameDialog } from '@/apps/drive/ui/drive/components/RenameDialog.vue'
 
 export { getFileLink, prettyData, copyToClipboard } from '@/apps/drive/ui/drive/js/utils'
 export {
   allUsers,
   usersWithAccess,
   updateAccess,
-  getTeams,
   rename,
+  rootInfo,
 } from '@/apps/drive/ui/drive/js/resources'
 
 /** The Drive File (with the caller's access) backing a content document. */

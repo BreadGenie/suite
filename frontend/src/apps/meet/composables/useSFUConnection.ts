@@ -18,6 +18,7 @@ import {
 	SFUClient,
 } from "../utils/SFUClient";
 import { SFUMeetingManager } from "../utils/SFUMeetingManager";
+import { getClientTelemetry } from "../utils/telemetry/ClientTelemetry";
 import { useChatStore } from "./useChatStore";
 import type { ConnectionState } from "./useConnectionState";
 import type { CurrentUser } from "./useCurrentUser";
@@ -29,6 +30,8 @@ import type { GridLayout } from "./useGridLayout";
 import type { LobbyStore } from "./useLobbyStore";
 import type { MediaState } from "./useMediaState";
 import type { ParticipantStore } from "./useParticipantStore";
+
+const LARGE_MEETING_PARTICIPANT_THRESHOLD = 5;
 
 interface WaitingRoomResponse {
 	waiting_users: Array<{
@@ -96,6 +99,7 @@ export function useSFUConnection(deps: {
 
 	const signalChannel = new SocketIOSignalChannel();
 	const sfuClient = new SFUClient(signalChannel);
+	const clientTelemetry = getClientTelemetry(sfuClient);
 	const sfuManager = shallowRef<SFUMeetingManager | null>(null);
 
 	const realtimeListenersSetup = shallowRef(false);
@@ -207,10 +211,20 @@ export function useSFUConnection(deps: {
 
 	const createSFUEventHandlers = () => {
 		return {
+			onRecoveryExhausted: () => {
+				clientTelemetry.reportRecoveryExhausted({
+					subsystem: "consumer",
+					direction: "recv",
+					reason: "retry_limit",
+				});
+			},
 			onRecoveryStateChange: (
 				state: Parameters<typeof connectionState.setRecoveryState>[0],
 				detail?: string,
-			) => connectionState.setRecoveryState(state, detail),
+			) => {
+				connectionState.setRecoveryState(state, detail);
+				clientTelemetry.recordRecoveryState(state, detail);
+			},
 			onParticipantJoined: handleParticipantJoined,
 			onParticipantLeft: handleParticipantLeft,
 			onParticipantUpdated: handleParticipantUpdated,
@@ -308,8 +322,10 @@ export function useSFUConnection(deps: {
 		prefetchedDetails: ConnectionDetails | null = null,
 	) => {
 		setupCancelled = false;
+		clientTelemetry.startSession();
 		let isHost = initialIsHost;
 		let isCohost = initialIsCohost;
+		let manager: SFUMeetingManager | null = null;
 		isCurrentTabHost.value = isHost;
 		if (connectionState.isSetupComplete) {
 			connectionState.isInPreview = false;
@@ -318,7 +334,8 @@ export function useSFUConnection(deps: {
 		}
 
 		try {
-			const manager = new SFUMeetingManager(sfuClient);
+			let wasAutomaticallyMuted = false;
+			manager = new SFUMeetingManager(sfuClient);
 			manager.initialize({
 				meetingId,
 				currentUser: currentUser.currentUser.value,
@@ -383,11 +400,36 @@ export function useSFUConnection(deps: {
 				};
 			}
 
+			const wantsAudio = mediaState.isMicOn;
 			await manager.joinRoom(userData, {
-				audio_enabled: mediaState.isMicOn,
+				audio_enabled: false,
 				video_enabled: mediaState.isCameraOn,
 			});
 			if (await stopIfCancelled()) return;
+
+			if (wantsAudio) {
+				let shouldMute = true;
+				try {
+					const participants = await sfuClient.getRoomParticipants();
+					shouldMute =
+						participants.length > LARGE_MEETING_PARTICIPANT_THRESHOLD;
+				} catch (error) {
+					console.warn(
+						"Could not determine meeting size; joining muted:",
+						(error as Error).message,
+					);
+				}
+
+				if (shouldMute) {
+					mediaState.isMicOn = false;
+					wasAutomaticallyMuted = true;
+					for (const track of mediaState.localStream?.getAudioTracks() || []) {
+						track.enabled = false;
+					}
+				} else {
+					sfuClient.sendMediaControl("unmute");
+				}
+			}
 			if (sfuClient.isE2EERequired()) {
 				await waitForE2EEContextReady(0);
 				if (await stopIfCancelled()) return;
@@ -435,12 +477,25 @@ export function useSFUConnection(deps: {
 			if (await stopIfCancelled()) return;
 
 			connectionState.isSetupComplete = true;
+			if (wasAutomaticallyMuted) {
+				const MicOffIcon = defineAsyncComponent(
+					() => import("~icons/lucide/mic-off"),
+				);
+				toast("Mic muted automatically in large meetings.", {
+					duration: 5000,
+					icon: h(MicOffIcon),
+				});
+			}
 
 			if (!guestName && (isHost || isCohost)) {
 				fetchExistingWaitingRoomUsers();
 			}
 		} catch (error) {
 			console.error("SFU setup failed:", error);
+			await manager?.cleanup();
+			if (sfuManager.value === manager) {
+				sfuManager.value = null;
+			}
 			throw error;
 		}
 	};

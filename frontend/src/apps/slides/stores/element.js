@@ -1,5 +1,5 @@
 import { ref, computed, nextTick, watch } from 'vue'
-import { call, createResource } from 'frappe-ui'
+import { createResource } from 'frappe-ui'
 
 import {
 	selectionBounds,
@@ -13,7 +13,7 @@ import { useTextEditor } from '@/apps/slides/composables/useTextEditor'
 
 import { getElementDiv } from './elementRegistry'
 import { markDirty } from './saving'
-import { generateUniqueId, cloneObj } from '../utils/helpers'
+import { generateUniqueId, cloneObj, normalizeRotation } from '../utils/helpers'
 import { guessTextColorFromBackground, guessShapeColorsFromBackground } from '../utils/color'
 import { presentationId } from './presentation'
 import { getCommandsToInitElementRefId, getCommandsToUpdateElementRefId } from './transition'
@@ -54,7 +54,7 @@ const activeElement = computed(() => {
 	}
 })
 
-const setActiveElements = (ids, focus = false) => {
+const setActiveElements = (ids) => {
 	if (ids.length == 1 && activeElementIds.value.includes(ids[0])) return
 	activeElementIds.value = ids
 	focusElementId.value = null
@@ -112,7 +112,9 @@ const getShapeDefaults = (shapeType) => {
 	let markerStart = false
 	let markerEnd = false
 
-	const { fillColor, strokeColor: defaultStrokeColor } = guessShapeColorsFromBackground(currentSlide.value?.background)
+	const { fillColor, strokeColor: defaultStrokeColor } = guessShapeColorsFromBackground(
+		currentSlide.value?.background,
+	)
 
 	switch (shapeType) {
 		case 'rectangle':
@@ -174,7 +176,7 @@ const lineBoundsFromEndpoints = ({ x1, y1, x2, y2 }, height) => {
 		height,
 		left: (x1 + x2) / 2 - length / 2,
 		top: (y1 + y2) / 2 - height / 2,
-		rotation: Math.atan2(dy, dx) * (180 / Math.PI),
+		rotation: normalizeRotation(Math.atan2(dy, dx) * (180 / Math.PI)),
 	}
 }
 
@@ -224,10 +226,12 @@ const addShapeElement = async (shapeType, bounds = null) => {
 		borderRadius,
 		markerStart,
 		markerEnd,
-		shadowOffsetX: 0,
-		shadowOffsetY: 0,
-		shadowSpread: 0,
+		strokeStyle: 'solid',
 		shadowColor: '#7C7C7CFF',
+		shadowOpacity: 100,
+		shadowBlur: 0,
+		shadowOffset: 0,
+		shadowAngle: 45,
 	}
 
 	const refCommands = getCommandsToUpdateElementRefId(element) || []
@@ -482,11 +486,12 @@ const addMediaElement = async (file, type) => {
 		borderStyle: 'none',
 		borderWidth: 0,
 		borderRadius: 0,
-		borderColor: '',
-		shadowOffsetX: 0,
-		shadowOffsetY: 0,
-		shadowSpread: 0,
+		borderColor: '#d2d2d2ff',
 		shadowColor: '#7C7C7CFF',
+		shadowOpacity: 100,
+		shadowBlur: 0,
+		shadowOffset: 0,
+		shadowAngle: 45,
 	}
 	if (type == 'video') {
 		element.poster = videoPoster
@@ -580,6 +585,8 @@ const replaceMediaElement = async (element, fileDoc) => {
 const duplicateElements = async (e, elements, srcSlide, toDisplace = true) => {
 	e?.preventDefault()
 
+	if (!elements?.length) return
+
 	if (srcSlide == null) srcSlide = slideIndex.value
 
 	const displaceByPx = srcSlide == slideIndex.value && toDisplace ? 40 : 0
@@ -587,10 +594,13 @@ const duplicateElements = async (e, elements, srcSlide, toDisplace = true) => {
 	let commands = []
 	let newSelection = []
 
-	elements.forEach((element) => {
+	const baseZIndex = currentSlide.value.elements.length
+	const sortedElements = [...elements].sort((a, b) => (a.zIndex || 1) - (b.zIndex || 1))
+
+	sortedElements.forEach((element, index) => {
 		let newElement = JSON.parse(JSON.stringify(element))
 		newElement.id = generateUniqueId()
-		newElement.zIndex = currentSlide.value.elements.length + 1
+		newElement.zIndex = baseZIndex + index + 1
 		newElement.top += displaceByPx
 		newElement.left += displaceByPx
 
@@ -613,27 +623,6 @@ const duplicateElements = async (e, elements, srcSlide, toDisplace = true) => {
 			commands,
 		}),
 	)
-}
-
-const isFileDocUsed = (element) => {
-	return slides.value.some((slide) => {
-		if (!slide.elements) return false
-
-		return slide.elements.some((el) => el.id !== element.id && el.src === element.src)
-	})
-}
-
-const deleteAttachments = async (elements) => {
-	elements.forEach((element) => {
-		if (['image', 'video'].includes(element.type)) {
-			if (isFileDocUsed(element)) return
-
-			call('frappe.client.delete', {
-				doctype: 'File',
-				name: element.attachmentName,
-			})
-		}
-	})
 }
 
 const deleteElements = async (e, ids) => {
@@ -950,25 +939,17 @@ const updatePosition = (axis, value) => {
 	selectionBounds[property] = value
 }
 
-const updateDimension = (axis, value) => {
-	const property = axis == 'W' ? 'width' : 'height'
-	const numericValue = Number(value)
-
-	if (!Number.isFinite(numericValue) || numericValue < 1) return
-	if (property == 'height' && activeElements.value.some((element) => element.type != 'shape'))
-		return
-
-	const delta = numericValue - selectionBounds[property]
+const flipElements = (direction) => {
+	const property = direction == 'horizontal' ? 'invertX' : 'invertY'
 
 	const commands = activeElements.value.map((element) => {
-		const oldValue = element[property] ?? selectionBounds[property]
-
+		const current = element[property]
 		return editElementCommand({
 			slideId: currentSlide.value.clientId,
 			elementIds: [element.id],
 			property,
-			oldValue: element[property],
-			newValue: oldValue + delta,
+			oldValue: current,
+			newValue: !current || current == 1 ? -1 : 1,
 		})
 	})
 
@@ -979,14 +960,12 @@ const updateDimension = (axis, value) => {
 			commands,
 		}),
 	)
-
-	selectionBounds[property] = numericValue
 }
 
 const getElementCenter = (axis) => {
 	let elementStart, elementSize, slideStart
 
-	if (axis == 'Y') {
+	if (axis == 'X') {
 		elementStart = selectionBounds.left
 		elementSize = selectionBounds.width
 		slideStart = slideBounds.left
@@ -1020,13 +999,12 @@ export {
 	selectAllElements,
 	getElementPosition,
 	addFixedWidthToElement,
-	deleteAttachments,
 	setEditableState,
 	replaceMediaElement,
 	normalizeZIndices,
 	isWithinOverlappingBounds,
 	updatePosition,
-	updateDimension,
+	flipElements,
 	findElement,
 	cropSelectionToFitContent,
 	getElementCenter,

@@ -1,7 +1,7 @@
 <template>
   <Dialog v-model:open="open" size="lg" @close="dialogType = ''">
-    <template #body-main>
-      <div class="px-4 pt-5 pb-6 sm:px-6">
+    <template #default>
+      <div>
         <div class="text-2xl-semibold flex text-nowrap overflow-hidden pr-8 mb-4">
           <template v-if="props.entities.length > 1">
             Moving {{ props.entities.length }} items
@@ -17,11 +17,12 @@
         <Tabs v-model="tabIndex" as="div" :tabs="tabs">
           <template #tab-panel>
             <div class="px-1 py-1 h-64 overflow-auto flex flex-col">
-              <TeamSelector v-if="tabIndex === 1" v-model="chosenTeam" class="mb-2" />
               <Tree v-if="tree.children.length" :nodes="tree.children" node-key="value" guides="none">
                 <template #item="{ node, expanded, hasChildren, toggle }">
-                  <div class="group grow min-w-0 flex items-center gap-2"
-                    :class="entities[0].folder === node.value ? 'cursor-not-allowed' : 'cursor-pointer'"
+                  <div class="group grow min-w-0 flex items-center gap-2 rounded-md px-1 -mx-1"
+                    :class="entities[0].folder === node.value
+                      ? 'cursor-not-allowed'
+                      : 'cursor-pointer hover:bg-surface-gray-2'"
                     @click.stop="openEntity(node)">
                     <button v-if="hasChildren" class="flex shrink-0 text-ink-gray-5 hover:text-ink-gray-8"
                       @click.stop="
@@ -95,16 +96,22 @@
                 <span v-if="breadcrumbs.length > 1 && index > 0" class="text-ink-gray-5 mx-0.5">
                   {{ '/' }}
                 </span>
-                <button class="text-base cursor-pointer truncate max-w-20" :title="crumb.file_name" :class="index === slicedBreadcrumbs.length - 1
-                    ? 'text-ink-gray-9 text-base font-medium p-1'
-                    : 'text-ink-gray-5 text-base rounded-[6px] hover:bg-surface-gray-2 p-1'
-                  " @click="closeEntity(crumb.name)">
-                  {{ crumb.file_name }}
-                </button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  :label="crumb.file_name"
+                  :title="crumb.file_name"
+                  class="truncate max-w-20"
+                  :class="index === slicedBreadcrumbs.length - 1
+                    ? 'text-ink-gray-9 font-medium'
+                    : 'text-ink-gray-5'
+                  "
+                  @click="closeEntity(crumb.name)"
+                />
               </div>
             </div>
           </div>
-          <Button variant="solid" class="ml-auto" size="sm" :disabled="tabIndex === 1 && !chosenTeam"
+          <Button variant="solid" class="ml-auto" size="sm"
             :loading="move.loading" @click="moveFile">
             <template #prefix>
               <LucideArrowLeftRight class="size-4" />
@@ -130,9 +137,7 @@ import {
   Skeleton,
   toast,
 } from 'frappe-ui'
-import { move, getTeams } from '../js/resources'
-
-import { useRoute } from 'vue-router'
+import { move, rootInfo } from '../js/resources'
 
 import LucideBuilding2 from '~icons/lucide/building-2'
 import LucideCheck from '~icons/lucide/check'
@@ -144,7 +149,6 @@ import LucideFolderClosed from '~icons/lucide/folder-closed'
 import LucideHome from '~icons/lucide/home'
 import LucideArrowLeftRight from '~icons/lucide/arrow-left-right'
 import LucideEllipsis from '~icons/lucide/ellipsis'
-import TeamSelector from './TeamSelector.vue'
 
 const folderWidths = ['45%', '60%', '38%', '52%']
 
@@ -160,9 +164,21 @@ const emit = defineEmits(['success', 'complete'])
 const dialogType = defineModel()
 const open = ref(true)
 
-const route = useRoute()
-const tabIndex = ref(route.name == 'drive-Home' ? 0 : 1)
-const chosenTeam = ref(route.params.team || '')
+const tabIndex = ref(0)
+rootInfo.fetch()
+
+// Reopen at the folder the user last moved into this session, so repeated moves
+// to the same place don't start from root each time.
+const LAST_MOVE_KEY = 'drive:last-move-dest'
+function lastMoveParent() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(LAST_MOVE_KEY) || 'null')
+    if (!saved || typeof saved !== 'object') return ''
+    return saved.parent || ''
+  } catch {
+    return ''
+  }
+}
 const tree = reactive({
   name: '',
   label: 'Home',
@@ -174,31 +190,17 @@ const tree = reactive({
 
 // State variables
 const selected = ref('')
-const breadcrumbs = ref([
-  { name: '', file_name: tabIndex.value === 0 ? 'Home' : 'Team' },
+const breadcrumbs = ref([{ name: '', file_name: 'Home' }])
+
+const tabs = computed(() => [
+  { label: 'Home', icon: h(LucideHome, { class: 'size-4' }) },
+  { label: 'Site', icon: h(LucideBuilding2, { class: 'size-4' }) },
 ])
-
-const tabs = computed(() => {
-  const items = [{ label: 'Home', icon: h(LucideHome, { class: 'size-4' }) }]
-  if (Object.keys(getTeams.data || {}).length)
-    items.push({ label: 'Teams', icon: h(LucideBuilding2, { class: 'size-4' }) })
-  return items
-})
-
-// Keep the active tab valid when the Teams tab is hidden (no teams).
-watch(
-  tabs,
-  (t) => {
-    if (tabIndex.value > t.length - 1) tabIndex.value = 0
-  },
-  { immediate: true },
-)
 
 const folderContents = createResource({
   url: 'suite.drive.api.list.files',
   makeParams: (params) => ({
     ...params,
-    team: chosenTeam.value,
     file_kinds: '["Folder"]',
   }),
 })
@@ -234,43 +236,36 @@ const selectedPerms = createResource({
     entity_name: selected.value,
   }),
   onSuccess: (data) => {
-    const team = getTeams.data[data.team]
-    const first = [
-      {
-        name: '',
-        file_name: team ? team.title : 'Home',
-      },
-    ]
-    breadcrumbs.value = first.concat(data.breadcrumbs.slice(1))
+    breadcrumbs.value = data.breadcrumbs.map((k) => ({
+      ...k,
+      file_name: k.name === rootInfo.data?.home ? 'Home' : k.file_name,
+    }))
+  },
+  onError: () => {
+    // Remembered folder is gone or inaccessible — fall back to the root.
+    selected.value = ''
+    breadcrumbs.value = [{ name: '', file_name: 'Home' }]
   },
 })
 
 watch(
-  [tabIndex, chosenTeam],
-  ([newValue, team], [prev, _]) => {
+  tabIndex,
+  (newValue) => {
     selected.value = ''
     tree.loading = true
-    if ((newValue === 1 && !team) || (newValue === 0 && prev == newValue))
-      return
     tree.children = []
-    switch (newValue) {
-      case 0:
-        chosenTeam.value = ''
-        breadcrumbs.value = [{ name: '', file_name: 'Home' }]
-        fetchFolderContents(tree)
-        break
-      case 1:
-        breadcrumbs.value = [
-          { name: '', file_name: getTeams.data[team].title },
-        ]
-        fetchFolderContents(tree)
-        break
-      case 2:
-        folderContents.fetch({
-          entity_name: '',
-          favourites_only: true,
-        })
-        break
+    if (newValue === 0) {
+      breadcrumbs.value = [{ name: '', file_name: 'Home' }]
+      fetchFolderContents(tree)
+    } else {
+      breadcrumbs.value = [{ name: '', file_name: 'Site' }]
+      fetchFolderContents(tree, { entity_name: rootInfo.data?.root })
+    }
+    // Re-applied on every tab switch, which resets `selected` above.
+    const remembered = lastMoveParent()
+    if (remembered) {
+      selected.value = remembered
+      selectedPerms.fetch()
     }
   },
   { immediate: true },
@@ -301,10 +296,7 @@ const createdNode = ref(null)
 const createFolder = createResource({
   url: 'suite.drive.api.files.create_folder',
   makeParams(params) {
-    return {
-      ...params,
-      team: chosenTeam.value,
-    }
+    return params
   },
   validate(params) {
     if (!params?.file_name) return false
@@ -345,7 +337,6 @@ function closeEntity(name) {
     selected.value = breadcrumbs.value[breadcrumbs.value.length - 1].name
     folderContents.fetch({
       entity_name: selected.value,
-      personal: selected.value === '' ? 1 : -1,
     })
   }
 }
@@ -355,8 +346,15 @@ const moveFile = async () => {
   await move.submit({
     entity_names: props.entities.map((obj) => obj.name),
     new_parent: selected.value,
-    team: chosenTeam.value,
   })
+  try {
+    sessionStorage.setItem(
+      LAST_MOVE_KEY,
+      JSON.stringify({ parent: selected.value }),
+    )
+  } catch {
+    // sessionStorage unavailable — non-fatal.
+  }
   open.value = false
   emit('complete')
 }

@@ -1,5 +1,9 @@
 <template>
-	<Button label="Share" icon-left="lucide-share-2" @click="openShareDialog" />
+	<Button variant="ghost" tooltip="Share" @click="openShareDialog">
+		<template #icon>
+			<LucideShare2 class="size-4 stroke-[1.5]" />
+		</template>
+	</Button>
 	<ShareDialog v-if="showShareDialog && file" v-model="showShareDialog" :file allowed-access="reader" />
 </template>
 

@@ -25,13 +25,13 @@ const props = defineProps({
 })
 
 const logo = {
-  team: LucideBuilding,
+  site: LucideBuilding,
   public: LucideGlobe2,
   restricted: LucideLock,
 }[props.accessType]
 
 const colorClasses = {
-  team: 'bg-surface-blue-2 text-ink-blue-5',
+  site: 'bg-surface-blue-2 text-ink-blue-5',
   public: 'bg-surface-red-2 text-ink-red-6',
   restricted: 'text-ink-gray-7 bg-surface-gray-4',
 }[props.accessType]

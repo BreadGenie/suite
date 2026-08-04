@@ -5,9 +5,10 @@
 		size="2xl"
 		:title="dialogTitle"
 		:dismissible="update"
+		:showCloseButton="update"
 	>
 		<template #default>
-			<div class="mb-6 select-none text-base text-gray-600">{{ dialogDescription }}</div>
+			<div class="mb-6 select-none text-base text-ink-gray-6">{{ dialogDescription }}</div>
 			<div class="grid max-h-[32rem] grid-cols-2 gap-6 overflow-y-auto">
 				<div
 					v-for="(theme, idx) in templateList"
@@ -15,7 +16,7 @@
 					class="flex flex-col gap-3"
 				>
 					<div
-						class="m-1 aspect-video cursor-pointer overflow-hidden rounded-lg border border-gray-200 hover:border-gray-300"
+						class="m-1 aspect-video cursor-pointer overflow-hidden rounded-lg border border-outline-gray-1 hover:border-outline-gray-2"
 						:class="getThemeThumbnailClasses(theme.name)"
 						:style="getThemeThumbnailStyles(theme)"
 						@click="performAction(theme.name)"
@@ -29,9 +30,9 @@
 					<div class="flex">
 						<LucideCheck
 							v-if="props.update && theme.name == presentationTheme"
-							class="size-4 stroke-[1.5] text-gray-800"
+							class="size-4 stroke-[1.5] text-ink-gray-8"
 						/>
-						<div class="select-none px-2 text-base text-gray-600">
+						<div class="select-none px-2 text-base text-ink-gray-6">
 							{{ theme.title }}
 						</div>
 					</div>
@@ -92,7 +93,7 @@ watch(
 
 const getThemeThumbnailClasses = (theme) => {
 	return props.update && theme == presentationTheme.value
-		? 'ring-2 ring-offset-1 ring-gray-400'
+		? 'ring-2 ring-offset-1 ring-outline-gray-2'
 		: ''
 }
 
@@ -103,7 +104,10 @@ const getThemePreviewLayout = (theme) => {
 
 const getThemeThumbnailStyles = (theme) => {
 	const layout = getThemePreviewLayout(theme)
-	return getThumbnailCardStyles(layout?.thumbnail)
+	return {
+		...getThumbnailCardStyles(layout?.thumbnail),
+		'--tw-ring-offset-color': 'var(--surface-base)',
+	}
 }
 
 const shouldRenderPreview = (theme) => {

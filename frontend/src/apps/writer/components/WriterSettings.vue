@@ -14,7 +14,7 @@
                     v-model="settings.font_family"
                     variant="subtle"
                     :options="fontOptions"
-                    label="Font Family"
+                    label="Font family"
                     :description="`Choose the default font family for ${
                       tabIndex === 1 ? 'this document' : 'new documents'
                     }.`"
@@ -22,21 +22,23 @@
                   <FormControl
                     v-model="settings.font_size"
                     type="number"
-                    label="Font Size"
+                    label="Font size"
                     autocomplete="off"
                     placeholder="Automatic"
                     description="Set the font size of the editor (px)."
                   />
                   <FormControl
-                    v-model="settings.line_height"
+                    v-model.number="lineSpacing"
                     type="number"
-                    label="Line Height"
+                    label="Line spacing"
                     autocomplete="off"
+                    :min="0.5"
+                    :step="0.05"
                     placeholder="Automatic"
-                    description="Set the line height of the editor."
+                    description="A multiple of single spacing, like 1.15 or 1.5."
                   />
                   <div class="space-y-1.5">
-                    <FormLabel label="Paragraph Spacing" size="md" />
+                    <FormLabel label="Paragraph spacing" size="md" />
                     <div class="grid grid-cols-2 gap-2">
                       <FormControl
                         v-model.number="settings.paragraph_spacing_before"
@@ -64,39 +66,38 @@
                 </div>
 
                 <!-- Print Settings Section -->
-                <div class="flex flex-col gap-3 pb-5 pr-5">
-                  <template v-if="tabIndex === 1">
-                    <h3 class="text-base font-medium text-ink-gray-7">Print Settings</h3>
+                <div v-if="tabIndex === 1" class="flex flex-col gap-3 pb-5 pr-5">
+                    <h3 class="text-base font-medium text-ink-gray-7">Print settings</h3>
                     <div class="space-y-2">
-                      <FormLabel label="Header & Footer" size="md" />
+                      <FormLabel label="Header & footer" size="md" />
                       <div class="grid grid-cols-2 gap-2">
                         <FormControl
                           v-model="settings.print_header_left"
                           type="text"
-                          placeholder="Header Left"
-                          label="Top Left"
+                          placeholder="Header left"
+                          label="Top left"
                           autocomplete="off"
                         />
                         <FormControl
                           v-model="settings.print_header_right"
                           type="text"
-                          placeholder="Header Right"
-                          label="Top Right"
+                          placeholder="Header right"
+                          label="Top right"
                           autocomplete="off"
                         />
                         <FormControl
                           v-model="settings.print_footer_left"
                           type="text"
-                          placeholder="Footer Left"
-                          label="Bottom Left"
+                          placeholder="Footer left"
+                          label="Bottom left"
                           autocomplete="off"
                         />
                         <FormControl
                           v-model="settings.print_footer_right"
                           :disabled="settings.print_show_pages"
                           type="text"
-                          placeholder="Footer Right"
-                          label="Bottom Right"
+                          placeholder="Footer right"
+                          label="Bottom right"
                           autocomplete="off"
                         />
                       </div>
@@ -123,48 +124,7 @@
                         label="Footer separator line"
                         description="Add a line above the footer when printing."
                       />
-                      <FormControl
-                        v-model="settings.apply_watermark"
-                        type="checkbox"
-                        label="Apply watermark to PDF"
-                        :description="'Enable this to automatically apply watermark when downloading PDF for this document.'"
-                      />
                     </div>
-                  </template>
-                  <template v-else>
-                    <h3 class="text-base font-medium text-ink-gray-7">Watermark</h3>
-                    <FormControl
-                      v-model="settings.watermark_text"
-                      type="text"
-                      label="Text"
-                      placeholder="Your company name.."
-                      :description="`Set the text for the watermark.`"
-                    />
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <FormControl
-                        v-model.number="settings.watermark_size"
-                        type="number"
-                        label="Size"
-                        placeholder="40"
-                        :min="10"
-                        :max="300"
-                        :step="5"
-                        :description="`Set the watermark text size (px).`"
-                        class="w-full"
-                      />
-                      <FormControl
-                        v-model.number="settings.watermark_angle"
-                        type="number"
-                        label="Angle"
-                        placeholder="-45"
-                        :min="-180"
-                        :max="180"
-                        :step="15"
-                        :description="`Set the watermark text angle (°).`"
-                        class="w-full"
-                      />
-                    </div>
-                  </template>
                 </div>
               </div>
               <div class="mt-2">
@@ -202,6 +162,7 @@
 import { computed, ref, reactive, watchEffect } from 'vue'
 import { Button, FormControl, Dialog, Tabs, FormLabel } from 'frappe-ui'
 import { FONT_FAMILIES, dynamicList } from '@/apps/writer/utils/'
+import { toCssLineHeight, toLineSpacing } from '@/apps/writer/utils/typography'
 import Form from '@/apps/writer/components/Form.vue'
 import FontSelect from './FontSelect.vue'
 import LucideFileText from '~icons/lucide/file-text'
@@ -249,12 +210,21 @@ const KEYS = computed(() => [
   'print_show_pages',
   'print_header_separator',
   'print_footer_separator',
-  ...(tabIndex.value === 0
-    ? ['watermark_text', 'watermark_size', 'watermark_angle']
-    : ['apply_watermark']),
 ])
 
 const settings = reactive({})
+
+// Stored as a CSS line-height; shown as a Google Docs style multiple of single
+// spacing so the number behaves the way users expect.
+const lineSpacing = computed({
+  get: () =>
+    settings.line_height && settings.line_height !== 'global'
+      ? toLineSpacing(settings.line_height)
+      : '',
+  set: (value) => {
+    settings.line_height = value ? toCssLineHeight(value) : 'global'
+  },
+})
 
 const LOCAL_ONLY = [
   'print_header_left',
@@ -262,12 +232,7 @@ const LOCAL_ONLY = [
   'print_footer_left',
   'print_footer_right',
 ]
-const BOOLS = [
-  'apply_watermark',
-  'print_header_separator',
-  'print_footer_separator',
-  'print_show_pages',
-]
+const BOOLS = ['print_header_separator', 'print_footer_separator', 'print_show_pages']
 watchEffect(() => {
   const base = { ...resource.value.doc[key.value] }
   for (const k of KEYS.value) {

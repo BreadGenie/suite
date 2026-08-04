@@ -219,9 +219,7 @@ const signup = createResource({
     }
   },
   onSuccess() {
-    window.location.replace(
-      "/drive/setup?redirect-to=" + (params.get("redirect-to") || "/drive")
-    )
+    window.location.replace(params.get("redirect-to") || "/drive")
   },
 })
 

@@ -64,6 +64,7 @@
 <script setup>
 import { computed, onActivated, onDeactivated, ref, useTemplateRef, watch, provide } from 'vue'
 import { useRouter } from 'vue-router'
+import { useShortcut } from 'frappe-ui'
 
 import SlideElement from '@/apps/slides/components/SlideElement.vue'
 import SlideshowEndScreen from '@/apps/slides/components/SlideshowEndScreen.vue'
@@ -75,6 +76,8 @@ import {
 	endSlideShow,
 	prefetchNextSlide,
 	changeSlideInSlideshow,
+	performNextStep,
+	performPreviousStep,
 } from '@/apps/slides/stores/slideshow'
 
 import { applyReverseTransition, initPresentationDoc, inReadonlyMode } from '@/apps/slides/stores/presentation'
@@ -345,6 +348,17 @@ watch(
 
 provide('inReadonlyMode', inReadonlyMode)
 provide('inSlideShowMode', inSlideShowMode)
+
+useShortcut([
+	{ key: 'ArrowRight', description: 'Next step', group: 'Slideshow', handler: performNextStep },
+	{ key: 'ArrowDown', description: 'Next step', group: 'Slideshow', handler: performNextStep },
+	{ key: ' ', description: 'Next step', group: 'Slideshow', handler: performNextStep },
+	{ key: 'PageDown', description: 'Next step', group: 'Slideshow', handler: performNextStep },
+	{ key: 'ArrowLeft', description: 'Previous step', group: 'Slideshow', handler: performPreviousStep },
+	{ key: 'ArrowUp', description: 'Previous step', group: 'Slideshow', handler: performPreviousStep },
+	{ key: 'PageUp', description: 'Previous step', group: 'Slideshow', handler: performPreviousStep },
+	{ key: 'F5', description: 'Restart', group: 'Slideshow', handler: () => changeSlideInSlideshow(0) },
+])
 </script>
 
 <style>

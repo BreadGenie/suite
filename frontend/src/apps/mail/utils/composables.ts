@@ -1,5 +1,5 @@
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { createResource, toast } from 'frappe-ui'
 
 import { matchesScreenedValue, raiseOptimisticToast, raiseToast } from '@/apps/mail/utils'
@@ -7,21 +7,51 @@ import { userStore } from '@/apps/mail/stores/user'
 
 import type { COLOR_SCHEME, Identity, ScreenedAddress } from '@/apps/mail/types'
 
-export const useScreenSize = () => {
-	const size = reactive({ width: window.innerWidth, height: window.innerHeight })
+// Decided once, at load, and deliberately not reactive to resize. Mobile and desktop are
+// separate component trees here, not one tree restyled: crossing 640px mid-session swaps
+// them and unmounts whatever they were holding — a half-written mail vanished this way
+// (#38), and every other open surface has the same exposure. A resized window therefore
+// keeps the layout it started with until the page is reloaded.
+const isMobile = ref(window.innerWidth < 640)
 
-	const isMobile = computed(() => size.width < 640)
+export const useScreenSize = () => ({ isMobile })
 
-	const onResize = () => {
-		size.width = window.innerWidth
-		size.height = window.innerHeight
+/**
+ * Split View: the reading pane sits beside the list rather than over it. One user setting, read the
+ * same way by every list view and by ThreadPane itself — the two halves of the split are sized from
+ * it, so they must never be able to disagree about it.
+ */
+export const useReadingPane = () => {
+	const { userResource } = userStore()
+	return computed(() => !!userResource.data?.show_reading_pane)
+}
+
+/**
+ * Switching accounts stays in place wherever the view allows it — shared by the
+ * sidebar's account submenu and the mobile profile sheet. Account-scoped routes
+ * swap the accountId param in their own URL. The account-agnostic All Inboxes
+ * routes just re-resolve the active account (bouncing to the new account's inbox
+ * threw the reader out of the merged list, which spans every account anyway).
+ * Everything else goes through the account shortcut, which the guard resolves to
+ * the new account's default mailbox.
+ */
+export const useAccountSwitch = () => {
+	const route = useRoute()
+	const router = useRouter()
+	const store = userStore()
+
+	const switchAccount = (accountId: string) => {
+		if (accountId === store.accountId) return
+		if ((route.name as string)?.startsWith('mail-all-inboxes'))
+			return store.resolveAccount(store.userResource.data?.accounts, accountId)
+		router.push(
+			route.params.accountId
+				? { name: route.name!, params: { ...route.params, accountId } }
+				: { name: 'mail-account-shortcut', params: { accountId } },
+		)
 	}
 
-	onMounted(() => window.addEventListener('resize', onResize))
-
-	onUnmounted(() => window.removeEventListener('resize', onResize))
-
-	return { size, isMobile }
+	return { switchAccount }
 }
 
 const isSidebarOpen = ref(false)
@@ -31,6 +61,83 @@ export const useSidebar = () => {
 	const closeSidebar = () => (isSidebarOpen.value = false)
 
 	return { isSidebarOpen, openSidebar, closeSidebar }
+}
+
+// Horizontal swipe-to-page detection, shared by the mailbox thread pane and the screener
+// preview: left → onSwipe(1) (next), right → onSwipe(-1). Judged on touchend (passive) so
+// vertical scrolling is never delayed; a swipe must be decisively horizontal — at least
+// 64px long and twice its vertical drift. Swipes over an email body never reach the pane:
+// EmailContent detects them inside its iframe and re-broadcasts them as `email-swipe`
+// window events, which this subscribes to as well. The time guard dedupes those (every
+// mounted EmailContent re-dispatches the same message) and paces direct swipes alike.
+const SWIPE_MIN_X = 64
+
+export const useSwipeNav = (enabled: () => boolean, onSwipe: (offset: 1 | -1) => void) => {
+	let origin: { x: number; y: number } | null = null
+	let lastSwipeAt = 0
+
+	const swipe = (offset: 1 | -1) => {
+		if (!enabled()) return
+		const now = Date.now()
+		if (now - lastSwipeAt < 250) return
+		lastSwipeAt = now
+		onSwipe(offset)
+	}
+
+	const onTouchStart = (e: TouchEvent) => {
+		origin =
+			enabled() && e.touches.length === 1
+				? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+				: null
+	}
+
+	const onTouchEnd = (e: TouchEvent) => {
+		if (!origin) return
+		const dx = e.changedTouches[0].clientX - origin.x
+		const dy = e.changedTouches[0].clientY - origin.y
+		origin = null
+		if (Math.abs(dx) < SWIPE_MIN_X || Math.abs(dx) < Math.abs(dy) * 2) return
+		swipe(dx < 0 ? 1 : -1)
+	}
+
+	const onEmailSwipe = (e: Event) => swipe((e as CustomEvent).detail === 'left' ? 1 : -1)
+
+	onMounted(() => window.addEventListener('email-swipe', onEmailSwipe))
+	onUnmounted(() => window.removeEventListener('email-swipe', onEmailSwipe))
+
+	return { onTouchStart, onTouchEnd }
+}
+
+// Mobile folder bottom sheet — shared so both the header title (mailbox views)
+// and the tab bar's Mail re-tap can open the same sheet.
+const isFolderSheetOpen = ref(false)
+
+export const useFolderSheet = () => {
+	const openFolderSheet = () => (isFolderSheetOpen.value = true)
+	const closeFolderSheet = () => (isFolderSheetOpen.value = false)
+
+	return { isFolderSheetOpen, openFolderSheet, closeFolderSheet }
+}
+
+// Mobile selection mode — MailboxView owns the selection; the tab bar and FAB
+// (mounted in DefaultLayout) hide behind the contextual action bar while it's on.
+const isMobileSelectionActive = ref(false)
+
+export const useMobileSelection = () => {
+	const setMobileSelectionActive = (active: boolean) => (isMobileSelectionActive.value = active)
+
+	return { isMobileSelectionActive, setMobileSelectionActive }
+}
+
+// Mobile profile bottom sheet — opened from the header avatar (any view), so the
+// trigger (HeaderActions) and the mounted sheet (tab bar) stay decoupled.
+const isProfileSheetOpen = ref(false)
+
+export const useProfileSheet = () => {
+	const openProfileSheet = () => (isProfileSheetOpen.value = true)
+	const closeProfileSheet = () => (isProfileSheetOpen.value = false)
+
+	return { isProfileSheetOpen, openProfileSheet, closeProfileSheet }
 }
 
 export const useTextEditorButtons = () => {
@@ -121,6 +228,17 @@ export interface BlockableSender {
 
 const showBlockSender = ref(false)
 const sendersToBlock = ref<BlockableSender[]>([])
+
+// The account's own addresses, lowercased — what a thread's senders are matched against to decide
+// which of them the row calls "me" (see utils/participants). Identities are per account, so a row
+// merged in from another account (All Inboxes, cross-account search) is resolved against the active
+// one: the cast it names is right either way, and only the "me" would go by its own name instead.
+export const useOwnEmails = () => {
+	const { identities } = userStore()
+	return computed(
+		() => new Set((identities.data ?? []).map((i: Identity) => i.email.toLowerCase())),
+	)
+}
 
 export const useBlockSender = () => {
 	const store = userStore()

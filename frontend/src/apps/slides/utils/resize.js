@@ -1,3 +1,5 @@
+import { normalizeRotation } from './helpers'
+
 const MIN_SIZE = {
 	text: { width: 7, height: 7 },
 	shape: { width: 10, height: 16 },
@@ -168,6 +170,6 @@ export const getResizedLine = (start, handle, cursorMovement) => {
 
 	return {
 		...getBoxFromCenter(center, getLength(lineVector), start.height),
-		rotation: getAngle(lineVector),
+		rotation: normalizeRotation(getAngle(lineVector)),
 	}
 }

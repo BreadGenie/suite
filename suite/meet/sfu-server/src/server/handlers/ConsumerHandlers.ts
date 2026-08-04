@@ -5,23 +5,47 @@ import type { HandlerDeps } from './Handler';
 export function registerConsumerHandlers(deps: HandlerDeps) {
 	return (socket: Socket) => {
 		socket.on('create_consumer', async (data, callback) => {
+			const startedAt = performance.now();
+			let media: 'audio' | 'video' | 'unknown' = 'unknown';
+			let source: 'camera' | 'screen' | 'unknown' = 'unknown';
+			let outcome: 'success' | 'failure' = 'failure';
 			try {
 				deps.authManager.ensureFullAccess(socket);
 				enforceE2EEMediaPolicy(socket);
 				const { transportId, producerId, rtpCapabilities } = data;
+				const producer = deps.mediasoup.getProducer(producerId);
+				if (producer) {
+					source = producer.appData?.type === 'screen' ? 'screen' : 'camera';
+				}
 				const consumer = await deps.mediasoup.createConsumer(
 					transportId,
 					producerId,
 					rtpCapabilities,
 				);
+				media =
+					consumer.kind === 'audio' || consumer.kind === 'video'
+						? consumer.kind
+						: 'unknown';
 
 				callback({ success: true, ...consumer });
+				outcome = 'success';
 			} catch (error) {
 				loggers.socketHandler.error(
 					'Error creating consumer: %s',
 					(error as Error).message,
 				);
 				callback({ success: false, error: (error as Error).message });
+			} finally {
+				deps.telemetry.recordMediaOperation(
+					{
+						operation: 'create_consumer',
+						direction: 'recv',
+						media,
+						source,
+						outcome,
+					},
+					(performance.now() - startedAt) / 1000,
+				);
 			}
 		});
 

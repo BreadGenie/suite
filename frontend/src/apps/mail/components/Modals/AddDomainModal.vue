@@ -8,6 +8,7 @@
 					label: __('Add Domain'),
 					variant: 'solid',
 					disabled: !domainName,
+					loading: addDomain.loading,
 					onClick: addDomain.submit,
 				},
 			],
@@ -27,6 +28,7 @@
 					:label="__('Domain Name')"
 					placeholder="example.com"
 					autocomplete="off"
+					:description="__('After adding, copy the generated DNS records to your DNS provider.')"
 				/>
 				<FormControl
 					v-model="domainDescription"
@@ -35,7 +37,7 @@
 					type="textarea"
 				/>
 				<ErrorMessage
-					:message="addDomain.error?.messages[0] || addDomain.error?.message"
+					:message="addDomain.error && (addDomain.error?.messages?.[0] || addDomain.error?.message || __('Request failed.'))"
 				/>
 			</div>
 		</template>

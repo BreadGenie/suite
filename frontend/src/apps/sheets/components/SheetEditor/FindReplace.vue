@@ -1,5 +1,5 @@
 <template>
-  <div class="fr-panel">
+  <div class="fr-panel" ref="panelRef">
     <div class="fr-header">
       <span class="fr-title">Find &amp; Replace</span>
       <Button variant="ghost" size="sm" icon="x" @click="emit('close')" />
@@ -11,6 +11,7 @@
       placeholder="Find"
       autocomplete="off"
       @keydown.enter="findNext"
+      @keydown.escape="emit('close')"
     />
     <FormControl
       type="text"
@@ -29,7 +30,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, nextTick } from 'vue'
 import { Button, FormControl } from 'frappe-ui'
 
 const props = defineProps({
@@ -45,6 +46,30 @@ const replaceQuery = ref('')
 const matches      = ref([])
 const matchIndex   = ref(-1)
 const status       = ref('')
+const panelRef     = ref(null)
+
+function focusInput() {
+  const doFocus = () => {
+    const input = panelRef.value?.querySelector('input')
+    if (input && typeof input.focus === 'function') {
+      input.focus()
+      if (typeof input.select === 'function') {
+        input.select()
+      }
+    }
+  }
+  nextTick(doFocus)
+  setTimeout(doFocus, 0)
+  setTimeout(doFocus, 50)
+}
+
+onMounted(() => {
+  focusInput()
+})
+
+defineExpose({
+  focusInput,
+})
 
 function _buildMatches() {
   const q = findQuery.value.toLowerCase()

@@ -9,6 +9,7 @@ import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { pendingShapeType, addShapeElement } from '@/apps/slides/stores/element'
 import { slideBounds } from '@/apps/slides/stores/slide'
 import { useDrawRect } from '@/apps/slides/composables/useDrawRect'
+import { selectionColor } from '@/apps/slides/utils/constants'
 
 const { isDrawing, isShiftLocked, drawRect, startPoint, endPoint, startDrawing, cancelDrawing } =
 	useDrawRect()
@@ -71,7 +72,7 @@ const linePreviewStyles = computed(() => {
 		height: `${Math.max(2 / slideBounds.scale, 2)}px`,
 		transformOrigin: '0 50%',
 		transform: `translate(0, -50%) rotate(${angle}deg)`,
-		backgroundColor: '#70B6F092',
+		backgroundColor: `${selectionColor}92`,
 		zIndex: 10001,
 		pointerEvents: 'none',
 	}
@@ -88,8 +89,7 @@ const previewStyles = computed(() => {
 		top: `${top}px`,
 		width: `${width}px`,
 		height: `${height}px`,
-		backgroundColor: '#70b6f025',
-		outline: `#70B6F092 solid ${0.1 / slideBounds.scale}px`,
+		backgroundColor: `${selectionColor}25`,
 		borderRadius: previewBorderRadius.value,
 		clipPath: previewClipPath.value,
 		boxSizing: 'border-box',

@@ -4,7 +4,6 @@ import { setActiveEntity } from '@/apps/drive/data/selection'
 /**
  * Drive-local navigation guard on the shared suite router, scoped to `drive-*`
  * routes so it never runs for other apps:
- *   - stores `recentTeam` in localStorage,
  *   - clears the active entity on every navigation,
  *   - stores the current route in sessionStorage.
  * Auth itself is the suite router's `beforeEach` (redirects guests for
@@ -19,7 +18,6 @@ const isDriveRoute = (route: { name?: unknown; path?: string }) =>
 
 suiteRouter.beforeEach((to, _from, next) => {
   if (!isDriveRoute(to)) return next()
-  if (to.params.team) localStorage.setItem('recentTeam', String(to.params.team))
   setActiveEntity(null)
   next()
 })

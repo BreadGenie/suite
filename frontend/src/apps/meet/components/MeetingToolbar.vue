@@ -13,13 +13,11 @@
 				aria-label="Meeting controls"
 				@mouseenter="onMouseEnter"
 				@mouseleave="onMouseLeave"
-				data-testid="meeting-toolbar"
 			>
 				<!-- Microphone -->
 				<ToolbarButton
 					:variant="isMicOn ? 'default' : 'muted'"
 					:title="`Toggle Audio (${$platform === 'mac' ? '⌘+D' : 'Ctrl+D'})`"
-					test-id="toolbar-microphone"
 					@click="$emit('toggle-microphone')"
 				>
 					<MeetMicIcon v-if="isMicOn" />
@@ -30,7 +28,6 @@
 				<ToolbarButton
 					:variant="isCameraOn ? 'default' : 'muted'"
 					:title="`Toggle Video (${$platform === 'mac' ? '⌘+E' : 'Ctrl+E'})`"
-					test-id="toolbar-camera"
 					@click="$emit('toggle-camera')"
 				>
 					<MeetCameraIcon v-if="isCameraOn" />
@@ -42,7 +39,6 @@
 					v-if="canScreenShare()"
 					:variant="isScreenSharing ? 'muted' : 'default'"
 					title="Toggle Screen Share"
-					test-id="toolbar-screen-share"
 					@click="$emit('toggle-screen-share')"
 				>
 					<MeetPresentPauseIcon v-if="isScreenSharing" />
@@ -53,7 +49,6 @@
 				<ToolbarButton
 					:variant="isHandRaised ? 'muted' : 'default'"
 					title="Raise Hand"
-					test-id="toolbar-raise-hand"
 					@click="$emit('toggle-raise-hand')"
 				>
 					<MeetHandIcon />
@@ -68,7 +63,6 @@
 					<template #trigger>
 						<ToolbarButton
 							title="Reactions"
-							test-id="toolbar-reactions"
 							@click="() => {}"
 						>
 							<MeetSmileIcon />
@@ -83,7 +77,7 @@
 							<Button
 								size="lg"
 								variant="ghost"
-								data-testid="toolbar-more"
+								label="More options"
 								tooltip="More options"
 							>
 								<template #icon>
@@ -98,7 +92,6 @@
 				<ToolbarButton
 					variant="active"
 					title="End Call"
-					test-id="toolbar-end-call"
 					@click="$emit('end-call')"
 				>
 					<MeetPhoneOffIcon class="text-ink-red-6 size-5" />
@@ -118,7 +111,6 @@
 					:active="isPeopleOpen"
 					variant="default"
 					title="Show Participants"
-					test-id="toolbar-people"
 					@click="$emit('toggle-people')"
 				>
 					<MeetPeopleIcon />
@@ -134,7 +126,6 @@
 					:active="isChatOpen"
 					variant="default"
 					title="Show Chat"
-					test-id="toolbar-chat"
 					@click="$emit('toggle-chat')"
 				>
 					<MeetChatIcon />
@@ -220,6 +211,7 @@ const props = defineProps<{
 	meetingTitle?: string;
 	currentUser?: unknown;
 	isFullscreen?: boolean;
+	statsVisible?: boolean;
 	cameraPermissionGranted?: boolean;
 	microphonePermissionGranted?: boolean;
 	isCaptionsEnabled?: boolean;
@@ -236,6 +228,7 @@ const emit = defineEmits<{
 	"toggle-raise-hand": [];
 	"toggle-captions": [];
 	"report-problem": [];
+	"toggle-stats": [];
 	"end-call": [];
 	"device-changed": [event: unknown];
 	"update:isReactionPickerOpen": [value: boolean];
@@ -267,6 +260,14 @@ const moreOptions = computed(() => [
 		label: "Meeting information",
 		onClick: () => {
 			showMeetingInfoDialog.value = true;
+			resetHideTimer();
+		},
+	},
+	{
+		icon: "lucide-activity",
+		label: props.statsVisible ? "Hide stats for nerds" : "Stats for nerds",
+		onClick: () => {
+			emit("toggle-stats");
 			resetHideTimer();
 		},
 	},

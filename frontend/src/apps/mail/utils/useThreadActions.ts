@@ -5,6 +5,7 @@ import { createResource } from 'frappe-ui'
 import { FOLDER_ICON_COLOR_MAP } from '@/apps/mail/constants'
 import { getIcon, raiseOptimisticToast, raisePromiseToast, raiseToast } from '@/apps/mail/utils'
 import { useBlockSender, useUndo } from '@/apps/mail/utils/composables'
+import { useMailRemoval } from '@/apps/mail/composables/useMailRemoval'
 import { userStore } from '@/apps/mail/stores/user'
 
 import type { Mail, Mailbox, Thread } from '@/apps/mail/types'
@@ -927,71 +928,23 @@ export function useThreadActions(deps: {
 	}
 
 	// ── Per-message (single mail) actions from the reading pane ─────────────────────────────────────
-	// Optimistically drops the mail from the open thread's pane (via the exposed removeMailFromView); if
-	// that empties the thread's view, the pane closes and the thread row leaves the list — all before the
-	// request fires, mirroring the thread-level pattern. `undoReq` (when present) restores the server
-	// state for undo; `afterSuccess` runs once the forward request lands (e.g. the block-sender prompt).
-	const runMailRemoval = (
-		mail: Mail,
-		req: () => Promise<unknown>,
-		success: string,
-		opts: { undoReq?: () => Promise<unknown>; undoSuccess?: string; afterSuccess?: () => void } = {},
-	) => {
-		const { emptied, rollback } = mailThreadRef.value?.removeMailFromView(mail.id) ?? {
-			emptied: false,
-			rollback: () => {},
-		}
-		let removed: Thread[] = []
-		if (emptied) {
-			goToNextThreadOrMailbox([mail.thread_id])
-			removed = removeThreadsFromList([mail.thread_id])
-		}
-		const restoreUi = () => {
-			rollback()
-			if (removed.length) restoreThreadsToList(removed)
-		}
-
-		setUndoAction(undefined)
-		let forwardOk = false
-		const forwardPromise = (async () => {
-			try {
-				await req()
-				forwardOk = true
-				mailboxes.reload()
-				refillIfEmpty()
-				opts.afterSuccess?.()
-			} catch (error) {
-				restoreUi()
-				setUndoAction(undefined)
-				throw error
+	// The orchestration is shared with the merged All Inboxes list (see useMailRemoval); what differs is
+	// where the pane goes when a thread empties, and how a removed row is put back — Sent and Drafts
+	// also summarise their rows from the folder rather than the conversation.
+	const { runMailRemoval } = useMailRemoval({
+		row: (mail) => threadsResource.value?.data?.find((t: Thread) => t.thread_id === mail.thread_id),
+		mailThreadRef,
+		onEmptied: (mail) => goToNextThreadOrMailbox([mail.thread_id]),
+		removeRow: (mail) => {
+			const removed = removeThreadsFromList([mail.thread_id])
+			return () => {
+				if (removed.length) restoreThreadsToList(removed)
 			}
-		})()
-
-		if (!opts.undoReq) return raiseOptimisticToast(forwardPromise, success)
-
-		setUndoAction(() =>
-			void (async () => {
-				await forwardPromise.catch(() => {})
-				if (!forwardOk) return
-				restoreUi()
-				setUndoAction(undefined)
-				raiseOptimisticToast(
-					opts
-						.undoReq!()
-						.then(() => mailboxes.reload())
-						.catch((error) => {
-							// The undo didn't land server-side — re-remove so the UI matches the server
-							// instead of showing the mail (and its row) as restored.
-							mailThreadRef.value?.removeMailFromView(mail.id)
-							if (removed.length) removeThreadsFromList([mail.thread_id])
-							throw error
-						}),
-					opts.undoSuccess ?? success,
-				)
-			})(),
-		)
-		raiseOptimisticToast(forwardPromise, success, undo)
-	}
+		},
+		outgoingMailbox: () =>
+			[mailboxIds.sent, mailboxIds.drafts].includes(mailbox.value) ? mailbox.value : undefined,
+		afterForward: refillIfEmpty,
+	})
 
 	const mailSnapshot = (mail: Mail) => [
 		{ id: mail.id, mailbox_ids: mail.mailboxes.map((mb) => mb.mailbox_id), junk: mail.junk },

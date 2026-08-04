@@ -94,14 +94,16 @@ const shortcutGroups = computed(() => [
 				[['G', __('then'), 'S'], __('Go to {0}', [mailboxName('sent')])],
 				[['G', __('then'), 'D'], __('Go to {0}', [mailboxName('drafts')])],
 				[['G', __('then'), 'J'], __('Go to {0}', [mailboxName('junk')])],
-				[['G', __('then'), 'A'], __('Go to {0}', [mailboxName('archive')])],
+				[['G', __('then'), 'E'], __('Go to {0}', [mailboxName('archive')])],
 				[['G', __('then'), 'T'], __('Go to {0}', [mailboxName('trash')])],
+				[['G', __('then'), 'A'], __('Go to All Inboxes')],
+				[['G', __('then'), 'R'], __('Go to Screener')],
 			],
 		},
 		{
 			title: __('Other'),
 			shortcuts: [
-				[[modifier.value, ','], __('Open Settings')],
+				[[modifier.value, 'Shift', ','], __('Open Settings')],
 				[[modifier.value, ';'], __('Toggle Sidebar')],
 				[[modifier.value, 'Shift', 'L'], __('Cycle Theme')],
 				[['?'], __('View Shortcuts')],

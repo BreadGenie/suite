@@ -11,6 +11,13 @@ import VideoIcon from '@/apps/mail/components/Icons/VideoIcon.vue'
 
 import type { ComposeMailData, MailboxData, Recipient } from '@/apps/mail/types'
 
+// Keyboard hints in action labels — "Archive Thread (E)", "Move to Trash (Delete)" —
+// are noise on touch surfaces. Strips only trailing parentheticals that look like
+// shortcuts, so a folder named "Work (old)" is never clipped.
+const SHORTCUT_HINT =
+	/\s*\((?:(?:Shift|Ctrl|Cmd|Alt|⌘|⇧|⌥)\+)*(?:[A-Z!,.;]|Delete|Backspace|Esc(?:ape)?|Enter|Tab|Space|↑\/K|↓\/J)\)$/
+export const stripShortcutHint = (label: string) => label.replace(SHORTCUT_HINT, '')
+
 export const toTitleCase = (str: string) =>
 	str
 		?.toLowerCase()
@@ -19,29 +26,6 @@ export const toTitleCase = (str: string) =>
 			return word.charAt(0).toUpperCase().concat(word.substr(1))
 		})
 		.join(' ') || ''
-
-export function startResizing(event) {
-	const startX = event.clientX
-	const sidebar = document.getElementsByClassName('mailSidebar')[0]
-	const startWidth = sidebar.offsetWidth
-
-	const onMouseMove = (event) => {
-		const diff = event.clientX - startX
-		let newWidth = startWidth + diff
-		if (newWidth < 200) {
-			newWidth = 200
-		}
-		sidebar.style.width = newWidth + 'px'
-	}
-
-	const onMouseUp = () => {
-		document.removeEventListener('mousemove', onMouseMove)
-		document.removeEventListener('mouseup', onMouseUp)
-	}
-
-	document.addEventListener('mousemove', onMouseMove)
-	document.addEventListener('mouseup', onMouseUp)
-}
 
 export const formatBytes = (bytes: number) => {
 	if (!+bytes) return '0 Bytes'
@@ -169,12 +153,6 @@ export const getFormattedDate = (date: Date | string, omitDate = false) => {
 	if (dateObj.isYesterday()) return __('Yesterday')
 	return dateObj.format(isCurrentYear ? 'D MMMM' : 'D MMMM YYYY')
 }
-
-export const getFirstAlphabet = (str?: string) => str?.match(/\p{L}/u)?.[0]
-
-// The letter on a sender's avatar: their name's first, or their address's when they go by no name.
-export const getSenderInitial = (sender: { from_name?: string; from_email?: string }) =>
-	getFirstAlphabet(sender.from_name) || getFirstAlphabet(sender.from_email)
 
 export const getTheme = (
 	status: 'Draft' | 'Queued' | 'In Progress' | 'Completed' | 'Failed' | 'Cancelled',
@@ -442,6 +420,17 @@ export const getIcon = (mailbox: MailboxData) => {
 export const getMailboxName = (mailbox: MailboxData) =>
 	mailbox._name === SCREENER_MAILBOX_NAME ? __('Screener') : mailbox._name
 
+// Safari reads the blob behind an `<a download>` asynchronously, after the click has
+// already returned, so revoking the object URL in the same tick silently cancels the
+// download. Chrome and Firefox snapshot the blob synchronously, which is why this only
+// shows up on Safari. Keep the URL alive long enough for the browser to read it, then
+// free the blob.
+const DOWNLOAD_URL_TTL = 60_000
+
+export const revokeObjectUrlAfterDownload = (url: string) => {
+	setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_TTL)
+}
+
 export const downloadUrlAsFile = (url: string, filename: string) => {
 	const link = document.createElement('a')
 	link.href = url
@@ -449,5 +438,5 @@ export const downloadUrlAsFile = (url: string, filename: string) => {
 	document.body.appendChild(link)
 	link.click()
 	document.body.removeChild(link)
-	URL.revokeObjectURL(url)
+	revokeObjectUrlAfterDownload(url)
 }

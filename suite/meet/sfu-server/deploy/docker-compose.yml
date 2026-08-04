@@ -23,6 +23,7 @@ services:
     network_mode: host
     environment:
       - JWT_SECRET=${JWT_SECRET}
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
       - PORT=${PORT:-3000}
       - HOST=${HOST:-127.0.0.1}
       - WEBRTC_LISTEN_IP=${WEBRTC_LISTEN_IP:-}
@@ -33,6 +34,9 @@ services:
       - SFU_LOG_LEVEL=${SFU_LOG_LEVEL:-info}
       - STT_SERVER_URL=${STT_SERVER_URL:-}
       - STT_VAD_THRESHOLD=${STT_VAD_THRESHOLD:-0.012}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-}
       - NODE_ENV=production
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:${PORT:-3000}/health"]

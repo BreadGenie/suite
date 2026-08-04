@@ -1,32 +1,34 @@
 <template>
-	<div class="flex items-center space-x-3">
+	<div class="flex items-center justify-between gap-3">
 		<FormControl v-model="search" :placeholder="__('Search')" class="w-80">
 			<template #prefix>
 				<FeatherIcon name="search" class="text-ink-gray-5 w-4" />
 			</template>
 		</FormControl>
-		<FormControl
-			v-model="roleFilter"
-			:placeholder="__('Role')"
-			class="w-40"
-			type="select"
-			:options="ROLE_FILTER_OPTIONS"
-		/>
-		<FormControl
-			v-model="statusFilter"
-			:placeholder="__('Status')"
-			class="w-40"
-			type="select"
-			:options="STATUS_FILTER_OPTIONS"
-		/>
+		<div class="flex items-center gap-3">
+			<FormControl
+				v-model="roleFilter"
+				:placeholder="__('Role')"
+				class="w-40"
+				type="select"
+				:options="ROLE_FILTER_OPTIONS"
+			/>
+			<FormControl
+				v-model="statusFilter"
+				:placeholder="__('Status')"
+				class="w-40"
+				type="select"
+				:options="STATUS_FILTER_OPTIONS"
+			/>
+		</div>
 	</div>
 	<ListView
-		v-if="normalizedMembers"
+		v-if="members.data"
 		ref="listView"
 		class="flex-1"
 		:columns="LIST_COLUMNS"
 		:rows="normalizedMembers"
-		:options="LIST_OPTIONS"
+		:options="listOptions"
 		row-key="name"
 	>
 		<ListHeader />
@@ -37,7 +39,7 @@
 					:key="row.name"
 					v-slot="{ column, item }"
 					:row="row"
-					class="hover:bg-surface-gray-1 cursor-pointer rounded"
+					class="hover:!bg-surface-gray-1"
 				>
 					<ListRowItem :item="item">
 						<template v-if="column.key === 'user'">
@@ -52,7 +54,7 @@
 						<template v-else-if="column.key === 'role'">
 							<Badge
 								:label="row.is_admin ? __('Admin') : __('User')"
-								:theme="row.is_admin ? 'orange' : 'blue'"
+								:theme="row.is_admin ? 'amber' : 'blue'"
 							/>
 						</template>
 						<template v-else-if="column.key === 'status'">
@@ -64,8 +66,8 @@
 						<template v-else-if="column.key === 'last_active'">
 							<span class="text-ink-gray-5 text-sm">
 								{{
-									row.last_active && dayjs
-										? dayjs(row.last_active).fromNow()
+									row.last_active
+										? fromNow(row.last_active)
 										: __('Never')
 								}}
 							</span>
@@ -96,13 +98,14 @@
 			</template>
 		</ListSelectBanner>
 	</ListView>
+	<DashboardListSkeleton v-else :columns="4" />
 	<Dialog v-model="showEnableMembers" :options="ENABLE_MEMBERS_OPTIONS" />
 	<Dialog v-model="showDisableMembers" :options="DISABLE_MEMBERS_OPTIONS" />
 	<Dialog v-model="showDeleteMembers" :options="DELETE_MEMBERS_OPTIONS" />
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref, useTemplateRef, watch } from 'vue'
+import { computed, ref, useTemplateRef, watch } from 'vue'
 import { watchDebounced } from '@vueuse/core'
 import {
 	Avatar,
@@ -122,8 +125,9 @@ import {
 } from 'frappe-ui'
 
 import { raiseToast } from '@/apps/mail/utils'
+import { fromNow } from '@/apps/mail/utils/datetime'
+import DashboardListSkeleton from '@/apps/mail/components/DashboardListSkeleton.vue'
 
-type DayjsFn = (value?: string | Date | null) => { fromNow: () => string }
 type MemberRow = {
 	name: string
 	full_name: string
@@ -133,7 +137,6 @@ type MemberRow = {
 	enabled: boolean
 }
 
-const dayjs = inject<DayjsFn>('$dayjs')
 
 const search = ref('')
 const roleFilter = ref<'all' | 'admin' | 'user'>('all')
@@ -203,11 +206,27 @@ const STATUS_FILTER_OPTIONS = [
 	{ label: __('Disabled'), value: 'disabled' },
 ]
 
-const LIST_OPTIONS = {
+const hasActiveFilters = computed(
+	() => !!search.value || roleFilter.value !== 'all' || statusFilter.value !== 'all',
+)
+
+const listOptions = computed(() => ({
 	showTooltip: false,
 	rowHeight: 50,
-	emptyState: { description: __('No members found.') },
-}
+	emptyState: hasActiveFilters.value
+		? {
+				title: __('No matching members'),
+				description: __('Try adjusting your search or filters.'),
+			}
+		: {
+				title: __('No members found'),
+				description: __('Invite people to give them a mailbox on your domains.'),
+			},
+	getRowRoute: (row: MemberRow) => ({
+		name: 'mail-member',
+		params: { memberId: row.name },
+	}),
+}))
 
 const enableMembers = createResource({
 	url: 'suite.mail.api.admin.enable_members',
@@ -275,6 +294,6 @@ const DELETE_MEMBERS_OPTIONS = {
 	message: __(
 		'Are you sure you want to delete the selected members? This action cannot be undone.',
 	),
-	actions: [{ label: __('Confirm'), variant: 'solid', onClick: deleteMembers.submit }],
+	actions: [{ label: __('Confirm'), variant: 'solid', theme: 'red', onClick: deleteMembers.submit }],
 }
 </script>

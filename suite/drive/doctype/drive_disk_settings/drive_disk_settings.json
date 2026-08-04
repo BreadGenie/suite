@@ -7,11 +7,10 @@
  "field_order": [
   "general_section",
   "preview_size",
-  "use_drive_for_files",
+  "quota",
   "disk_section",
   "flat",
   "root_folder",
-  "team_prefix",
   "thumbnail_prefix",
   "s3_section",
   "enabled",
@@ -67,13 +66,6 @@
    "label": "S3"
   },
   {
-   "default": "0",
-   "description": "Legacy option.\n<br>\n<br>\nBy default, Drive stores files the way you see it. If this option is checked, the files are store flatly, with randomized names.\n",
-   "fieldname": "flat",
-   "fieldtype": "Check",
-   "label": "Do not mimic folder/file structure"
-  },
-  {
    "fieldname": "general_section",
    "fieldtype": "Section Break",
    "label": "General"
@@ -94,28 +86,28 @@
    "reqd": 1
   },
   {
+   "default": "0",
+   "description": "Default storage quota per user (in megabytes). 0 means unlimited.",
+   "fieldname": "quota",
+   "fieldtype": "Int",
+   "label": "Quota"
+  },
+  {
    "fieldname": "disk_section",
    "fieldtype": "Section Break",
    "label": "Disk"
   },
   {
+   "default": "0",
+   "description": "Store files by id under one prefix instead of mirroring the folder tree.\nS3 has no rename, so mirroring makes moving a folder copy and delete every object beneath it. Flat keeps moves and renames database-only.\nRecommended for S3; leave off for local disk.",
+   "fieldname": "flat",
+   "fieldtype": "Check",
+   "label": "Flat storage"
+  },
+  {
    "fieldname": "root_folder",
    "fieldtype": "Data",
    "label": "Drive Folder"
-  },
-  {
-   "default": "team_name",
-   "fieldname": "team_prefix",
-   "fieldtype": "Select",
-   "label": "Team Prefix",
-   "options": "team_id\nteam_name\nnone"
-  },
-  {
-   "default": "0",
-   "description": "Make all uploaded files to be managed through Drive, instead of Framework.",
-   "fieldname": "use_drive_for_files",
-   "fieldtype": "Check",
-   "label": "Use Drive for file management"
   }
  ],
  "grid_page_length": 50,
@@ -134,7 +126,7 @@
    "email": 1,
    "print": 1,
    "read": 1,
-   "role": "Drive Admin",
+   "role": "Suite Admin",
    "share": 1,
    "write": 1
   },

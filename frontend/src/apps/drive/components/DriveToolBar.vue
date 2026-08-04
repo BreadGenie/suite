@@ -1,15 +1,15 @@
 <template>
-  <div class="flex p-5 pb-0 h-12">
+  <div class="flex items-center px-5 pt-3 h-12">
     <div v-if="selections?.length" class="my-auto w-[40%] text-base text-ink-gray-8">
       {{ selections.length }}
       {{ selections.length === 1 ? __('item') : __('items') }}
       {{ __('selected') }}
     </div>
-    <div v-if="$route.name === 'drive-Shared'"
+    <div v-if="$route.name === 'drive-Home'"
       class="bg-surface-gray-2 rounded-[10px] space-x-0.5 h-7 flex items-center mr-4 py-1">
-      <TabButtons v-model="shareView" :buttons="[
+      <TabButtons v-model="shareView" :options="[
         {
-          label: __('Site'),
+          label: __('Yours'),
           value: false,
         },
         {
@@ -24,6 +24,16 @@
         <LucideSearch class="size-4" />
       </template>
     </TextInput>
+    <Dropdown v-if="!selections?.length" class="ml-2 my-auto" :options="availableFilterTypes.map(({ name, icon }) => ({
+      label: __(name),
+      icon: h('img', { src: icon }),
+      onClick: () => activeFilters.push({ name, icon }),
+      disabled: activeFilters.includes({ name, icon }),
+    }))
+      " :button="{
+        icon: LucideFilter,
+        tooltip: 'Filter',
+      }" :disabled placement="right" />
 
     <div class="flex gap-2 ml-auto my-auto">
       <template v-if="!selections?.length">
@@ -38,48 +48,17 @@
           </div>
         </div>
         <Button v-if="delayedLoading" :loading="true" label="Loading..." />
-        <TeamSelector :disabled="disabled && team === 'all'" v-if="
-          ['Shared', 'Recents', 'Favourites', 'Trash'].includes($route.name)
-        " v-model="team" :none="true" />
-        <Dropdown :options="availableFilterTypes.map(({ name, icon }) => ({
-          label: __(name),
-          icon: h('img', { src: icon }),
-          onClick: () => activeFilters.push({ name, icon }),
-          disabled: activeFilters.includes({ name, icon }),
-        }))
-          " :button="{
-            icon: LucideFilter,
-            tooltip: 'Filter',
-          }" :disabled placement="right" />
-        <Dropdown v-if="$route.name !== 'Recents'" :options="orderByItems" placement="right">
-          <div class="flex items-center whitespace-nowrap">
-            <Button class="text-sm h-7 border-r border-outline-gray-2 rounded-r-none" :disabled
-              @click.stop="toggleAscending">
-              <template #icon>
-                <LucideArrowDownAz v-if="sortOrder.ascending" class="size-4" />
-                <LucideArrowUpZa v-else class="size-4" />
-              </template>
-            </Button>
+        <SortControl v-if="$route.name !== 'Recents' && view !== 'list'" v-model="sortOrder" :options="columnHeaders"
+          :menu-items="sortMenuItems" :disabled />
 
-            <Button class="text-sm h-7 rounded-l-none flex-1" :disabled>
-              <div class="flex items-center gap-2">
-                {{ __(sortOrder.label) }}
-                <template v-if="sortOrder.smart">
-                  <LucideSparkles class="size-3" />
-                </template>
-              </div>
-            </Button>
-          </div>
-        </Dropdown>
-
-        <TabButtons v-model="view" :buttons="[
+        <TabButtons v-model="view" :options="[
           {
-            icon: 'grid',
+            icon: 'lucide-layout-grid',
             value: 'grid',
             disabled,
           },
           {
-            icon: 'list',
+            icon: 'lucide-list',
             value: 'list',
             disabled,
           },
@@ -119,13 +98,12 @@ import { getIconUrl } from '@/apps/drive/utils/files'
 import { view, shareView } from '@/apps/drive/data/prefs'
 import { onKeyDown } from '@vueuse/core'
 import LucideFilter from '~icons/lucide/filter'
-import TeamSelector from '@/apps/drive/components/TeamSelector.vue'
+import SortControl from '@/components/SortControl.vue'
 
 import LucideX from '~icons/lucide/x'
 
 const sortOrder = defineModel('sortOrder')
 const search = defineModel('search')
-const team = defineModel('team')
 const props = defineProps({
   selections: Array,
   actionItems: Array,
@@ -168,11 +146,7 @@ onKeyDown('Escape', () => {
   search.value = ''
 })
 
-const toggleAscending = () => {
-  sortOrder.value.ascending = !sortOrder.value.ascending
-}
-
-const columnHeaders = computed(() => [
+const columnHeaders = [
   {
     label: __('Name'),
     field: 'file_name',
@@ -193,6 +167,9 @@ const columnHeaders = computed(() => [
     label: __('Type'),
     field: 'file_type',
   },
+]
+
+const sortMenuItems = computed(() => [
   {
     group: true,
     hideLabel: true,
@@ -207,14 +184,4 @@ const columnHeaders = computed(() => [
     ],
   },
 ])
-
-const orderByItems = computed(() => {
-  return columnHeaders.value.map((header) => ({
-    ...header,
-    onClick: () => {
-      sortOrder.value.field = header.field
-      sortOrder.value.label = header.label
-    },
-  }))
-})
 </script>

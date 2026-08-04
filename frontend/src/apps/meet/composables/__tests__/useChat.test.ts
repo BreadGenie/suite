@@ -76,7 +76,7 @@ describe("useChat E2EE gating", () => {
 			currentUser: currentUser as never,
 			sfuClient: sfuClient as never,
 		});
-		chat.setupChatEvents({});
+		chat.setupChatEvents(vi.fn());
 
 		sfuClient.emitChatMessage({
 			fromUser: "bob@example.com",
@@ -88,5 +88,52 @@ describe("useChat E2EE gating", () => {
 		expect(chatStore.chatMessages.at(-1)?.message).toBe(
 			"[Unencrypted message blocked]",
 		);
+	});
+
+	it("notifies for inbound messages while chat is closed", async () => {
+		E2EEMeeting.instance = new E2EEMeeting();
+		const chatStore = makeChatStore();
+		chatStore.isChatOpen = false;
+		const sfuClient = makeSFUClient({ isE2EERequired: vi.fn(() => false) });
+		const notify = vi.fn();
+		const chat = useChat({
+			chatStore,
+			currentUser: currentUser as never,
+			sfuClient: sfuClient as never,
+		});
+		chat.setupChatEvents(notify);
+
+		sfuClient.emitChatMessage({
+			fromUser: "bob@example.com",
+			fromName: "Bob",
+			message: "Hello",
+		});
+		await Promise.resolve();
+
+		expect(notify).toHaveBeenCalledWith({
+			message: "Hello",
+			fromUser: "bob@example.com",
+			fromName: "Bob",
+			type: "chat",
+		});
+	});
+
+	it("uses the server timestamp for locally sent messages", async () => {
+		E2EEMeeting.instance = new E2EEMeeting();
+		const chatStore = makeChatStore();
+		const timestamp = "2026-07-28T12:02:00.000Z";
+		const sfuClient = makeSFUClient({
+			isE2EERequired: vi.fn(() => false),
+			sendChatMessage: vi.fn(async () => ({ success: true, timestamp })),
+		});
+		const chat = useChat({
+			chatStore,
+			currentUser: currentUser as never,
+			sfuClient: sfuClient as never,
+		});
+
+		await chat.onSendChat("After the poll");
+
+		expect(chatStore.chatMessages.at(-1)?.timestamp).toBe(timestamp);
 	});
 });

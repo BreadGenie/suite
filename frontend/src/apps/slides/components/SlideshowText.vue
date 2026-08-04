@@ -4,7 +4,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 
-import { getDocFromHTML } from '@/apps/slides/utils/helpers'
+import { getDocFromHTML, sanitizeSlideHTML } from '@/apps/slides/utils/helpers'
 
 const props = defineProps({
 	content: {
@@ -110,7 +110,7 @@ const getHTMLForContent = (content = props.content) => {
 		}
 	}
 
-	return doc.body.innerHTML
+	return sanitizeSlideHTML(doc.body.innerHTML)
 }
 
 // split initial content into per-character spans for transitions

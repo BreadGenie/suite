@@ -13,7 +13,9 @@
 			]"
 		>
 			<template #tab-panel>
-				<div class="flex flex-1 flex-col space-y-5 overflow-y-auto p-5">
+				<!-- Match DashboardLayout's body spacing so the tabbed page doesn't sit
+				     at a different offset than its sibling pages. -->
+				<div class="flex flex-1 flex-col space-y-5 overflow-y-auto px-3 py-5 sm:px-5">
 					<UsersView v-if="tabIndex === 0" ref="usersView" />
 					<InvitesView v-else ref="invitesView" />
 				</div>

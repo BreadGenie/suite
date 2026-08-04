@@ -2,12 +2,8 @@ import type { RouteRecordRaw } from 'vue-router'
 import { createResource } from 'frappe-ui'
 
 import { useSessionStore } from '@/boot/session'
-import {
-  pageBreadcrumbs,
-  setPageBreadcrumbs,
-} from '@/apps/drive/data/breadcrumbs'
 import { translate } from '@/apps/drive/resources/files'
-import { setupTheme } from '@/apps/drive/utils/setupTheme'
+import { setupTheme } from '@/utils/setupTheme'
 
 /**
  * Drive route module — mounted by the suite router under the '/drive' prefix.
@@ -22,31 +18,13 @@ import { setupTheme } from '@/apps/drive/utils/setupTheme'
  * shortcuts.
  *
  * Auth: the suite router's own `beforeEach` redirects guests to /login unless
- * the route is `meta.allowGuest` (publicly-shared files/folders/teams).
- * Drive-specific guard behaviour (recentTeam, clearing active entity) lives in
- * router.ts.
+ * the route is `meta.allowGuest` (publicly-shared files/folders).
+ * Drive-specific guard behaviour (clearing active entity) lives in router.ts.
  */
 
-const manageBreadcrumbs = (to: any) => {
-  if (
-    pageBreadcrumbs.value[pageBreadcrumbs.value.length - 1]?.name !==
-    to.params.entityName
-  ) {
-    setPageBreadcrumbs({ loading: true, name: to.params.entityName })
-  }
-}
-
-const setRootBreadCrumb = (to: any) => {
+const setPageTitle = (to: any) => {
   if (useSessionStore().isLoggedIn) {
     document.title = __(String(to.name).replace(/^drive-/, ''))
-    if (to.name !== 'drive-Team')
-      setPageBreadcrumbs([
-        {
-          label: __(String(to.name).replace(/^drive-/, '')),
-          name: to.name,
-          route: to.path,
-        },
-      ])
   }
 }
 
@@ -65,70 +43,59 @@ export const routes: RouteRecordRaw[] = [
         meta: { allowGuest: true },
       },
       {
-        path: 'setup',
-        name: 'drive-Setup',
-        component: () => import('@/apps/drive/pages/Setup.vue'),
-      },
-      {
         path: '',
         name: 'drive-Home',
         component: () => import('@/apps/drive/pages/Personal.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
         props: true,
       },
       {
         path: 'inbox',
         name: 'drive-Inbox',
         component: () => import('@/apps/drive/pages/Notifications.vue'),
-        beforeEnter: [setRootBreadCrumb],
-      },
-      {
-        path: 'teams',
-        name: 'drive-Teams',
-        component: () => import('@/apps/drive/pages/Teams.vue'),
+        beforeEnter: [setPageTitle],
       },
       {
         path: 'recents',
         name: 'drive-Recents',
         component: () => import('@/apps/drive/pages/Recents.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
       },
       {
         path: 'favourites',
         name: 'drive-Favourites',
         component: () => import('@/apps/drive/pages/Favourites.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
       },
       {
+        // Shared-with-you is a tab on Home now; old links still land somewhere real.
         path: 'shared',
-        name: 'drive-Shared',
-        component: () => import('@/apps/drive/pages/Shared.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        redirect: { name: 'drive-Home' },
       },
       {
         path: 'attachments/:doctype?/:docname?',
         name: 'drive-Attachments',
         props: true,
         component: () => import('@/apps/drive/pages/Attachments.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
       },
       {
         path: 'documents',
         name: 'drive-Documents',
         component: () => import('@/apps/drive/pages/Documents.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
       },
       {
         path: 'presentations',
         name: 'drive-Presentations',
         component: () => import('@/apps/drive/pages/Slides.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
       },
       {
         path: 'trash',
         name: 'drive-Trash',
         component: () => import('@/apps/drive/pages/Trash.vue'),
-        beforeEnter: [setRootBreadCrumb],
+        beforeEnter: [setPageTitle],
       },
       {
         path: 'g/:entityName/',
@@ -155,19 +122,10 @@ export const routes: RouteRecordRaw[] = [
         },
       },
       {
-        path: 't/:team/',
-        name: 'drive-Team',
-        component: () => import('@/apps/drive/pages/Team.vue'),
-        beforeEnter: [setRootBreadCrumb],
-        props: true,
-        meta: { allowGuest: true },
-      },
-      {
         path: 'f/:entityName/:slug?',
         name: 'drive-File',
         component: () => import('@/apps/drive/pages/File.vue'),
         meta: { allowGuest: true, filePage: true },
-        beforeEnter: [manageBreadcrumbs],
         props: true,
       },
       {
@@ -175,7 +133,6 @@ export const routes: RouteRecordRaw[] = [
         name: 'drive-Folder',
         component: () => import('@/apps/drive/pages/Folder.vue'),
         meta: { allowGuest: true },
-        beforeEnter: [manageBreadcrumbs],
         props: true,
       },
       {
@@ -237,6 +194,26 @@ export const routes: RouteRecordRaw[] = [
         beforeEnter: async (to) => {
           return {
             path: `/drive/g/${to.params.entityName}`,
+          }
+        },
+      },
+      {
+        // Teams became folders. The id in the link belonged to the team, not the
+        // folder it became, so it can only be resolved from what the migration
+        // recorded — falling back to Home when there is nothing to point at, or
+        // when the team was never theirs.
+        path: 't/:team/',
+        component: () => import('@/apps/drive/pages/Dummy.vue'),
+        meta: { allowGuest: true },
+        beforeEnter: async (to) => {
+          const legacy = createResource({
+            url: 'suite.drive.api.files.resolve_legacy_route',
+          })
+          const entity = await legacy.fetch({ old_id: to.params.team })
+          if (!entity) return { name: 'drive-Home' }
+          return {
+            name: entity.is_folder ? 'drive-Folder' : 'drive-File',
+            params: { entityName: entity.name },
           }
         },
       },

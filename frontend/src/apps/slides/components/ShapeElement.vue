@@ -56,6 +56,8 @@
 				:fill="element.fillColor"
 				:stroke="element.strokeColor"
 				:stroke-width="`${element.strokeWidth}px`"
+				:stroke-dasharray="strokeDashArray"
+				:stroke-linecap="strokeLineCap"
 				:rx="element.borderRadius"
 				:ry="element.borderRadius"
 				:filter="shadow.hasShadow ? `url(#${shadowFilterId})` : null"
@@ -70,6 +72,8 @@
 				:fill="element.fillColor"
 				:stroke="element.strokeColor"
 				:stroke-width="`${element.strokeWidth}px`"
+				:stroke-dasharray="strokeDashArray"
+				:stroke-linecap="strokeLineCap"
 				:filter="shadow.hasShadow ? `url(#${shadowFilterId})` : null"
 			/>
 
@@ -79,6 +83,8 @@
 				:fill="element.fillColor"
 				:stroke="element.strokeColor"
 				:stroke-width="`${element.strokeWidth}px`"
+				:stroke-dasharray="strokeDashArray"
+				:stroke-linecap="strokeLineCap"
 				:filter="shadow.hasShadow ? `url(#${shadowFilterId})` : null"
 			/>
 
@@ -99,6 +105,8 @@
 					:y2="element.strokeWidth / 2"
 					:stroke="`${element.strokeColor}`"
 					:stroke-width="`${element.strokeWidth}px`"
+					:stroke-dasharray="strokeDashArray"
+					:stroke-linecap="strokeLineCap"
 					:marker-start="element.markerStart ? `url(#${markerStartId})` : null"
 					:marker-end="element.markerEnd ? `url(#${markerEndId})` : null"
 					:filter="shadow.hasShadow ? `url(#${shadowFilterId})` : null"
@@ -120,17 +128,14 @@
 import { computed, inject, ref } from 'vue'
 
 import TextElement from '@/apps/slides/components/TextElement.vue'
-import { useSVGShadow } from '@/apps/slides/composables/useSVGShadow'
+import { useSvgShadow } from '@/apps/slides/composables/useShadow'
 import { focusElementId, activeElementIds, dragOccurred } from '@/apps/slides/stores/element'
+import { interactionOffset } from '@/apps/slides/stores/interaction'
 
 const props = defineProps({
 	transitionStyles: {
 		type: Object,
 		default: () => ({}),
-	},
-	elementOffset: {
-		type: Object,
-		default: () => ({ left: 0, top: 0 }),
 	},
 	mode: {
 		type: String,
@@ -161,8 +166,9 @@ const polygonPoints = computed(() => {
 	const sides = POLYGON_SIDES[element.value?.shapeType]
 	if (!sides) return ''
 
-	const offsetWidth = isActive.value ? (props.elementOffset.width ?? 0) : 0
-	const offsetHeight = isActive.value ? (props.elementOffset.height ?? 0) : 0
+	const isActiveInEditor = isActive.value && props.mode == 'editor'
+	const offsetWidth = isActiveInEditor ? interactionOffset.width : 0
+	const offsetHeight = isActiveInEditor ? interactionOffset.height : 0
 	const width = (element.value?.width ?? 0) + offsetWidth
 	const height = (element.value?.height ?? 0) + offsetHeight
 	const strokeInset = (element.value?.strokeWidth ?? 0) / 2
@@ -225,14 +231,25 @@ const markerStartId = computed(() => `line-marker-start-${element.value?.id || '
 const markerEndId = computed(() => `line-marker-end-${element.value?.id || ''}`)
 
 const shadowFilterId = computed(() => `shape-shadow-${element.value?.id || ''}`)
-const shadow = useSVGShadow(element)
+const shadow = useSvgShadow(element)
+
+const strokeDashArray = computed(() => {
+	const w = element.value?.strokeWidth || 0
+	const style = element.value?.strokeStyle
+	if (style === 'dashed') return `${w * 3} ${w * 2}`
+	if (style === 'dotted') return `${w} ${w * 1.5}`
+	return null
+})
+
+const strokeLineCap = computed(() => (element.value?.strokeStyle === 'dotted' ? 'round' : null))
 
 const shapeStyles = computed(() => {
 	const styles = {
 		width: '100%',
 		height: '100%',
-		opacity: (element.value?.opacity || 100) / 100,
+		opacity: (element.value?.opacity ?? 100) / 100,
 		overflow: hasMarkers.value || shadow.value.hasShadow || isLine.value ? 'visible' : '',
+		transform: `scale(${element.value?.invertX || 1}, ${element.value?.invertY || 1})`,
 	}
 	return {
 		...styles,

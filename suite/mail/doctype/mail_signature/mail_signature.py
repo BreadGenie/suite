@@ -4,6 +4,8 @@
 # import frappe
 from frappe.model.document import Document
 
+from suite.utils.permissions import OwnerFromUser
 
-class MailSignature(Document):
-	pass
+
+class MailSignature(OwnerFromUser, Document):
+    pass

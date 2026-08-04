@@ -1,10 +1,33 @@
 <template>
-	<div class="flex flex-col gap-2.5 border-b border-l-transparent px-3.5 py-3 sm:border-l sm:px-5">
+	<!-- Mobile mirrors the search overlay's header exactly (same row, same input classes) —
+	     searching and results are one page; tapping the readonly input resumes editing. -->
+	<div
+		:class="
+			isMobile ? '' : 'flex flex-col gap-2.5 border-b border-l-transparent px-3.5 py-3 sm:border-l sm:px-5'
+		"
+	>
+		<div v-if="isMobile" class="flex items-center border-b px-4 py-2">
+			<Search class="text-ink-gray-5 h-4 w-4 shrink-0" />
+			<input
+				readonly
+				:value="searchQuery"
+				:placeholder="__('Search')"
+				:aria-label="__('Edit search')"
+				class="placeholder-ink-gray-4 w-full cursor-pointer border-none bg-transparent text-base focus:ring-0"
+				@mousedown.prevent="openSearch()"
+			/>
+			<Button variant="ghost" :aria-label="__('Filters')" @click="openSearch(true)">
+				<template #icon>
+					<SlidersHorizontal class="text-ink-gray-5 h-4 w-4" />
+				</template>
+			</Button>
+		</div>
 		<FormControl
+			v-else
 			type="text"
 			size="sm"
 			class="w-full cursor-pointer [&_input]:cursor-pointer"
-			:class="{ 'max-w-2xl': isMobile || !showReadingPane }"
+			:class="{ 'max-w-2xl': !showReadingPane }"
 			:model-value="searchQuery"
 			:placeholder="__('Search')"
 			:aria-label="__('Edit search')"
@@ -25,12 +48,19 @@
 				</button>
 			</template>
 		</FormControl>
-		<div v-if="searchFilterChips.length" class="flex flex-wrap items-center gap-1.5">
+		<div
+			v-if="searchFilterChips.length"
+			class="flex flex-wrap items-center gap-1.5"
+			:class="{ 'px-4 py-2': isMobile }"
+		>
 			<span
 				v-for="chip in searchFilterChips"
 				:key="chip.key"
-				class="bg-surface-gray-2 inline-flex h-7 items-center gap-1 rounded pl-2 pr-1 text-xs"
-				:class="{ 'hover:bg-surface-gray-3 cursor-pointer': isClickableChip(chip.key) }"
+				class="bg-surface-gray-2 inline-flex items-center gap-1 rounded pl-2 pr-1"
+				:class="[
+					isMobile ? 'h-8 text-sm' : 'h-7 text-xs',
+					{ 'hover:bg-surface-gray-3 cursor-pointer': isClickableChip(chip.key) },
+				]"
 				@click="isClickableChip(chip.key) && handleChipClick(chip.key)"
 			>
 				<span class="max-w-40 truncate">{{ chip.label }}</span>
@@ -43,7 +73,12 @@
 				</button>
 			</span>
 
-			<Button variant="ghost" class="text-xs" :label="__('Clear all')" @click="clearSearch" />
+			<Button
+				variant="ghost"
+				:class="isMobile ? 'text-sm' : 'text-xs'"
+				:label="__('Clear all')"
+				@click="clearSearch"
+			/>
 		</div>
 	</div>
 </template>

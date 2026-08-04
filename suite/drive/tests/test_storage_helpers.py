@@ -1,9 +1,61 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from suite.drive.utils.files import storage_key, get_s3_url, get_s3_key
+import frappe
+
+from suite.drive.overrides.file import File
+from suite.drive.utils import WRITER_CONTENT_DOCTYPE
+from suite.drive.utils.files import FileManager, get_s3_key, get_s3_url, storage_key
 
 
 class TestStorageHelpers(unittest.TestCase):
+    def test_writer_container_is_disk_managed(self):
+        writer = frappe._dict(
+            file_type="Document",
+            file_url="team/writer-document",
+            content_doctype=WRITER_CONTENT_DOCTYPE,
+        )
+        self.assertFalse(File._not_in_disk(writer))
+
+    def test_other_content_references_are_not_disk_managed(self):
+        reference = frappe._dict(
+            file_type="Document",
+            file_url="team/reference",
+            content_doctype="Presentation",
+        )
+        self.assertTrue(File._not_in_disk(reference))
+
+    def test_writer_container_follows_rename_trash_and_restore(self):
+        with TemporaryDirectory() as site_folder:
+            manager = object.__new__(FileManager)
+            manager.s3_enabled = False
+            manager.flat = False  # this exercises the mirrored-tree path
+            manager.site_folder = Path(site_folder)
+            entity = frappe._dict(
+                name="w1a2b3c4d5",
+                file_name="Renamed document",
+                file_url="root/Original document",
+                mime_type="frappe_doc",
+                content_doctype=WRITER_CONTENT_DOCTYPE,
+                parent_path=Path("root"),
+            )
+            embed = manager.site_folder / entity.file_url / ".embeds" / "image.png"
+            embed.parent.mkdir(parents=True)
+            embed.write_bytes(b"embed")
+
+            entity.file_url = str(manager.rename(entity))
+            renamed_embed = manager.site_folder / entity.file_url / ".embeds" / "image.png"
+            self.assertEqual(renamed_embed.read_bytes(), b"embed")
+
+            with patch("suite.drive.utils.files.get_root_folder", return_value={"file_url": "root"}):
+                manager.move_to_trash(entity)
+                self.assertFalse(renamed_embed.exists())
+                manager.restore(entity)
+
+            self.assertEqual(renamed_embed.read_bytes(), b"embed")
+
     def test_s3_url_roundtrip(self):
         # get_s3_url builds a stored file_url; storage_key must recover the key.
         for key in [

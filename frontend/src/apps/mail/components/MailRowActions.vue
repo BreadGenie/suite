@@ -6,14 +6,29 @@
 			</button>
 		</Tooltip>
 	</template>
-	<Tooltip v-if="showStar" :text="flagged ? __('Unstar Mail') : __('Star Mail')">
+	<Tooltip v-if="showStar && !isMobile" :text="flagged ? __('Unstar Mail') : __('Star Mail')">
 		<button class="action-btn" @click.stop.prevent="emit('setFlagged', !flagged)">
 			<Star
 				class="icon text-ink-gray-5"
-				:style="flagged ? 'fill: var(--ink-amber-6); color: var(--ink-amber-6)' : ''"
+				:class="{ flagged }"
+				:style="flagged ? FLAGGED_STAR_STYLE : ''"
 			/>
 		</button>
 	</Tooltip>
+	<!-- Touch: no Tooltip wrapper (it can eat the first tap and never shows anyway),
+	     and a larger glyph. -->
+	<button
+		v-else-if="showStar"
+		class="action-btn"
+		:aria-label="flagged ? __('Unstar Mail') : __('Star Mail')"
+		@click.stop.prevent="emit('setFlagged', !flagged)"
+	>
+		<Star
+			class="text-ink-gray-5 h-5 w-5"
+			:class="{ flagged }"
+			:style="flagged ? FLAGGED_STAR_STYLE : ''"
+		/>
+	</button>
 </template>
 
 <script setup lang="ts">
@@ -21,6 +36,7 @@ import { computed } from 'vue'
 import { Archive, Mail, MailOpen, Star, Trash2 } from 'lucide-vue-next'
 import { Tooltip } from 'frappe-ui'
 
+import { FLAGGED_STAR_STYLE } from '@/apps/mail/constants'
 import { useScreenSize } from '@/apps/mail/utils/composables'
 import { userStore } from '@/apps/mail/stores/user'
 
@@ -105,11 +121,19 @@ const actions = computed(() =>
 
 <style scoped>
 .action-btn {
-	@apply relative after:absolute after:-inset-4 after:content-[''] sm:after:-inset-1.5;
+	/* Mobile: uneven halo — generous left/right/top, but bottom capped at 10px (the
+	   star's clearance to the row border) so taps meant for the next row's first
+	   line are never captured. ~68×54px effective target on a 20px glyph. */
+	@apply relative after:absolute after:content-[''] max-sm:after:-bottom-2.5 max-sm:after:-left-6 max-sm:after:-right-6 max-sm:after:-top-6 sm:after:-inset-1.5;
 }
 
-.action-btn:hover > * {
-	color: var(--ink-gray-8) !important;
-	stroke-width: 2 !important;
+/* Hover-capable pointers only: on touch, :hover sticks after a tap and the
+   star would stay dark until something else is touched. A flagged star is
+   exempt, or its amber wouldn't show until the pointer left the button. */
+@media (hover: hover) {
+	.action-btn:hover > :not(.flagged) {
+		color: var(--ink-gray-8) !important;
+		stroke-width: 2 !important;
+	}
 }
 </style>

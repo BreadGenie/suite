@@ -1,6 +1,9 @@
 <template>
   <FrappeUIProvider>
-    <div v-if="isLoggedIn || $route.meta.allowGuest" class="flex flex-col sm:flex-row h-full">
+    <div
+      v-if="isLoggedIn || $route.meta.allowGuest"
+      class="flex flex-col sm:flex-row h-full"
+    >
       <Sidebar v-if="normalView" />
       <div id="dropzone" class="flex flex-col flex-1 overflow-hidden bg-surface-base relative">
         <router-view :key="$route.fullPath" v-slot="{ Component }">
@@ -14,7 +17,8 @@
     </router-view>
     <SearchPopup v-if="isLoggedIn && showSearchPopup" v-model="showSearchPopup" />
     <button accesskey="u" class="hidden" @click="emitter.emit('uploadFile')" />
-    <FileUploader v-if="normalView && ['drive-Folder', 'drive-Home', 'drive-Team'].includes($route.name)" />
+    <FileUploader
+      v-if="normalView && ['drive-Folder', 'drive-Home'].includes($route.name) && !($route.name === 'drive-Home' && shareView)" />
     <FDialogs />
   </FrappeUIProvider>
 </template>
@@ -26,14 +30,13 @@ import BottomBar from '@/apps/drive/components/BottomBar.vue'
 import FileUploader from '@/apps/drive/components/FileUploader.vue'
 import { useSessionStore } from '@/boot/session'
 import { ref, computed, onMounted, provide } from 'vue'
-import { sidebarCollapsed } from '@/apps/drive/data/prefs'
+import { sidebarCollapsed, shareView } from '@/apps/drive/data/prefs'
 import { onKeyDown } from '@vueuse/core'
 import emitter from '@/apps/drive/emitter'
 import { initSocket } from '@/apps/drive/socket'
 import { FrappeUIProvider } from 'frappe-ui'
 import { useRoute } from 'vue-router'
-import { setupTheme } from '@/apps/drive/utils/setupTheme'
-import '@/apps/drive/index.css'
+import { setupTheme } from '@/utils/setupTheme'
 
 // Provided from the route-group layout since the suite main.ts is shared.
 provide('emitter', emitter)
@@ -45,12 +48,7 @@ provide('inIframe', inIframe)
 
 const showSearchPopup = ref(false)
 const isLoggedIn = computed(() => useSessionStore().isLoggedIn)
-const normalView = computed(
-  () =>
-    !inIframe &&
-    isLoggedIn.value &&
-    !['drive-Teams', 'drive-Setup'].includes(route.name)
-)
+const normalView = computed(() => !inIframe && isLoggedIn.value)
 emitter.on('showSearchPopup', (data) => {
   showSearchPopup.value = data
 })
@@ -84,10 +82,6 @@ onKeyDown((e) => {
   if (e.key == '?') emitter.emit('toggleShortcuts')
 
   if (e.metaKey) {
-    if (e.key == ',') {
-      emitter.emit('showSettings')
-      e.preventDefault()
-    }
     if (e.shiftKey) {
       if (e.key == 'ArrowRight') {
         sidebarCollapsed.value = false

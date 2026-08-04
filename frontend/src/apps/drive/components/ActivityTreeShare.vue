@@ -33,9 +33,7 @@
     <GeneralAccess
       size="sm"
       :disabled="activity.action_type === 'share_remove' ? true : false"
-      :general-access="{
-        [activity.document_field]: activity.new_value,
-      }"
+      :access-type="activity.document_field === 'everyone' ? 'site' : 'public'"
     />
     <span class="flex gap-x-0.5 items-center justify-start">
       <span>{{ activity.document_field === 'everyone' ? 'Organization' : 'Public' }}</span>

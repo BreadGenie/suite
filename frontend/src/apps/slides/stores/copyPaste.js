@@ -104,7 +104,7 @@ const handlePastedJSON = async (json) => {
 		// add file attachments correctly to current presentation + update docnames in json
 		json = await call('suite.slides.doctype.presentation.presentation.get_updated_json', {
 			presentation: presentationId.value,
-			json: json,
+			elements: json,
 		})
 	}
 

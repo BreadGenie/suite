@@ -23,7 +23,10 @@
 					>
 						<div class="text-ink-gray-5 w-full sm:w-1/4">{{ value.label }}</div>
 						<div class="flex w-full items-center break-words sm:w-3/4">
-							{{ value.value }}
+							<Tooltip v-if="value.description" :text="value.description">
+								<span>{{ value.value }}</span>
+							</Tooltip>
+							<template v-else>{{ value.value }}</template>
 						</div>
 					</div>
 				</div>
@@ -46,7 +49,7 @@
 <script lang="ts" setup>
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { Button, createResource } from 'frappe-ui'
+import { Button, Tooltip, createResource } from 'frappe-ui'
 
 import { copyToClipBoard } from '@/apps/mail/utils'
 
@@ -56,6 +59,7 @@ const message = ref('')
 interface MimeField {
 	label: string
 	value: string
+	description?: string
 }
 
 interface Mime {

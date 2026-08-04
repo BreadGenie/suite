@@ -1,0 +1,33 @@
+{#- Shared shell for the calendar event emails (invite / update / cancel): the gray page, the
+    centered "Frappe Calendar" wordmark, the white card, and the footer. Each email extends this
+    and fills the `card` block. `font` comes from the render context (invitations._context). -#}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f3f3; margin: 0; padding: 0;">
+	<tr>
+		<td align="center" style="padding: 32px 16px;">
+			<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width: 600px; max-width: 600px;">
+				<tr>
+					<td align="center" style="padding: 8px 0 26px;">
+						<table role="presentation" cellpadding="0" cellspacing="0">
+							<tr>
+								<td style="vertical-align: middle; padding-right: 9px;">
+									<img {{ logo_src_attr | safe }} width="22" height="22" alt="" style="display: block; border: 0; width: 22px; height: 22px;" />
+								</td>
+								<td style="vertical-align: middle; font-family: {{ font }}; font-size: 19px; font-weight: 600; color: #171717; letter-spacing: -0.01em;">Frappe Calendar</td>
+							</tr>
+						</table>
+					</td>
+				</tr>
+				<tr>
+					<td style="background-color: #ffffff; border: 1px solid #ededed; border-radius: 16px; padding: 36px; font-family: {{ font }};">
+{% block card %}{% endblock %}
+					</td>
+				</tr>
+				<tr>
+					<td align="center" style="padding: 18px 8px 4px; font-family: {{ font }}; font-size: 13px; color: #7c7c7c;">
+						This email was sent by Frappe Mail.
+					</td>
+				</tr>
+			</table>
+		</td>
+	</tr>
+</table>

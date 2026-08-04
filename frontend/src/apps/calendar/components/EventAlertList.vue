@@ -46,35 +46,35 @@ const RELATIVE_TO_OPTIONS = [
 			:label="i === 0 ? (alerts.length > 1 ? __('Alerts') : __('Alert')) : ''"
 			type="select"
 			:options="ALERT_ACTION_OPTIONS"
-			class="w-40 shrink-0"
+			class="!w-36 shrink-0"
 			@update:model-value="updateAlert(i, 'action', $event)"
 		/>
 		<template v-if="alert.type === 'OffsetTrigger'">
 			<FormControl
 				:model-value="alert.number"
 				type="number"
-				class="mt-auto w-16 shrink-0"
+				class="mt-auto w-14 shrink-0"
 				@update:model-value="updateAlert(i, 'number', $event)"
 			/>
 			<FormControl
 				:model-value="alert.unit"
 				type="select"
 				:options="UNIT_OPTIONS"
-				class="mt-auto w-full"
+				class="mt-auto min-w-0 grow !w-auto"
 				@update:model-value="updateAlert(i, 'unit', $event)"
 			/>
 			<FormControl
 				:model-value="alert.direction"
 				type="select"
 				:options="DIRECTION_OPTIONS"
-				class="mt-auto w-full"
+				class="mt-auto min-w-0 grow !w-auto"
 				@update:model-value="updateAlert(i, 'direction', $event)"
 			/>
 			<FormControl
 				:model-value="alert.relative_to"
 				type="select"
 				:options="RELATIVE_TO_OPTIONS"
-				class="mt-auto w-full"
+				class="mt-auto min-w-0 grow !w-auto"
 				@update:model-value="updateAlert(i, 'relative_to', $event)"
 			/>
 		</template>

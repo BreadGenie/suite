@@ -1,114 +1,102 @@
 import frappe
 from frappe.core.api.file import create_new_folder
 
-from suite.mail.doctype.rate_limit.rate_limit import create_rate_limit
-from suite.mail.stalwart.cli import StalwartCLI
+from suite.suite_core.doctype.rate_limit.rate_limit import create_rate_limit
 
 
 def after_install() -> None:
-	create_mail_admin_role()
-	add_rate_limits()
-	create_new_folder("Frappe Mail", "Home")
-	generate_jmap_push_keys()
-
-
-def create_mail_admin_role() -> None:
-	"""Create the Mail Admin role if missing.
-
-	Deliberately NOT shipped as a fixture: fixture sync deletes and re-inserts the role
-	on every `bench migrate`, and the fresh insert makes Frappe's Role.on_update see
-	desk_access as "changed". That re-evaluates user_type for every holder and clears the
-	sessions of any whose type flips — logging mail users out on every migrate.
-	"""
-
-	if not frappe.db.exists("Role", "Mail Admin"):
-		frappe.get_doc({"doctype": "Role", "role_name": "Mail Admin", "desk_access": 0}).insert(
-			ignore_permissions=True
-		)
+    add_rate_limits()
+    create_new_folder("Frappe Mail", "Home")
+    generate_jmap_push_keys()
 
 
 def after_migrate() -> None:
-	StalwartCLI()._install()
+    pass
 
 
 def add_rate_limits() -> None:
-	"""Add rate limits."""
+    """Add rate limits."""
 
-	rate_limits = [
-		# suite.mail.api.account
-		{"method_path": "suite.mail.api.account.signup", "limit": 5, "seconds": 60 * 60},
-		{"method_path": "suite.mail.api.account.resend_otp", "limit": 5, "seconds": 60 * 60},
-		{"method_path": "suite.mail.api.account.verify_otp", "limit": 5, "seconds": 60 * 60},
-		{"method_path": "suite.mail.api.account.get_account_request", "limit": 5, "seconds": 60 * 60},
-		{"method_path": "suite.mail.api.account.create_account", "limit": 10, "seconds": 60 * 60},
-		{"method_path": "suite.mail.api.account.send_reset_password_link", "limit": 5, "seconds": 60 * 60},
-		{"method_path": "suite.mail.api.account.validate_email_assigned", "limit": 10, "seconds": 60 * 60},
-		# suite.mail.api.admin
-		{"method_path": "suite.mail.api.admin.add_domain", "limit": 10, "seconds": 24 * 60 * 60},
-		{"method_path": "suite.mail.api.admin.add_member", "limit": 10, "seconds": 60 * 60},
-		# suite.mail.api.inbound
-		{"method_path": "suite.mail.api.inbound.fetch_blob", "limit": 60, "seconds": 60},
-		{"method_path": "suite.mail.api.inbound.pull", "limit": 10, "seconds": 60},
-		{"method_path": "suite.mail.api.inbound.pull_raw", "limit": 10, "seconds": 60},
-		# suite.mail.api.outbound
-		{"method_path": "suite.mail.api.outbound.upload_attachment", "limit": 60, "seconds": 60},
-		{"method_path": "suite.mail.api.outbound.send", "limit": 300, "seconds": 60},
-		{"method_path": "suite.mail.api.outbound.send_raw", "limit": 300, "seconds": 120},
-		# suite.mail.api.outbound — priority-based limits (per minute)
-		{
-			"method_path": "suite.mail.api.outbound.send",
-			"key": "priority",
-			"value": "Low",
-			"limit": 100,
-			"seconds": 60,
-		},
-		{
-			"method_path": "suite.mail.api.outbound.send",
-			"key": "priority",
-			"value": "Normal",
-			"limit": 50,
-			"seconds": 60,
-		},
-		{
-			"method_path": "suite.mail.api.outbound.send",
-			"key": "priority",
-			"value": "High",
-			"limit": 10,
-			"seconds": 60,
-		},
-		{
-			"method_path": "suite.mail.api.outbound.send_raw",
-			"key": "priority",
-			"value": "Low",
-			"limit": 100,
-			"seconds": 60,
-		},
-		{
-			"method_path": "suite.mail.api.outbound.send_raw",
-			"key": "priority",
-			"value": "Normal",
-			"limit": 50,
-			"seconds": 60,
-		},
-		{
-			"method_path": "suite.mail.api.outbound.send_raw",
-			"key": "priority",
-			"value": "High",
-			"limit": 10,
-			"seconds": 60,
-		},
-		# suite.mail.api.spamd
-		{"method_path": "suite.mail.api.spamd.scan", "limit": 60, "seconds": 60},
-		{"method_path": "suite.mail.api.spamd.get_spam_score", "limit": 60, "seconds": 60},
-	]
+    rate_limits = [
+        # suite.mail.api.account
+        {"method_path": "suite.mail.api.account.signup", "limit": 5, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.resend_otp", "limit": 5, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.verify_otp", "limit": 5, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.get_account_request", "limit": 5, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.get_account_setup_options", "limit": 5, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.create_account", "limit": 10, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.send_reset_password_link", "limit": 5, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.account.validate_email_assigned", "limit": 10, "seconds": 60 * 60},
+        # suite.mail.api.admin
+        {"method_path": "suite.mail.api.admin.add_domain", "limit": 10, "seconds": 24 * 60 * 60},
+        {"method_path": "suite.mail.api.admin.add_member", "limit": 10, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.admin.add_group", "limit": 20, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.admin.add_mailing_list", "limit": 20, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.admin.add_role", "limit": 20, "seconds": 60 * 60},
+        {"method_path": "suite.mail.api.admin.add_oauth_client", "limit": 20, "seconds": 60 * 60},
+        # suite.mail.api.inbound
+        {"method_path": "suite.mail.api.inbound.fetch_blob", "limit": 60, "seconds": 60},
+        {"method_path": "suite.mail.api.inbound.pull", "limit": 10, "seconds": 60},
+        {"method_path": "suite.mail.api.inbound.pull_raw", "limit": 10, "seconds": 60},
+        # suite.mail.api.outbound
+        {"method_path": "suite.mail.api.outbound.upload_attachment", "limit": 60, "seconds": 60},
+        {"method_path": "suite.mail.api.outbound.send", "limit": 300, "seconds": 60},
+        {"method_path": "suite.mail.api.outbound.send_raw", "limit": 300, "seconds": 120},
+        # suite.mail.api.outbound — priority-based limits (per minute)
+        {
+            "method_path": "suite.mail.api.outbound.send",
+            "key": "priority",
+            "value": "Low",
+            "limit": 100,
+            "seconds": 60,
+        },
+        {
+            "method_path": "suite.mail.api.outbound.send",
+            "key": "priority",
+            "value": "Normal",
+            "limit": 50,
+            "seconds": 60,
+        },
+        {
+            "method_path": "suite.mail.api.outbound.send",
+            "key": "priority",
+            "value": "High",
+            "limit": 10,
+            "seconds": 60,
+        },
+        {
+            "method_path": "suite.mail.api.outbound.send_raw",
+            "key": "priority",
+            "value": "Low",
+            "limit": 100,
+            "seconds": 60,
+        },
+        {
+            "method_path": "suite.mail.api.outbound.send_raw",
+            "key": "priority",
+            "value": "Normal",
+            "limit": 50,
+            "seconds": 60,
+        },
+        {
+            "method_path": "suite.mail.api.outbound.send_raw",
+            "key": "priority",
+            "value": "High",
+            "limit": 10,
+            "seconds": 60,
+        },
+        # suite.mail.api.spamd
+        {"method_path": "suite.mail.api.spamd.scan", "limit": 60, "seconds": 60},
+        {"method_path": "suite.mail.api.spamd.get_spam_score", "limit": 60, "seconds": 60},
+    ]
 
-	for rl in rate_limits:
-		create_rate_limit(**rl)
+    for rl in rate_limits:
+        create_rate_limit(**rl)
 
 
 def generate_jmap_push_keys() -> None:
-	"""Generates new JMAP push subscription encryption keys and saves them in Mail Settings."""
+    """Generates new JMAP push subscription encryption keys and saves them in Mail Settings."""
 
-	settings = frappe.get_single("Mail Settings")
-	if not settings.jmap_push_p256dh or not settings.jmap_push_private_key or not settings.jmap_push_auth:
-		settings._generate_jmap_push_keys()
+    settings = frappe.get_single("Mail Settings")
+    if not settings.jmap_push_p256dh or not settings.jmap_push_private_key or not settings.jmap_push_auth:
+        settings._generate_jmap_push_keys()

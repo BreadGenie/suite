@@ -7,7 +7,7 @@
         else delete commentRefs[comment.id]
       }
         " v-on-outside-click="(e) => onOutsideCardClick(e, comment)"
-          class="absolute rounded shadow w-56 comment-group scroll-m-24 bg-surface-base dark:border max-md:fixed max-md:z-20 max-md:inset-x-3 max-md:bottom-3 max-md:top-auto max-md:w-auto max-md:max-h-[65vh] max-md:overflow-y-auto max-md:shadow-xl"
+          class="absolute rounded shadow w-56 comment-group scroll-m-24 bg-surface-base dark:border max-md:fixed max-md:inset-x-4 max-md:bottom-[calc(1rem+var(--writer-tab-bar-height,0px))] max-md:top-auto max-md:z-20 max-md:w-auto max-md:max-w-sm max-md:mx-auto max-md:max-h-[65vh] max-md:overflow-y-auto max-md:shadow-xl"
           :class="[
             activeComment === comment.id && 'shadow-xl ',
             isMobile || comment.top
@@ -53,7 +53,7 @@
             Delete
           </Button>
         </div>
-        <div class="p-3" :class="activeComment !== comment.id &&
+        <div class="p-3 max-md:px-4" :class="activeComment !== comment.id &&
           comment.replies.length > 0 &&
           'pb-1.5'
           ">
@@ -75,7 +75,8 @@
                 <Avatar size="xl" class="bg-surface-base" :label="$user(reply.owner)?.full_name || reply.owner"
                   :image="$user(reply.owner)?.user_image" />
               </div>
-              <div class="grow flex flex-col min-w-0" :class="reply.edit && 'gap-1'">
+              <div class="grow flex flex-col min-w-0"
+                :class="reply.edit || reply.new ? 'gap-1.5' : 'gap-1'">
                 <div class="w-full flex justify-between items-start label-group gap-1 text-sm">
                   <div class="flex gap-1 min-w-0">
                     <label class="font-medium text-ink-gray-8 truncate">{{ $user(reply.owner)?.full_name ||
@@ -85,7 +86,8 @@
                       &#183;
                       {{ formatDateOrTime(reply.creation) }}</label>
                   </div>
-                  <Dropdown class="ml-auto shrink-0 opacity-0" :class="activeComment === comment.id &&
+                  <Dropdown v-if="comment.owner == currentUserId && !reply.new && !reply.edit"
+                    class="ml-auto shrink-0 opacity-0" :class="activeComment === comment.id &&
                     !reply.edit &&
                     !reply.resolved &&
                     comment.owner == currentUserId &&
@@ -93,15 +95,17 @@
                     " :options="dynamicList([
                       {
                         label: 'Edit',
+                        icon: 'lucide-pencil',
                         onClick: () => (reply.edit = true),
-                        cond: comment.owner == currentUserId,
+                        cond: comment.owner == currentUserId && !reply.new,
                       },
                       {
                         label: 'Delete',
                         onClick: () => removeReply(comment.id, reply.id),
                         cond:
                           comment.owner == currentUserId &&
-                          index !== 0,
+                          index !== 0 &&
+                          !reply.new,
                       },
                     ])
                       ">
@@ -160,7 +164,7 @@
           </div>
         </div>
         <div v-if="activeComment !== comment.id && comment.replies.length > 0"
-          class="replies-count text-ink-gray-6 font-base text-xs p-3 pt-0">
+          class="replies-count text-ink-gray-6 font-base text-xs p-3 pt-0 max-md:px-4">
           {{ comment.replies.length }}
           {{ comment.replies.length === 1 ? 'reply' : 'replies' }}
         </div>

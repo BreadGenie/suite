@@ -20,12 +20,8 @@
         {{ uploadsFailed.length == 1 ? 'upload' : 'uploads' }} failed
       </div>
       <div class="ml-auto flex items-center gap-4">
-        <button class="focus:outline-none" @click.stop="collapsed = !collapsed">
-          <component :is="collapsed ? LucidePlus : LucideMinus" class="size-4 text-ink-gray-8" />
-        </button>
-        <button class="focus:outline-none" @click="clearUploads()">
-          <LucideX class="size-4 text-ink-gray-8" />
-        </button>
+        <Button variant="ghost" :icon="collapsed ? LucidePlus : LucideMinus" @click.stop="collapsed = !collapsed" />
+        <Button variant="ghost" :icon="LucideX" @click="clearUploads()" />
       </div>
     </div>
     <div v-if="!collapsed" class="max-h-64 overflow-y-auto bg-surface-base w-full">
@@ -40,7 +36,7 @@
           <div class="flex items-center justify-between w-full">
             <div class="flex justify-start items-center w-full max-w-[80%]">
               <LucideFile class="size-4 mr-2" />
-              <p class="truncate text-sm leading-6 col-span-1 row-span-1">
+              <p class="truncate text-sm col-span-1 row-span-1">
                 {{ upload.name }}
               </p>
             </div>

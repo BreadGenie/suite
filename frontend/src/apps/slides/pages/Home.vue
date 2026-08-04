@@ -1,6 +1,7 @@
 <template>
-	<div class="flex h-screen w-screen flex-col">
+	<div class="flex h-screen w-screen flex-col bg-surface-base">
 		<Navbar
+			dropdown="home"
 			:primaryButton="{
 				label: 'New',
 				icon: Plus,
@@ -9,12 +10,13 @@
 		/>
 
 		<PresentationList
-			:loading="presentationListResource.loading"
+			:loading="presentationListResource.loading && !presentationList.length"
 			:presentations="presentationList"
 			@setPreview="setPreview"
 			@navigate="navigateToPresentation"
 			@openDialog="openDialog"
 			@duplicatePresentation="(name) => duplicateAndNavigate(name)"
+			@newPresentation="navigateToEditor"
 		/>
 
 		<PresentationPreview
@@ -39,7 +41,6 @@
 <script setup>
 import { onActivated, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { previousRoute } from '@/apps/slides/router'
 
 import { createResource } from 'frappe-ui'
 
@@ -53,7 +54,6 @@ import PresentationActionDialog from '@/apps/slides/components/PresentationActio
 import {
 	createPresentationResource,
 	duplicatePresentation,
-	unsyncedPresentationRecord,
 	templateList,
 	templateListResource,
 } from '@/apps/slides/stores/presentation'
@@ -130,38 +130,10 @@ const openThemeDialog = () => {
 	showThemeDialog.value = true
 }
 
-const syncPresentationRecord = () => {
-	const newValues = unsyncedPresentationRecord.value
-	if (!Object.keys(newValues).length) return
-
-	if (newValues.deleted) {
-		presentationList.value = presentationList.value.filter((p) => p.name !== newValues.name)
-		unsyncedPresentationRecord.value = {}
-		return
-	}
-
-	const presentationRecord = presentationList.value.find(
-		(p) => p.name == (newValues.name || previousRoute.params.presentationId),
-	)
-	if (!presentationRecord) return
-
-	Object.entries(newValues).forEach(([key, val]) => {
-		if (![null, undefined, ''].includes(val)) {
-			presentationRecord[key] = val
-		}
-	})
-
-	unsyncedPresentationRecord.value = {}
-}
-
 onActivated(() => {
-	if (previousRoute?.name == 'slides-editor') {
-		syncPresentationRecord()
+	if (presentationListResource.fetched) {
+		presentationListResource.reload()
 	}
-})
-
-watch(unsyncedPresentationRecord, () => {
-	syncPresentationRecord()
 })
 
 onMounted(() => {

@@ -9,10 +9,7 @@
         :draggable="false"
         class="w-full px-10 py-5 flex-grow w-full flex justify-center align-center items-center relative"
       >
-        <LoadingIndicator
-          v-if="file.loading"
-          class="w-10 h-full text-ink-gray-8"
-        />
+        <FilePreviewSkeleton v-if="file.loading" />
         <FileRender v-else-if="file.data" :preview-entity="file.data" />
       </div>
       <div
@@ -21,7 +18,7 @@
         <Button
           :disabled="!prevEntity?.name"
           :variant="'ghost'"
-          icon="arrow-left"
+          icon="lucide-arrow-left"
           @click="scrollEntity(true)"
         />
         <Button :variant="'ghost'" @click="enterFullScreen">
@@ -30,7 +27,7 @@
         <Button
           :disabled="!nextEntity?.name"
           :variant="'ghost'"
-          icon="arrow-right"
+          icon="lucide-arrow-right"
           @click="scrollEntity()"
         />
       </div>
@@ -40,18 +37,22 @@
 
 <script setup>
 import { setActiveEntity } from '@/apps/drive/data/selection'
-import { pageBreadcrumbs } from '@/apps/drive/data/breadcrumbs'
+import {
+  pageBreadcrumbs,
+  setCrumbEntity,
+  clearCrumbEntity,
+} from '@/apps/drive/data/breadcrumbs'
 import Navbar from '@/apps/drive/components/Navbar.vue'
-import { ref, computed, onMounted, defineProps } from 'vue'
-import { Button, LoadingIndicator } from 'frappe-ui'
+import { ref, computed, onMounted, onUnmounted, defineProps } from 'vue'
+import { Button } from 'frappe-ui'
 import FileRender from '@/apps/drive/components/FileRender.vue'
+import FilePreviewSkeleton from '@/apps/drive/components/FileTypePreview/FilePreviewSkeleton.vue'
 import { createResource } from 'frappe-ui'
 import { useRouter } from 'vue-router'
 import LucideScan from '~icons/lucide/scan'
 import { onKeyStroke } from '@vueuse/core'
 import {
   prettyData,
-  setBreadCrumbs,
   enterFullScreen,
   updateURLSlug,
   isWriterDocument,
@@ -109,10 +110,12 @@ const onSuccess = async (entity) => {
     window.location.href = '/writer/w/' + entity.name
   }
   document.title = entity.file_name
-  setBreadCrumbs(entity)
+  setCrumbEntity(entity)
   updateURLSlug(entity.file_name)
   trackVisit.submit({ entity_name: entity.name })
 }
+
+onUnmounted(() => clearCrumbEntity(props.entityName))
 
 const trackVisit = createResource({
   url: 'suite.drive.api.files.track_visit',

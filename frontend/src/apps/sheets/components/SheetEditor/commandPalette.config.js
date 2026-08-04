@@ -31,7 +31,7 @@ function buildFormatGroup({ toggleFmt, setAlign, setValign, adjustDecimals, togg
   }
 }
 
-function buildEditGroup({ undo, redo, repeatLast, showFindReplace, showFormulas, repopulateGrid, showShortcutsHelp }) {
+function buildEditGroup({ undo, redo, repeatLast, showFindReplace, openFindReplace, showFormulas, repopulateGrid, showShortcutsHelp }) {
   return {
     title: 'Edit',
     component: CommandPaletteItem,
@@ -39,7 +39,7 @@ function buildEditGroup({ undo, redo, repeatLast, showFindReplace, showFormulas,
       item('undo',      'Undo',               'Ctrl+Z', () => undo()),
       item('redo',      'Redo',               'Ctrl+Y', () => redo()),
       item('repeat',    'Repeat last action', 'F4',     () => repeatLast()),
-      item('find',      'Find & replace',     'Ctrl+F', () => { showFindReplace.value = true }),
+      item('find',      'Find & replace',     'Ctrl+F', () => { openFindReplace ? openFindReplace() : (showFindReplace.value = true) }),
       item('formulas',  'Show formulas',      'Ctrl+`', () => { showFormulas.value = !showFormulas.value; repopulateGrid() }),
       item('shortcuts', 'Keyboard shortcuts', '?',      () => { showShortcutsHelp.value = true }),
     ],
@@ -50,6 +50,7 @@ function buildStructureGroup({
   contextMenu, getGrid,
   doInsertRow, doDeleteRow,
   doInsertCol, doDeleteCol,
+  doMoveColLeft, doMoveColRight,
   doHideRows, doHideCols,
   doUnhideAllRows, doUnhideAllCols,
   doAutoFitCol, doAutoFitRow,
@@ -65,6 +66,8 @@ function buildStructureGroup({
       item('col-left',   'Insert column left',    '', () => { contextMenu.targetCol = getGrid().getSelection().c0; doInsertCol(false) }),
       item('col-right',  'Insert column right',   '', () => { contextMenu.targetCol = getGrid().getSelection().c0; doInsertCol(true)  }),
       item('col-del',    'Delete column',         '', () => { contextMenu.targetCol = getGrid().getSelection().c0; doDeleteCol()      }),
+      item('col-move-l', 'Move column left',      '', () => { contextMenu.targetCol = getGrid().getSelection().c0; doMoveColLeft()  }),
+      item('col-move-r', 'Move column right',     '', () => { contextMenu.targetCol = getGrid().getSelection().c0; doMoveColRight() }),
       item('row-hide',   'Hide row',              '', () => doHideRows()),
       item('col-hide',   'Hide column',           '', () => doHideCols()),
       item('row-unhide', 'Unhide all rows',       '', () => doUnhideAllRows()),

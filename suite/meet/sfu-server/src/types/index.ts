@@ -139,6 +139,7 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
+	client_telemetry: (data: ClientTelemetryEvent) => void;
 	'auth:update_token': (
 		data: UpdateTokenRequest,
 		callback: (response: SFUResponse) => void,
@@ -212,7 +213,10 @@ export interface ClientToServerEvents {
 	media_control: (data: MediaControlRequest) => void;
 	host_control: (data: HostControlRequest) => void;
 	screen_share: (data: ScreenShareRequest) => void;
-	'chat:send': (data: ChatSendRequest) => void;
+	'chat:send': (
+		data: ChatSendRequest,
+		callback?: (response: SFUResponse & { timestamp?: string }) => void,
+	) => void;
 	'chat:toggle_restriction': (data: { enabled: boolean }) => void;
 	'poll:create': (
 		data: {
@@ -254,6 +258,33 @@ export interface ClientToServerEvents {
 	) => void;
 	'e2ee:epoch': (data: E2eeEpochEnvelope) => void;
 }
+
+export type ClientTelemetryEvent =
+	| {
+			event: 'first_remote_media';
+			media: 'audio' | 'video';
+			durationMs: number;
+	  }
+	| { event: 'media_stall'; media: 'audio' | 'video' }
+	| {
+			event: 'recovery';
+			direction: 'send' | 'recv' | 'both';
+			trigger: 'signaling' | 'ice' | 'stall';
+			outcome: 'success' | 'failure';
+			durationMs: number;
+	  }
+	| {
+			event: 'recovery_exhausted';
+			subsystem: 'signaling' | 'transport' | 'consumer';
+			direction: 'send' | 'recv' | 'both';
+			reason: 'retry_limit' | 'restart_failed' | 'rebuild_failed';
+	  }
+	| {
+			event: 'network_quality';
+			rttMs: number;
+			packetLossPercent: number;
+			availableOutgoingBitrate: number;
+	  };
 
 export interface SocketData {
 	userId: string;
@@ -372,6 +403,7 @@ export interface TransportData {
 	roomId: string;
 	peerId: string;
 	transport: WebRtcTransport;
+	direction?: 'send' | 'recv';
 }
 
 export interface ProducerData {
@@ -383,6 +415,7 @@ export interface ProducerData {
 export interface ConsumerData {
 	roomId: string;
 	peerId: string;
+	transportId: string;
 	consumer: Consumer;
 }
 

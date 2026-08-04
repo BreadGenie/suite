@@ -5,11 +5,18 @@ import frappe
 from frappe.model.document import Document
 
 from suite.drive.api.notifications import notify_share
+from suite.drive.utils import GENERAL_USER, GROUP_PREFIX
 
 
 class DrivePermission(Document):
     def after_insert(self):
-        if self.user:
+        # `notify_share` runs inline and emails per row; a migration rewriting
+        # historical grants would mail everyone about folders they already had.
+        if frappe.flags.in_install or frappe.flags.in_migrate or frappe.flags.in_patch:
+            return
+        # Only individual users get notified — "" (anyone with the link),
+        # $GENERAL (site users) and $GROUP: rows are not email addresses.
+        if self.user and self.user != GENERAL_USER and not self.user.startswith(GROUP_PREFIX):
             frappe.enqueue(
                 notify_share,
                 queue="short",

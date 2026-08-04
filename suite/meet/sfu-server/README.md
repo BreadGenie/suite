@@ -30,6 +30,33 @@ Set `STT_SERVER_URL` to an externally managed STT backend. The SFU deployment do
 | `STT_VAD_THRESHOLD` | Speech detection sensitivity (0.0–1.0) | `0.012` |
 | `HF_TOKEN` | Hugging Face token (optional, avoids rate limits) | — |
 
+## Development Setup
+
+From the Suite app directory, install the SFU dependencies and create a local environment file:
+
+```bash
+cd suite/meet/sfu-server
+yarn install
+cp .env.example .env
+```
+
+Set `JWT_SECRET` in `.env` to a development secret. The default host, signaling port, and WebRTC settings in `.env.example` are suitable for local development.
+
+From your bench directory, configure the Frappe site with the local SFU URL and the same secret:
+
+```bash
+bench --site suite.localhost set-config sfu_server_url http://localhost:3000
+bench --site suite.localhost set-config sfu_secret your_jwt_secret_here
+```
+
+Replace `suite.localhost` with your site name, then return to `apps/suite/suite/meet/sfu-server` and start the SFU:
+
+```bash
+yarn dev
+```
+
+The signaling server runs at `http://localhost:3000`. Check `http://localhost:3000/health` to verify that it is ready, then run the Frappe development server with `bench start` in a separate terminal.
+
 ## Production Deployment
 
 ### Prerequisites
@@ -60,6 +87,8 @@ Set the required values in `.env`:
 | `MEDIASOUP_NUM_WORKERS` | Number of mediasoup workers; media uses one UDP port per worker | `4` |
 | `DOMAIN` | Domain pointing to this server | `sfu.example.com` |
 | `SSL_EMAIL` | Email for Let's Encrypt notifications | `admin@example.com` |
+| `METRICS_TOKEN` | Optional bearer token enabling the Prometheus `/metrics` endpoint | `openssl rand -hex 32` |
+| `SENTRY_DSN` | Optional Sentry DSN for unexpected SFU failures | Sentry project DSN |
 
 Then run setup:
 
@@ -108,3 +137,15 @@ cd /opt/meet-sfu
 | 80 | TCP | HTTP / ACME challenges |
 | 443 | TCP | HTTPS |
 | 40000 to 40000 + workers - 1 | UDP | WebRTC media, one fixed UDP port per mediasoup worker |
+
+### Observability
+
+Set `METRICS_TOKEN` to enable Prometheus metrics. The endpoint returns `404` when the variable is unset and requires a bearer token when enabled:
+
+```bash
+curl -H "Authorization: Bearer $METRICS_TOKEN" https://sfu.example.com/metrics
+```
+
+Metrics include process health, authenticated socket connections, bounded disconnect reasons, room join/rejoin outcomes and latency, WebRTC transport operations, current SFU resource counts, and sampled browser outcomes for first remote media, receive stalls, and recovery success. Browser sampling is fixed at 5%. Lifecycle logs are emitted as JSON without meeting, participant, socket, or transport identifiers.
+
+Set `SENTRY_DSN` to report unexpected process failures and mediasoup worker deaths. `SENTRY_ENVIRONMENT` defaults to `production`; set `SENTRY_RELEASE` to the deployed image or commit version. Expected authentication, client-state, and WebRTC operation failures remain in metrics and logs rather than being reported as Sentry issues.

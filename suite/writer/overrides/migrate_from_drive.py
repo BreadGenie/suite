@@ -1,7 +1,8 @@
-import frappe
-import json
-from pycrdt import Doc, Map
 import base64
+import json
+
+import frappe
+from pycrdt import Doc, Map
 
 ACCEPTED_SETTINGS = [
     "minimal",
