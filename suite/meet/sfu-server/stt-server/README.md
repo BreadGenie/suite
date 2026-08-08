@@ -6,7 +6,9 @@ GPU inference image for Frappe Meet captions using NVIDIA Nemotron 3.5 ASR throu
 
 - Container port: `8000`
 - Health check: `GET /health`
-- Streaming transcription: `WS /stream`
+- OpenAI transcription: `POST /v1/audio/transcriptions`
+- Model listing: `GET /v1/models`
+- Session-scoped streaming transcription: `WS /stream`
 - PCM transcription fallback: `POST /transcribe-pcm`
 - GPU: NVIDIA CUDA-compatible GPU
 
@@ -22,7 +24,19 @@ The model is downloaded at startup. Mount `/models` to persist the Hugging Face,
 | `NEMOTRON_LANGUAGE` | `en-US` |
 | `NEMOTRON_ATT_CONTEXT_SIZE` | `56,3` |
 | `NEMOTRON_FINAL_SILENCE_MS` | `600` |
+| `STT_STREAM_QUEUE_FRAMES` | `400` |
 | `HF_TOKEN` | unset |
+
+## OpenAI-Compatible API
+
+```bash
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F file=@audio.wav \
+  -F model=nemotron-3.5-asr-streaming-0.6b \
+  -F language=en-US
+```
+
+Set `stream=true` to receive `transcript.text.delta` and `transcript.text.done` Server-Sent Events. Meet continues to use `/stream`, which emits session-scoped draft and final transcript events.
 
 ## Run
 

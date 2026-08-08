@@ -16,13 +16,13 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY server.py ./
+COPY server.py protocol.py ./
 
 RUN useradd --create-home --uid 10001 stt \
     && mkdir -p /models/huggingface /models/nemo /models/torch \
