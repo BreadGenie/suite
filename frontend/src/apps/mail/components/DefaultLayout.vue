@@ -43,7 +43,7 @@ import { useRoute, useRouter } from 'vue-router'
 import dayjs from '@/apps/calendar/utils/dayjs'
 import EventDetailSidebar from '@/apps/calendar/components/EventDetailSidebar.vue'
 import { eventDayRoute, useUpcomingEvents } from '@/apps/mail/composables/useUpcomingEvents'
-import { useScreenSize } from '@/apps/mail/utils/composables'
+import { useComposeMail, useScreenSize } from '@/apps/mail/utils/composables'
 import { userStore } from '@/apps/mail/stores/user'
 import AppSidebar from '@/apps/mail/components/AppSidebar.vue'
 import MobileTabBar from '@/apps/mail/components/mobile/MobileTabBar.vue'
@@ -79,11 +79,25 @@ const showCompose = ref(false)
 const composeKey = ref(0)
 const composeDetails = ref<ComposeMailData>()
 
-const emailParticipants = (emails: string[]) => {
-	composeDetails.value = { to: emails.map((email) => ({ email })) }
+const openCompose = (details: ComposeMailData) => {
+	composeDetails.value = details
+	// Remount, so a second request replaces the draft on screen instead of being
+	// swallowed by the composer already holding one.
 	composeKey.value++
 	showCompose.value = true
 }
+
+const emailParticipants = (emails: string[]) =>
+	openCompose({ to: emails.map((email) => ({ email })) })
+
+// A `mailto:` link clicked inside a message. It comes through shared state because the
+// message body is an iframe — several components deep, and across a document boundary.
+const { composeRequest, clearComposeRequest } = useComposeMail()
+watch(composeRequest, (details) => {
+	if (!details) return
+	openCompose(details)
+	clearComposeRequest()
+})
 
 // Compose deep link (?compose=1&to=a,b): how other apps (calendar's "email
 // participants") open mail's compose window. Consumed on arrival — the query

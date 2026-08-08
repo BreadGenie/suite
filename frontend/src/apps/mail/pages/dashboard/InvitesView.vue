@@ -187,7 +187,9 @@ const listOptions = computed(() => ({
 			}
 		: {
 				title: __('No pending invites'),
-				description: __('Invitations you send will appear here until they are accepted.'),
+				description: __(
+					'Invitations you send and self-signup requests will appear here until they are accepted.',
+				),
 			},
 	onRowClick: (row: InviteRow) => {
 		selectedInvite.value = row.name

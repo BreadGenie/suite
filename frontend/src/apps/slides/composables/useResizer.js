@@ -1,21 +1,21 @@
 import { ref, computed, nextTick } from 'vue'
 
+export const cursorMap = {
+	'top-left': 'nwse-resize',
+	'top-right': 'nesw-resize',
+	'bottom-left': 'nesw-resize',
+	'bottom-right': 'nwse-resize',
+	'text-left': 'ew-resize',
+	'text-right': 'ew-resize',
+	left: 'ew-resize',
+	right: 'ew-resize',
+	top: 'ns-resize',
+	bottom: 'ns-resize',
+}
+
 export const useResizer = () => {
 	const isResizing = ref(false)
 	const currentResizer = ref(null)
-
-	const cursorMap = {
-		'top-left': 'nwse-resize',
-		'top-right': 'nesw-resize',
-		'bottom-left': 'nesw-resize',
-		'bottom-right': 'nwse-resize',
-		'text-left': 'ew-resize',
-		'text-right': 'ew-resize',
-		left: 'ew-resize',
-		right: 'ew-resize',
-		top: 'ns-resize',
-		bottom: 'ns-resize',
-	}
 
 	const resizeCursor = computed(() => cursorMap[currentResizer.value] ?? 'default')
 

@@ -1,5 +1,5 @@
 <template>
-	<div v-if="mode == 'thumbnail'">
+	<div v-if="mode == 'thumbnail'" class="h-full">
 		<img
 			v-if="thumbnailSrc"
 			class="object-cover"
@@ -9,6 +9,7 @@
 	</div>
 	<div
 		v-else
+		class="h-full"
 		@click="handleVideoClick"
 		@mouseenter="handleHoverChange"
 		@mouseleave="handleHoverChange"
@@ -108,6 +109,9 @@ const boxShadow = useBoxShadow(element)
 const videoStyles = computed(() => {
 	return {
 		width: '100%',
+		// an explicit frame stays fixed, so the video must fit it, not overflow it
+		height: element.value.height ? '100%' : 'auto',
+		objectFit: 'cover',
 		opacity: (element.value.opacity ?? 100) / 100,
 		borderRadius: `${element.value.borderRadius}px`,
 		borderStyle: element.value.borderStyle || 'none',

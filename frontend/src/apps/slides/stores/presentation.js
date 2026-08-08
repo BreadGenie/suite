@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { createResource, call, createDocumentResource, toast } from 'frappe-ui'
+import { createResource, call, createDocumentResource, frappeRequest, toast } from 'frappe-ui'
 
 import tinycolor from 'tinycolor2'
 
@@ -7,6 +7,7 @@ import { router } from '@/apps/slides/router'
 import { slides } from './slide'
 import { markClean, markDirty, getPresentationFromLocalDB } from './saving'
 import { normalizeZIndices } from '@/apps/slides/stores/element'
+import { normalizeColor } from '@/apps/slides/utils/color'
 import { v4 as uuid4 } from 'uuid'
 import { commandHistory } from './historyMeta'
 
@@ -170,6 +171,9 @@ const parseElements = (value, slide) => {
 			// 'circle' was renamed to 'oval' to match the display name
 			el.shapeType = 'oval'
 		}
+		for (const key of ['fillColor', 'strokeColor', 'borderColor', 'shadowColor']) {
+			if (el[key]) el[key] = normalizeColor(el[key])
+		}
 		migrateShadow(el)
 		return el
 	})
@@ -193,6 +197,7 @@ const ensureUniqueClientIds = (slides) => {
 
 const normalizeSlideDoc = (doc) => {
 	for (const slide of doc.slides || []) {
+		slide.background = normalizeColor(slide.background)
 		slide.elements = parseElements(slide.elements, slide)
 		slide.clientId = slide.client_id || uuid4()
 		slide.transitionDuration = slide.transition_duration
@@ -229,6 +234,7 @@ const getPresentationResource = (name) => {
 				const restored = JSON.parse(JSON.stringify(local.content))
 				// local content skips the load pipeline; migrate + dedup it here too
 				for (const slide of restored) {
+					slide.background = normalizeColor(slide.background)
 					slide.elements = parseElements(slide.elements, slide)
 				}
 				ensureUniqueClientIds(restored)
@@ -288,6 +294,7 @@ const presentationResource = ref(null)
 
 const initPresentationDoc = async (id, readonly = false) => {
 	presentationId.value = id
+	let doc
 	if (readonly) {
 		presentationResource.value = getReadonlyPresentationResource(
 			id,
@@ -301,12 +308,17 @@ const initPresentationDoc = async (id, readonly = false) => {
 			)
 			await presentationResource.value.fetch()
 		}
-		return presentationResource.value.data
+		doc = presentationResource.value.data
 	} else {
 		presentationResource.value = getPresentationResource(id)
 		await presentationResource.value.get.fetch()
-		return presentationResource.value.doc
+		doc = presentationResource.value.doc
 	}
+	frappeRequest({
+		url: 'suite.drive.api.files.track_visit',
+		params: { doctype: 'Presentation', docname: id },
+	}).catch(() => {})
+	return doc
 }
 
 const templateList = ref([])

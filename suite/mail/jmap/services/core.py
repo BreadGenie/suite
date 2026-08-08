@@ -376,9 +376,20 @@ class CoreService(CoreServiceHelper):
         )
 
     def _changes(self, since_state: str) -> dict:
-        """Internal method to get changes of the specified type since a given state using the JMAP 'changes' method."""
+        """Internal method to get changes of the specified type since a given state using the JMAP 'changes' method.
 
-        return self._exec("changes", sinceState=since_state)
+        A method-level failure (e.g. `forbidden`, `cannotCalculateChanges`) comes back as an
+        `["error", {...}]` method response; raise instead of returning it, since every caller
+        unwraps the first method response as if it were a changes result.
+        """
+
+        response = self._exec("changes", sinceState=since_state)
+
+        for name, body, _call_id in response.get("methodResponses") or []:
+            if name == "error":
+                raise RuntimeError(f"{self._type}/changes failed: {body}")
+
+        return response
 
     def upload_blob(self, blob: bytes | str, content_type: str = "message/rfc822") -> dict:
         """Uploads a blob to the JMAP server using the upload URL, and returns the response containing the blob ID and other metadata."""

@@ -89,8 +89,12 @@ const getPresentationFromLocalDB = async (id) => {
 // explicit dirty flag set by every mutation path
 const dirty = ref(false)
 
+// bumped on every markDirty so a save can tell if edits arrived while it was in flight
+let dirtyGeneration = 0
+
 const markDirty = () => {
 	dirty.value = true
+	dirtyGeneration++
 }
 
 const markClean = () => {
@@ -102,24 +106,36 @@ const isSaving = ref(false)
 // true when an online save to the server failed; drives the "Not saved" indicator
 const saveFailed = ref(false)
 
-const syncSnapshotToServer = async (snapshot) => {
+const syncSnapshotToServer = async (snapshot, id, generation) => {
+	// the resource points at whatever the editor moved on to, so this content
+	// would land on the wrong document; the snapshot stays dirty and gets retried
+	if (presentationId.value !== id) return
+
 	await savePresentationDoc(snapshot.content)
 
-	// mark local copy clean; baseModified tracks the server version we're now in sync with
+	// slides and presentationDoc now belong to another presentation,
+	// so there's nothing safe to write back to the local copy
+	if (presentationId.value !== id) return
+
+	// an edit made mid-save isn't in the snapshot the server just took, so the
+	// local copy has to keep it and stay dirty; baseModified tracks the server version
+	const editedDuringSave = dirtyGeneration !== generation
+
 	await savePresentationToLocalDB({
 		...snapshot,
-		dirty: false,
+		content: editedDuringSave ? getLatestSlideContent() : snapshot.content,
+		dirty: editedDuringSave,
 		updatedAt: Date.now(),
 		baseModified: presentationDoc.value?.modified,
 	})
 }
 
-const syncPresentationToServer = async () => {
-	const snapshot = await getPresentationFromLocalDB(presentationId.value)
+const syncPresentationToServer = async (id, generation) => {
+	const snapshot = await getPresentationFromLocalDB(id)
 	if (!snapshot || !snapshot.dirty) return
 
 	// throws on failure so the caller keeps the state dirty and retries
-	await syncSnapshotToServer(snapshot)
+	await syncSnapshotToServer(snapshot, id, generation)
 }
 
 const getLatestSlideContent = () => {
@@ -135,11 +151,13 @@ const saveCurrentState = async () => {
 	isSaving.value = true
 
 	try {
+		const idAtSnapshot = presentationId.value
+		const generationAtSnapshot = dirtyGeneration
 		const content = getLatestSlideContent()
 
 		// save to indexedDB as dirty (not yet synced); baseModified = server version these build on
 		await savePresentationToLocalDB({
-			id: presentationId.value,
+			id: idAtSnapshot,
 			content: content,
 			updatedAt: Date.now(),
 			dirty: true,
@@ -149,10 +167,14 @@ const saveCurrentState = async () => {
 		// if offline, stay dirty so we retry once back online
 		if (!navigator.onLine) return
 
-		// only mark clean once the server actually has the changes
-		await syncPresentationToServer()
-		markClean()
+		// only mark clean once the server actually has the changes,
+		// and only if no edit arrived while this save was in flight
+		await syncPresentationToServer(idAtSnapshot, generationAtSnapshot)
 		saveFailed.value = false
+
+		// dirty belongs to another presentation now, so it isn't ours to clear
+		if (presentationId.value !== idAtSnapshot) return
+		if (dirtyGeneration === generationAtSnapshot) markClean()
 	} catch (err) {
 		// keep dirty so autosave retries and beforeunload warns; log once per outage
 		if (!saveFailed.value) console.error('Save failed: ', err)

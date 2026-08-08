@@ -13,11 +13,18 @@ from suite.drive.api.files import (
     move,
     remove_or_restore,
     rename,
+    stream_file_content,
+    track_visit,
     update_access,
     upload_file,
 )
 from suite.drive.api.list import get_attachments
-from suite.drive.api.permissions import get_user_access, user_has_permission
+from suite.drive.api.permissions import (
+    get_general_access,
+    get_user_access,
+    get_user_access_for_user,
+    user_has_permission,
+)
 from suite.drive.utils import (
     GENERAL_USER,
     STATUS_ACTIVE,
@@ -46,12 +53,18 @@ class TestDriveFilesAPI(IntegrationTestCase):
     def setUp(self):
         frappe.flags.mute_drive_activity_log = True
         with self.set_user(OWNER):
-            self.folder = create_drive_file(frappe.generate_hash(8), self.home, "Folder", "")
+            manager = FileManager()
+            self.folder = create_drive_file(
+                frappe.generate_hash(8),
+                self.home,
+                "Folder",
+                lambda file: manager.create_folder(file),
+            )
             self.file = create_drive_file(
                 f"{frappe.generate_hash(8)}.txt",
                 self.folder.name,
                 "Text",
-                f"/drive-test/{frappe.generate_hash(8)}.txt",
+                f"{self.folder.file_url}{frappe.generate_hash(8)}.txt",
                 "text/plain",
                 12,
             )
@@ -63,6 +76,18 @@ class TestDriveFilesAPI(IntegrationTestCase):
             attachments = get_attachments("User", OWNER)
 
         self.assertEqual([attachment["name"] for attachment in attachments], [self.file.name])
+
+    def test_track_visit_resolves_backing_file(self):
+        self.file.db_set({"content_doctype": "User", "content_docname": OWNER})
+
+        with (
+            self.set_user(OWNER),
+            patch("suite.drive.api.files.mark_as_viewed") as mark_as_viewed,
+            patch("suite.drive.api.files.frappe.db.set_value"),
+        ):
+            track_visit(doctype="User", docname=OWNER)
+
+        self.assertEqual(mark_as_viewed.call_args.args[0].name, self.file.name)
 
     def tearDown(self):
         frappe.flags.mute_drive_activity_log = False
@@ -142,6 +167,22 @@ class TestDriveFilesAPI(IntegrationTestCase):
             with self.assertRaises(frappe.PermissionError):
                 upload_file(total_file_size=6, parent=self.folder.name)
 
+    def test_upload_with_unknown_mime_type(self):
+        with self.set_user(OWNER):
+            uploaded = self.upload(b"unknown file contents", "upload.unknownextension")
+
+            self.assertEqual(uploaded.file_type, "Unknown")
+            self.assertFalse(uploaded.mime_type)
+            with FileManager().get_file(uploaded) as stored:
+                self.assertEqual(stored.read(), b"unknown file contents")
+
+    def test_file_url_update_requires_valid_storage_path(self):
+        with self.set_user(OWNER):
+            file = frappe.get_doc("File", self.file.name)
+            file.file_url = "/private/files/../../invalid.txt"
+            with self.assertRaises(frappe.ValidationError):
+                file.save()
+
     def test_ordered_chunks_are_assembled_byte_for_byte(self):
         session = frappe.generate_hash(12)
         with self.set_user(OWNER):
@@ -166,6 +207,31 @@ class TestDriveFilesAPI(IntegrationTestCase):
             Key=uploaded.file_url.lstrip("/"),
         )
 
+    def test_private_video_range_stream_uses_storage_relative_path(self):
+        self.file.file_type = "Video"
+        self.file.mime_type = "video/mp4"
+        self.file.file_size = 12
+        self.file.save()
+        request = Request(EnvironBuilder(headers={"Range": "bytes=0-"}).get_environ())
+
+        @contextmanager
+        def stored_file(path):
+            self.assertEqual(path, self.file.file_url.lstrip("/"))
+            yield BytesIO(b"video bytes!")
+
+        frappe.local.request = request
+        try:
+            with (
+                self.set_user(OWNER),
+                patch.object(FileManager, "open_file", side_effect=stored_file),
+            ):
+                response = stream_file_content(self.file.name)
+        finally:
+            del frappe.local.request
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.data, b"video bytes!")
+
     def test_direct_and_inherited_shares_grant_read_access(self):
         with self.set_user(OWNER):
             self.file.share(user=OTHER_USER, read=True)
@@ -177,6 +243,27 @@ class TestDriveFilesAPI(IntegrationTestCase):
             self.folder.share(user=OTHER_USER, read=True)
         with self.set_user(OTHER_USER):
             self.assertEqual(get_user_access(self.file.name)["read"], 1)
+
+    def test_get_user_access_endpoint_cannot_inspect_another_user(self):
+        with self.set_user(OWNER):
+            self.file.share(user=OTHER_USER, read=True)
+            with self.assertRaises(TypeError):
+                get_user_access(self.file.name, OTHER_USER)
+            self.assertEqual(get_user_access_for_user(self.file.name, OTHER_USER)["read"], 1)
+
+    def test_general_access_reports_public_site_and_restricted_access(self):
+        with self.set_user(OWNER):
+            self.assertEqual(get_general_access(self.file)["type"], "restricted")
+            self.file.share(user=GENERAL_USER, read=True)
+            self.assertEqual(get_general_access(self.file)["type"], "site")
+            self.file.share(read=True)
+            self.assertEqual(get_general_access(self.file)["type"], "public")
+            self.file.unshare()
+            self.file.unshare(GENERAL_USER)
+
+        with self.set_user(OTHER_USER):
+            with self.assertRaises(frappe.PermissionError):
+                get_general_access(self.file)
 
     def test_sharing_api_adds_and_removes_permission(self):
         with self.set_user(OWNER):
@@ -233,8 +320,14 @@ class TestDriveFilesAPI(IntegrationTestCase):
 
     def test_owner_can_rename_and_move_uploaded_file(self):
         with self.set_user(OWNER):
+            manager = FileManager()
             uploaded = self.upload(b"move me", "before.txt")
-            destination = create_drive_file(frappe.generate_hash(8), self.home, "Folder", "")
+            destination = create_drive_file(
+                frappe.generate_hash(8),
+                self.home,
+                "Folder",
+                lambda file: manager.create_folder(file),
+            )
 
             rename(uploaded.name, "after.txt")
             uploaded.reload()
@@ -250,7 +343,13 @@ class TestDriveFilesAPI(IntegrationTestCase):
 
     def test_unrelated_user_cannot_rename_or_move_file(self):
         with self.set_user(OWNER):
-            destination = create_drive_file(frappe.generate_hash(8), self.home, "Folder", "")
+            manager = FileManager()
+            destination = create_drive_file(
+                frappe.generate_hash(8),
+                self.home,
+                "Folder",
+                lambda file: manager.create_folder(file),
+            )
         with self.set_user(OTHER_USER):
             with self.assertRaises(frappe.PermissionError):
                 rename(self.file.name, "forbidden.txt")

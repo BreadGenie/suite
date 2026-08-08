@@ -26,7 +26,7 @@ const getUnitVector = (v) => {
 	return scaleVector(v, 1 / length)
 }
 
-const getRotatedVector = (v, degrees) => {
+export const getRotatedVector = (v, degrees) => {
 	const radians = (degrees * Math.PI) / 180
 	const cos = Math.cos(radians)
 	const sin = Math.sin(radians)
@@ -83,11 +83,13 @@ const getCenterShift = (fixedSign, startBox, width, height) => ({
 	y: (-fixedSign.y * (height - startBox.height)) / 2,
 })
 
-export const getResizedBox = (start, handle, cursorMovement) => {
+export const getResizedBox = (start, handle, cursorMovement, options = {}) => {
+	const { lockAspect = true, clampMinSize = true } = options
+
 	const fixedSign = FIXED_SIGN[handle]
 	if (!fixedSign) return null
 
-	const minSize = getMinSizeForElement(start.type)
+	const minSize = clampMinSize ? getMinSizeForElement(start.type) : { width: 0, height: 0 }
 	// rotate the cursor onto the element's local axes
 	const movementInLocalAxes = getRotatedVector(cursorMovement, -start.rotation)
 
@@ -96,7 +98,7 @@ export const getResizedBox = (start, handle, cursorMovement) => {
 	let height = getResizedSide(start.height, fixedSign.y, movementInLocalAxes.y, minSize.height)
 
 	const isCornerHandle = fixedSign.x !== 0 && fixedSign.y !== 0
-	if (isAspectLocked(start.type) && isCornerHandle) {
+	if (lockAspect && isAspectLocked(start.type) && isCornerHandle) {
 		height = width * (start.height / start.width)
 	}
 

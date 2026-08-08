@@ -1,5 +1,5 @@
 <template>
-	<div v-if="activeElementIds.length" data-selection-box :style="boxStyles">
+	<div v-if="activeElementIds.length && !inCropMode" data-selection-box :style="boxStyles">
 		<SelectionControls
 			v-if="showControls"
 			:elementType="activeElement?.shapeType || activeElement?.type"
@@ -15,6 +15,7 @@ import SelectionControls from '@/apps/slides/components/SelectionControls.vue'
 
 import { slideBounds, selectionBounds } from '@/apps/slides/stores/slide'
 import { interactionOffset } from '@/apps/slides/stores/interaction'
+import { inCropMode } from '@/apps/slides/stores/imageCrop'
 import { rotationDelta } from '@/apps/slides/stores/interaction'
 import {
 	activeElementIds,

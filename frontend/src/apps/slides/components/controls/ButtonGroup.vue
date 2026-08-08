@@ -7,12 +7,13 @@
 				:key="option.value"
 				type="button"
 				:title="option.label"
-				:class="[buttonClasses, active.includes(option.value) && activeClasses]"
+				:class="getButtonClasses(option)"
+				:disabled="option.disabled"
 				@click="emit('select', option.value)"
 				@mouseenter="emit('hover', option.value)"
 				@mouseleave="emit('hover', null)"
 			>
-				<component :is="option.icon" />
+				<component :is="option.icon" class="size-4" />
 			</button>
 		</div>
 	</div>
@@ -21,7 +22,7 @@
 <script setup>
 import { labelClasses } from '@/apps/slides/utils/constants'
 
-defineProps({
+const props = defineProps({
 	label: String,
 	options: {
 		type: Array,
@@ -39,4 +40,11 @@ const rowClasses = 'flex h-7 w-full items-center justify-between'
 const buttonClasses =
 	'flex cursor-pointer items-center justify-center rounded p-1 text-ink-gray-7 hover:bg-surface-gray-3'
 const activeClasses = 'bg-surface-gray-3 text-ink-gray-9'
+const disabledClasses = 'pointer-events-none opacity-40'
+
+const getButtonClasses = (option) => [
+	buttonClasses,
+	props.active.includes(option.value) && activeClasses,
+	option.disabled && disabledClasses,
+]
 </script>

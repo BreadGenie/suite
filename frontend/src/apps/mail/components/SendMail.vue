@@ -6,6 +6,7 @@
 		@reload-mails="() => emit('reloadMails')"
 		@send-mail="editor?.sendMail()"
 		@discard-mail="editor?.discardMail()"
+		@schedule-send="editor?.openScheduleModal()"
 	>
 		<template #body-content>
 			<ComposeMailEditor

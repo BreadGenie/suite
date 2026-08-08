@@ -1,8 +1,23 @@
 import re
 
+from frappe.utils import EMAIL_MATCH_PATTERN
+
 from suite.store.search_store import FieldSpec, SearchStore
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+# Quote characters some clients wrap display names in, e.g. "'Ayush Chaudhari'".
+_WRAPPING_QUOTES = "'\"`"
+
+
+def _sanitize_name(name: str | None) -> str | None:
+    """Strip whitespace and any matching quote pairs wrapping a display name."""
+
+    name = (name or "").strip()
+    while len(name) >= 2 and name[0] == name[-1] and name[0] in _WRAPPING_QUOTES:
+        name = name[1:-1].strip()
+
+    return name or None
 
 
 class EmailAddressIndex(SearchStore):
@@ -29,7 +44,7 @@ class EmailAddressIndex(SearchStore):
 
     def to_document(self, address: dict) -> dict:
         email = (address.get("email") or "").strip()
-        name = (address.get("name") or "").strip() or None
+        name = _sanitize_name(address.get("name"))
 
         return {
             "id": email.lower(),
@@ -39,11 +54,13 @@ class EmailAddressIndex(SearchStore):
         }
 
     def index_addresses(self, addresses: list[dict]) -> int:
-        """Upsert the given {name, email} dicts; skips entries without an email and dedupes the batch."""
+        """Upsert the given {name, email} dicts; dedupes the batch and silently skips entries whose
+        email is missing or syntactically invalid."""
 
         unique = {}
         for address in addresses:
-            if email := (address.get("email") or "").strip():
+            email = (address.get("email") or "").strip()
+            if EMAIL_MATCH_PATTERN.fullmatch(email):
                 unique[email.lower()] = address
 
         return self.index_documents(list(unique.values()))

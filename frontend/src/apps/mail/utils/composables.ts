@@ -5,7 +5,7 @@ import { createResource, toast } from 'frappe-ui'
 import { matchesScreenedValue, raiseOptimisticToast, raiseToast } from '@/apps/mail/utils'
 import { userStore } from '@/apps/mail/stores/user'
 
-import type { COLOR_SCHEME, Identity, ScreenedAddress } from '@/apps/mail/types'
+import type { COLOR_SCHEME, ComposeMailData, Identity, ScreenedAddress } from '@/apps/mail/types'
 
 // Decided once, at load, and deliberately not reactive to resize. Mobile and desktop are
 // separate component trees here, not one tree restyled: crossing 640px mid-session swaps
@@ -218,6 +218,17 @@ export const useUndo = () => {
 
 	return { setUndoAction, undo, prependUndoAction }
 }
+
+// Shared state for the compose window. A single <SendMail> (rendered in DefaultLayout) reacts to
+// this, so anything deeper in the tree — a `mailto:` link clicked inside a message, which is served
+// from an iframe and can't reach it by props — can ask for a draft.
+const composeRequest = ref<ComposeMailData>()
+
+export const useComposeMail = () => ({
+	composeRequest,
+	requestCompose: (details: ComposeMailData) => (composeRequest.value = details),
+	clearComposeRequest: () => (composeRequest.value = undefined),
+})
 
 // Shared state for the "Block sender?" prompt shown after marking/moving mail to Junk. A single
 // <ScreenedEmailAddressModal> (rendered in MailboxView) reacts to this, so any view can open it.

@@ -45,7 +45,7 @@
         :data-testid="`drive-entity-${row.name}`"
         :data-selected="selections.has(row.name) || undefined"
         @contextmenu="(e) => !selections.size && contextMenu(e, row)"
-        @click="!isModKey($event) && !selections.size && open(row)"
+        @click="isModKey($event) ? props.toggleSelection(row, $event) : !selections.size && open(row)"
         @dragstart="onDragStart($event, row)"
         @dragend="draggedItem = null"
         @dragover="
@@ -70,6 +70,7 @@
             class="shrink-0"
             :class="selections.size > 0 || selections.has(row.name) ? '' : 'invisible group-hover:visible'"
             :model-value="selections.has(row.name)"
+            :aria-label="__('Select {0}', [row.file_name])"
             @click.stop="props.toggleSelection(row, $event)"
           />
         </ListCell>
@@ -83,13 +84,7 @@
           >
             <div
               class="absolute inset-0"
-              :class="
-                canExpand(row)
-                  ? isExpanded(row)
-                    ? 'opacity-0'
-                    : 'group-hover:opacity-0'
-                  : ''
-              "
+              :class="canExpand(row) ? (isExpanded(row) ? 'opacity-0' : 'group-hover:opacity-0') : ''"
             >
               <img
                 v-if="!loadedThumbnails.has(row.name)"
@@ -116,23 +111,24 @@
             />
           </div>
           <InlineRenameInput :entity="row">
-            <Tooltip :text="nameTooltip(row)" :disabled="!nameTooltip(row)">
+            <Tooltip :text="nameTooltip(row)" :disabled="!nameTooltip(row)" class="min-w-0 flex-1">
               <div class="truncate text-base">{{ displayName(row) }}</div>
             </Tooltip>
           </InlineRenameInput>
-          <div class="flex flex-row grow justify-end gap-2 w-[20px] pr-3">
+          <div v-if="(row.is_favourite && $route.name !== 'Favourites') || shareIcon(row)"
+            class="ml-auto flex min-w-8 shrink-0 flex-row justify-end gap-2 pr-3">
             <LucideStar
               v-if="row.is_favourite && $route.name !== 'Favourites'"
               width="16"
               height="16"
-              class="my-auto text-ink-amber-6 stroke-current fill-current"
+              class="my-auto shrink-0 text-ink-amber-6 stroke-current fill-current"
             />
-            <Tooltip v-if="shareIcon(row)" :text="shareIcon(row).tooltip">
-              <component :is="shareIcon(row).icon" class="size-4" />
+            <Tooltip v-if="shareIcon(row)" :text="shareIcon(row).tooltip" class="shrink-0">
+              <component :is="shareIcon(row).icon" class="size-4 shrink-0" />
             </Tooltip>
           </div>
         </ListCell>
-        <ListCell>
+        <ListCell class="hidden sm:flex">
           <Avatar
             v-if="row.owner"
             shape="circle"
@@ -148,13 +144,14 @@
             <span class="truncate text-base">{{ row.relativeModified }}</span>
           </Tooltip>
         </ListCell>
-        <ListCell>
+        <ListCell class="hidden sm:flex">
           <span class="truncate text-base">{{ sizeLabel(row) }}</span>
         </ListCell>
         <ListCell class="justify-end">
           <Button
             v-if="!selections.size"
-            class="!bg-inherit"
+            :label="__('Actions for {0}', [row.file_name])"
+            class="!bg-inherit sm:invisible sm:group-hover:visible"
             @click="(e) => contextMenu(e, row)"
           >
             <LucideMoreHorizontal class="size-4" />
@@ -172,7 +169,7 @@ import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/boot/session'
 import { activeEntity, renamingEntity } from '@/apps/drive/data/selection'
 import InlineRenameInput from './InlineRenameInput.vue'
-import { openEntity, isModKey, isVirtual, folderRoute, getThumbnailUrl, WRITER_CONTENT_DOCTYPE, PRESENTATION_CONTENT_DOCTYPE } from '@/apps/drive/utils/files'
+import { openEntity, isModKey, isVirtual, folderRoute, getThumbnailUrl, displayFileName } from '@/apps/drive/utils/files'
 import { formatDate } from '@/apps/drive/utils/format'
 import { expandedFolders } from '@/apps/drive/data/folderTree'
 import LucideStar from '~icons/lucide/star'
@@ -262,21 +259,11 @@ function thumbnail(row) {
 }
 
 function displayName(row) {
-  if (!row.file_name) return row.title || ''
-  return row.file_name.lastIndexOf('.') === -1 ||
-    row.is_folder ||
-    row.content_doctype === WRITER_CONTENT_DOCTYPE ||
-    row.content_doctype === PRESENTATION_CONTENT_DOCTYPE
-    ? row.file_name
-    : row.file_name.slice(0, row.file_name.lastIndexOf('.'))
+  return displayFileName(row)
 }
 function nameTooltip(row) {
-  return !row.file_name ||
-    row.is_folder ||
-    row.content_doctype === WRITER_CONTENT_DOCTYPE ||
-    row.content_doctype === PRESENTATION_CONTENT_DOCTYPE
-    ? ''
-    : row.file_name
+  const display = displayFileName(row)
+  return display === row.file_name ? '' : row.file_name
 }
 
 function shareIcon(row) {

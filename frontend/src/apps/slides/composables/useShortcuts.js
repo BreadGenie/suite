@@ -18,6 +18,8 @@ import {
 } from '@/apps/slides/stores/slide'
 import {
 	resetFocus,
+	exitTextEditing,
+	focusElementId,
 	addTextElement,
 	pendingShapeType,
 	selectAllElements,
@@ -35,6 +37,7 @@ import {
 } from '@/apps/slides/stores/slideshow'
 
 import { markDirty } from '@/apps/slides/stores/saving'
+import { inCropMode, commitCrop, cancelCrop } from '@/apps/slides/stores/imageCrop'
 
 const { toggleNavigationPanel } = useNavigationPanel()
 const { activeEditor, toggleMark } = useTextEditor()
@@ -42,7 +45,7 @@ const { activeEditor, toggleMark } = useTextEditor()
 export const showShortcutsModal = ref(false)
 
 export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
-	const inEditMode = () => !inReadonlyMode.value && !inSlideShowMode.value
+	const inEditMode = () => !inReadonlyMode.value && !inSlideShowMode.value && !inCropMode.value
 	const inReadonly = () => inReadonlyMode.value && !inSlideShowMode.value
 	const inSlideShow = () => inSlideShowMode.value
 	const hasElements = () => activeElementIds.value.length > 0
@@ -143,6 +146,18 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 
 	const addShape = (shapeType) => {
 		pendingShapeType.value = shapeType
+	}
+
+	// overlays dismiss on Escape only if the event wasn't defaultPrevented,
+	// and matching a shortcut always prevents — so don't match while one is open
+	const hasOpenOverlay = () =>
+		!!document.querySelector('[data-dismissable-layer][data-state="open"]')
+
+	const handleEscape = (e) => {
+		if (isPlainInput(e)) return e.target.blur()
+		if (focusElementId.value) return exitTextEditing()
+		if (e.target?.isContentEditable) return e.target.blur()
+		resetFocus()
 	}
 
 	useShortcut([
@@ -253,8 +268,25 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 			key: 'Escape',
 			description: 'Deselect',
 			group: 'Edit',
-			condition: inEditMode,
-			handler: () => resetFocus(),
+			allowInInput: true,
+			condition: () => inEditMode() && !hasOpenOverlay(),
+			handler: handleEscape,
+		},
+		{
+			key: 'Escape',
+			description: 'Exit crop mode',
+			group: 'Edit',
+			allowInInput: true,
+			condition: () => inCropMode.value && !hasOpenOverlay(),
+			handler: () => cancelCrop(),
+		},
+		{
+			key: 'Enter',
+			description: 'Apply crop',
+			group: 'Edit',
+			allowInInput: true,
+			condition: () => inCropMode.value && !hasOpenOverlay(),
+			handler: () => commitCrop(),
 		},
 		{
 			key: 'd',

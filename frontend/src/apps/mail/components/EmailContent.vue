@@ -26,6 +26,7 @@
 		/>
 	</div>
 	<IframeResizer
+		ref="frame"
 		v-show="isIframeReady"
 		class="w-full"
 		license="GPLv3"
@@ -36,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useTemplateRef } from 'vue'
 import iframeResizerChildScript from '@iframe-resizer/child/index.umd.js?raw'
 // The package maps `./sfc` only via its (non-honored) `browser` field under
 // Vite 8/Rolldown, so import the concrete SFC file directly.
@@ -47,7 +48,9 @@ import { ImageOff } from 'lucide-vue-next'
 import { Button } from 'frappe-ui'
 
 import { analyzeRemoteAssets, blockRemoteAssets } from '@/apps/mail/utils'
-import { useTheme } from '@/apps/mail/utils/composables'
+import { escapeBracketedAddresses } from '@/apps/mail/utils/html'
+import { useComposeMail, useTheme } from '@/apps/mail/utils/composables'
+import { parseMailto } from '@/apps/mail/utils/mailto'
 import { isArtDirected, normalizeToLightScheme, remapEmailForDarkMode } from '@/apps/mail/utils/darkMail'
 
 const {
@@ -58,6 +61,8 @@ const {
 const emit = defineEmits<{ trust: [] }>()
 
 const { dataTheme } = useTheme()
+const { requestCompose } = useComposeMail()
+const frame = useTemplateRef<{ $el: HTMLIFrameElement }>('frame')
 
 const isIframeReady = ref(false)
 
@@ -94,6 +99,18 @@ const handleMessage = (event: MessageEvent) => {
 	// swipe navigation (MailboxView listens; it dedupes across EmailContent instances).
 	if (event.data?.type === 'swipe') {
 		window.dispatchEvent(new CustomEvent('email-swipe', { detail: event.data.direction }))
+		return
+	}
+	// A `mailto:` the reader clicked inside the message — open our own composer on it.
+	// Only this message's own frame gets to do that: `window` hears every window that
+	// can reach us (an attachment rendered in a frame, an embedder), and this one puts
+	// a stranger's address and body in front of the user as a ready-to-send draft.
+	if (event.data?.type === 'mailto') {
+		if (event.source !== (frame.value?.$el as HTMLIFrameElement | undefined)?.contentWindow)
+			return
+
+		const draft = parseMailto(String(event.data.href ?? ''))
+		if (draft) requestCompose(draft)
 		return
 	}
 	if (event.data?.type !== 'keyboard') return
@@ -135,7 +152,7 @@ const collapseQuotes = (doc: Document) => {
 }
 
 const srcdoc = computed(() => {
-	let sanitized = DOMPurify.sanitize(content, DOMPURIFY_CONFIG)
+	let sanitized = DOMPurify.sanitize(escapeBracketedAddresses(content), DOMPURIFY_CONFIG)
 	if (effectiveBlock.value) sanitized = blockRemoteAssets(sanitized)
 	const doc = new DOMParser().parseFromString(sanitized, 'text/html')
 	// Art-directed emails — the author claimed the full canvas and painted with
@@ -152,10 +169,7 @@ const srcdoc = computed(() => {
 	const remapped = dataTheme.value === 'dark' && !isArtDirected(doc)
 	if (remapped) remapEmailForDarkMode(doc)
 	collapseQuotes(doc)
-	const transformedContent = doc.documentElement.outerHTML.replace(
-		/<([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>/g,
-		'<b>&lt;$1&gt;</b>',
-	)
+	const transformedContent = doc.documentElement.outerHTML
 
 	/* eslint-disable no-useless-escape */
 	return `
@@ -282,9 +296,15 @@ const srcdoc = computed(() => {
 					const anchor = e.target.closest('a');
 					if (anchor) {
 						e.preventDefault();
-						if (anchor.getAttribute('href')?.trim()) {
-							window.open(anchor.href, '_blank');
+						const href = anchor.getAttribute('href')?.trim();
+						if (!href) return;
+						// A mailto belongs to this app: opening it would hand the OS's default
+						// mail client a draft the user has to finish somewhere else.
+						if (/^mailto:/i.test(href)) {
+							window.parent.postMessage({ type: 'mailto', href: anchor.href }, '*');
+							return;
 						}
+						window.open(anchor.href, '_blank');
 					}
 				});
 
@@ -349,6 +369,10 @@ const DOMPURIFY_CONFIG = {
 		'em',
 		'i',
 		'u',
+		// Highlighted text. Without it KEEP_CONTENT hands the words back unstyled, so a
+		// highlight applied in our own composer came back to the reader as plain text —
+		// while the text colour beside it, which rides a <span>, survived.
+		'mark',
 		'h1',
 		'h2',
 		'h3',

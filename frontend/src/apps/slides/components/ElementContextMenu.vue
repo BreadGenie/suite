@@ -20,6 +20,7 @@ import {
 } from '@/apps/slides/stores/element'
 
 import { alignElement, arrangeElements } from '@/apps/slides/stores/placement'
+import { inCropMode, startCrop } from '@/apps/slides/stores/imageCrop'
 import { currentSlide } from '@/apps/slides/stores/slide'
 
 import BringToFront from '@/apps/slides/icons/BringToFront.vue'
@@ -44,7 +45,7 @@ const contextMenuOptions = ref([])
 const handleContextMenu = (e) => {
 	if (e.target?.isContentEditable) return e.stopPropagation()
 
-	if (inReadonlyMode.value) return e.preventDefault()
+	if (inReadonlyMode.value || inCropMode.value) return e.preventDefault()
 
 	const elementNode = e.target?.closest?.('[data-index]')
 	if (elementNode) {
@@ -99,6 +100,15 @@ const buildElementContextOptions = () => {
 			onClick: () => duplicateElements(null, activeElements.value),
 		},
 	]
+
+	const canCrop = activeElements.value.length == 1 && activeElements.value[0].type == 'image'
+	if (canCrop) {
+		clipboardOptions.push({
+			label: 'Crop',
+			icon: 'lucide-crop',
+			onClick: () => startCrop(activeElements.value[0]),
+		})
+	}
 
 	const deleteOptions = [
 		{ label: 'Delete', icon: 'lucide-trash-2', theme: 'red', onClick: () => deleteElements() },

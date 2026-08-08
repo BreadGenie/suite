@@ -427,14 +427,14 @@
    "reqd": 1
   },
   {
-   "default": "v1.0.8",
+   "default": "v1.0.12",
    "fieldname": "stalwart_cli_version",
    "fieldtype": "Data",
    "label": "Stalwart CLI Version",
    "reqd": 1
   },
   {
-   "default": "v0.16.8",
+   "default": "v0.16.16",
    "fieldname": "stalwart_version",
    "fieldtype": "Data",
    "label": "Stalwart Version",

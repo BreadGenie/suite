@@ -14,6 +14,8 @@ import { useTextEditor } from '@/apps/slides/composables/useTextEditor'
 import { getElementDiv } from './elementRegistry'
 import { markDirty } from './saving'
 import { generateUniqueId, cloneObj, normalizeRotation } from '../utils/helpers'
+import { getBorderInset, getCoverCrop, isFullRect } from '../utils/cropGeometry'
+import { getAttachmentUrl } from '../utils/mediaUploads'
 import { guessTextColorFromBackground, guessShapeColorsFromBackground } from '../utils/color'
 import { presentationId } from './presentation'
 import { getCommandsToInitElementRefId, getCommandsToUpdateElementRefId } from './transition'
@@ -421,6 +423,15 @@ const getVideoPoster = async (videoUrl) => {
 	})
 }
 
+const getNaturalAspectRatio = (src) => {
+	return new Promise((resolve, reject) => {
+		const img = new Image()
+		img.onload = () => resolve(img.naturalWidth / img.naturalHeight)
+		img.onerror = reject
+		img.src = src
+	})
+}
+
 const getNaturalSize = async (dataURL) => {
 	return new Promise((resolve, reject) => {
 		const img = new Image()
@@ -448,6 +459,7 @@ const addMediaElement = async (file, type) => {
 	const src = file.file_url
 
 	let elementWidth = 0
+	let elementHeight = 0
 
 	let position = {
 		left: 0,
@@ -458,17 +470,17 @@ const addMediaElement = async (file, type) => {
 	let imagePoster = null
 
 	if (type == 'image') {
-		const { width, aspectRatio } = await getNaturalSize(src)
+		const { width, aspectRatio } = await getNaturalSize(getAttachmentUrl(src))
 		elementWidth = Math.max(Math.min(width, 800), 30)
-		const elementHeight = elementWidth / aspectRatio
+		elementHeight = elementWidth / aspectRatio
 		position = getLeftTopForCenteredElement(elementWidth, elementHeight)
 		if (isGifFile(file)) {
-			imagePoster = await generateImagePoster(src)
+			imagePoster = await generateImagePoster(getAttachmentUrl(src))
 		}
 	} else {
 		elementWidth = 400
-		const { posterURL, aspectRatio } = await getVideoPoster(src)
-		const elementHeight = elementWidth / aspectRatio
+		const { posterURL, aspectRatio } = await getVideoPoster(getAttachmentUrl(src))
+		elementHeight = elementWidth / aspectRatio
 		position = getLeftTopForCenteredElement(elementWidth, elementHeight)
 		videoPoster = posterURL
 	}
@@ -477,6 +489,7 @@ const addMediaElement = async (file, type) => {
 		id: generateUniqueId(),
 		zIndex: currentSlide.value.elements.length + 1,
 		width: elementWidth,
+		height: elementHeight,
 		left: position.left,
 		top: position.top,
 		opacity: 100,
@@ -525,47 +538,75 @@ const addMediaElement = async (file, type) => {
 	)
 }
 
-const replaceMediaElement = async (element, fileDoc) => {
-	let commands = []
+const probeReplacementMedia = async (element, fileDoc) => {
+	const newUrl = getAttachmentUrl(fileDoc.file_url)
 
-	if (element.src !== fileDoc.file_url) {
+	if (element.type === 'video') {
+		const { posterURL, aspectRatio } = await getVideoPoster(newUrl)
+		return { poster: posterURL, aspect: aspectRatio }
+	}
+
+	return {
+		newAspect: await getNaturalAspectRatio(newUrl),
+		poster: isGifFile(fileDoc) ? await generateImagePoster(newUrl) : null,
+	}
+}
+
+// the width stays put and the frame height refits the new video
+const pushVideoReplaceEdits = (element, { frameHeight, poster, aspect }, pushEdit) => {
+	if (element.poster !== poster) pushEdit('poster', element.poster, poster)
+
+	if (frameHeight && Number.isFinite(aspect) && aspect > 0) {
+		const inset = getBorderInset(element)
+		const newHeight = (element.width - 2 * inset) / aspect + 2 * inset
+		if (newHeight !== element.height) pushEdit('height', element.height, newHeight)
+	}
+}
+
+// the frame stays put and the new image is cover-cropped into it
+const pushImageReplaceEdits = (element, { frameHeight, newAspect, poster }, pushEdit) => {
+	if (!element.height && frameHeight) pushEdit('height', element.height, frameHeight)
+
+	const inset = getBorderInset(element)
+
+	// without a height the frame aspect is NaN and getCoverCrop falls back to
+	// the full rect, so a legacy element just keeps sizing itself
+	const frameAspect = (element.width - 2 * inset) / (frameHeight - 2 * inset)
+	const coverCrop = getCoverCrop(newAspect, frameAspect)
+	const newCrop = isFullRect(coverCrop) ? undefined : coverCrop
+	if (element.crop || newCrop) pushEdit('crop', element.crop, newCrop)
+
+	const newPoster = poster ?? undefined
+	if ((element.poster ?? undefined) !== newPoster) pushEdit('poster', element.poster, newPoster)
+}
+
+const replaceMediaElement = async (element, fileDoc) => {
+	// measure while the old media is still rendered, before any await
+	const frameHeight = element.height || getElementDiv(element.id)?.offsetHeight
+
+	const srcChanged = element.src !== fileDoc.file_url
+	const probes = srcChanged ? await probeReplacementMedia(element, fileDoc) : null
+
+	// a slow upload can outlive a slide switch or the element itself
+	const slide = slides.value.find((s) => s.elements.some((el) => el.id === element.id))
+	if (!slide) return
+	const slideId = slide.clientId
+
+	let commands = []
+	const pushEdit = (property, oldValue, newValue) => {
 		commands.push(
-			editElementCommand({
-				slideId: currentSlide.value.clientId,
-				elementIds: [element.id],
-				property: 'src',
-				oldValue: element.src,
-				newValue: fileDoc.file_url,
-			}),
+			editElementCommand({ slideId, elementIds: [element.id], property, oldValue, newValue }),
 		)
+	}
+
+	if (srcChanged) {
+		pushEdit('src', element.src, fileDoc.file_url)
+		if (element.type === 'video') pushVideoReplaceEdits(element, { frameHeight, ...probes }, pushEdit)
+		if (element.type === 'image') pushImageReplaceEdits(element, { frameHeight, ...probes }, pushEdit)
 	}
 
 	if (element.attachmentName !== fileDoc.name) {
-		commands.push(
-			editElementCommand({
-				slideId: currentSlide.value.clientId,
-				elementIds: [element.id],
-				property: 'attachmentName',
-				oldValue: element.attachmentName,
-				newValue: fileDoc.name,
-			}),
-		)
-	}
-
-	if (element.type === 'video') {
-		const oldPoster = element.poster
-		const newPoster = await getVideoPoster(fileDoc.file_url)
-		if (oldPoster !== newPoster) {
-			commands.push(
-				editElementCommand({
-					slideId: currentSlide.value.clientId,
-					elementIds: [element.id],
-					property: 'poster',
-					oldValue: oldPoster,
-					newValue: newPoster,
-				}),
-			)
-		}
+		pushEdit('attachmentName', element.attachmentName, fileDoc.name)
 	}
 
 	// include any ref-id update commands produced by transition logic
@@ -574,9 +615,10 @@ const replaceMediaElement = async (element, fileDoc) => {
 	if (commands.length) {
 		commandHistory.execute(
 			batchCommand({
-				slideId: currentSlide.value.clientId,
+				slideId,
 				elementIds: [element.id],
 				commands,
+				skipJumpOnExecute: true,
 			}),
 		)
 	}
@@ -631,13 +673,18 @@ const deleteElements = async (e, ids) => {
 	let commands = []
 
 	idsToDelete.forEach((id) => {
+		// re-entrant: the focusElementId and activeElement watches both blur an empty text element
+		const element = currentSlide.value.elements.find((el) => el.id === id)
+		if (!element) return
 		commands.push(
 			removeElementCommand({
 				slideId: currentSlide.value.clientId,
-				element: currentSlide.value.elements.find((el) => el.id === id),
+				element,
 			}),
 		)
 	})
+
+	if (!commands.length) return
 
 	const elementsCopy = JSON.parse(JSON.stringify(currentSlide.value.elements))
 	const normalizedElements = normalizeZIndices(
@@ -676,6 +723,12 @@ const resetFocus = () => {
 	activeElementIds.value = []
 	focusElementId.value = null
 	pairElementId.value = null
+}
+
+// exit text editing but keep the element selected; the focusElementId
+// watch tears down the editor
+const exitTextEditing = () => {
+	focusElementId.value = null
 }
 
 const getElementPosition = (elementId) => {
@@ -739,6 +792,15 @@ const addFixedWidthToElement = () => {
 		activeElement.value.width = rect.width / slideBounds.scale
 		markDirty()
 	}
+}
+
+// the stored number equals what auto-height already renders, so no markDirty
+const ensureExplicitHeight = (element) => {
+	if (!element || !['image', 'video'].includes(element.type)) return
+	if (element.height) return
+	const elementDiv = getElementDiv(element.id)
+	if (!elementDiv) return
+	element.height = elementDiv.offsetHeight
 }
 
 const { initTextEditor, activeEditor } = useTextEditor()
@@ -838,7 +900,7 @@ watch(
 
 // focusElementId changing to a shape's id enters text-edit mode for that shape.
 // The activeElement watch won't fire then (same element object), so this handles it.
-// Also handles the inverse: focusElementId cleared while still on the same shape (Escape).
+// Also handles the inverse: focusElementId cleared while the element stays selected (Escape).
 watch(
 	() => focusElementId.value,
 	(id, oldId) => {
@@ -848,9 +910,10 @@ watch(
 		} else if (oldId && activeEditor.value) {
 			if (activeElement.value?.id !== oldId) return
 			const oldElement = findSlideElement(oldId)
-			if (oldElement?.type !== 'shape') return
+			if (!['text', 'shape'].includes(oldElement?.type)) return
 			blurAndSaveContent(oldElement)
-			replaceEditor()
+			if (oldElement.type === 'shape') replaceEditor()
+			else replaceEditor(() => initEditorForElement(findSlideElement(oldId)))
 		}
 	},
 )
@@ -991,6 +1054,7 @@ export {
 	activeElement,
 	setActiveElements,
 	resetFocus,
+	exitTextEditing,
 	addTextElement,
 	addMediaElement,
 	addShapeElement,
@@ -999,6 +1063,8 @@ export {
 	selectAllElements,
 	getElementPosition,
 	addFixedWidthToElement,
+	ensureExplicitHeight,
+	getNaturalAspectRatio,
 	setEditableState,
 	replaceMediaElement,
 	normalizeZIndices,

@@ -9,6 +9,8 @@ import { InMemoryE2eeCoordinatorPersistence } from './server/E2eeCoordinatorPers
 import { InMemoryRosterPersistence } from './server/E2eeRosterPersistence';
 import { FileRosterPersistence } from './server/E2eeRosterPersistenceFile';
 import { E2eeRosterStore } from './server/E2eeRosterStore';
+import { RecordingGrantManager } from './server/RecordingGrantManager';
+import { RecordingGrantPersistenceFile } from './server/RecordingGrantPersistenceFile';
 import { RouteManager } from './server/RouteManager';
 import { SocketHandlerManager } from './server/SocketHandlerManager';
 import { SttManager } from './stt/SttManager';
@@ -35,6 +37,7 @@ export class SFUServer {
 	private sttManager: SttManager;
 	private config: ServerConfig;
 	private telemetry: Telemetry;
+	private recordingGrantPersistence?: RecordingGrantPersistenceFile;
 
 	constructor() {
 		const jwtSecret = process.env.JWT_SECRET;
@@ -74,12 +77,26 @@ export class SFUServer {
 		this.mediasoup.onMediaScore((direction, media, score) =>
 			this.telemetry.mediaScore.observe({ direction, media }, score),
 		);
-		this.authManager = new AuthManager(this.config.jwtSecret);
 		this.sttManager = new SttManager({
 			sttServerUrl: process.env.STT_SERVER_URL,
 			allowMockFallback: process.env.NODE_ENV === 'development',
 		});
 		this.mediasoup.setSttManager(this.sttManager);
+		const recordingPersistencePath =
+			process.env.RECORDING_GRANT_PERSISTENCE_FILE;
+		this.recordingGrantPersistence = recordingPersistencePath
+			? new RecordingGrantPersistenceFile(recordingPersistencePath)
+			: undefined;
+		const recordingGrantManager = recordingPersistencePath
+			? new RecordingGrantManager(
+					this.config.jwtSecret,
+					this.recordingGrantPersistence!,
+				)
+			: undefined;
+		this.authManager = new AuthManager(
+			this.config.jwtSecret,
+			recordingGrantManager,
+		);
 		this.routeManager = new RouteManager(
 			this.app,
 			this.mediasoup,
@@ -101,6 +118,7 @@ export class SFUServer {
 			this.telemetry,
 			e2eeRoster,
 			e2eeCoordinatorPersistence,
+			recordingGrantManager,
 			this.sttManager,
 		);
 
@@ -119,6 +137,7 @@ export class SFUServer {
 			loggers.server.info('Starting SFU Server');
 
 			await this.mediasoup.init();
+			await this.recordingGrantPersistence?.initialize();
 
 			this.server.listen(this.config.port, this.config.host, () => {
 				loggers.server.info(

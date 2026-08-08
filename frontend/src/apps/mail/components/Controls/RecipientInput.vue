@@ -55,11 +55,14 @@
 		>
 			<template #suffix> <span /> </template>
 			<template #item-prefix="{ item, query }">
-				<Avatar :image="item.image" :label="item.display_name || item.email || query" />
+				<Avatar
+					:image="item.image"
+					:label="item.display_name || item.email || query"
+					size="lg"
+				/>
 			</template>
 			<template #item-label="{ item }">
-				<div class="truncate">{{ item.display_name || item.email }}</div>
-				<div class="text-p-sm text-ink-gray-5 truncate">{{ item.email }}</div>
+				<ContactOption :contact="item" />
 			</template>
 			<template #item-create="{ query }"> {{ query }} </template>
 		</Combobox>
@@ -76,6 +79,7 @@ import { onClickOutside, useDebounceFn } from '@vueuse/core'
 import { X } from 'lucide-vue-next'
 import { Avatar, Combobox, createResource } from 'frappe-ui'
 
+import ContactOption from '@/apps/mail/components/Controls/ContactOption.vue'
 import { type DraftRecipient } from '@/apps/mail/types'
 import { isEmail } from '@/apps/mail/utils'
 import { useScreenSize } from '@/apps/mail/utils/composables'

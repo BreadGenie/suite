@@ -11,13 +11,8 @@ from frappe.utils import cint, flt, validate_email_address
 from pypika import Case, Order
 
 from suite.mail.api.utils import get_avatar_url
-from suite.mail.doctype.mail_account_request.mail_account_request import (
-    STALWART_DEFAULT_ADMIN_ROLES,
-    STALWART_DEFAULT_USER_ROLES,
-)
 from suite.mail.doctype.user_account.user_account import get_user_personal_jmap_account
 from suite.mail.stalwart import (
-    add_account_role,
     get_account_metadata,
     get_account_service,
     get_action_service,
@@ -34,7 +29,6 @@ from suite.mail.stalwart import (
     get_queued_message_service,
     get_report_service,
     get_role_service,
-    remove_account_role,
 )
 from suite.mail.stalwart import get_domains as get_stalwart_domains
 from suite.mail.stalwart import get_permissions as get_stalwart_permissions
@@ -50,7 +44,6 @@ from suite.mail.utils.dt import from_utc_z, normalize_utc_z, to_utc_z
 from suite.mail.utils.logger import log_admin_action
 from suite.mail.utils.validation import is_subaddressed_email
 from suite.utils import execute_with_logging
-from suite.utils.dt import get_utc_now
 from suite.utils.rate_limiter import dynamic_rate_limit
 from suite.utils.user import is_suite_admin, is_system_manager, is_user_enabled
 
@@ -799,7 +792,11 @@ def update_member(
     locale: str | None = None,
     time_zone: str | None = None,
 ) -> None:
-    """Updates a member's role, display name, quota, locale and time zone on Frappe and Stalwart."""
+    """Updates a member's role, display name, quota, locale and time zone.
+
+    The role only toggles the Suite Admin role on Frappe; Stalwart roles stay untouched, since
+    Suite Admin calls are proxied through the configured Stalwart admin credentials.
+    """
 
     check_admin_permission("update members", member_id)
     check_member_target(member_id)
@@ -822,18 +819,6 @@ def update_member(
 
     account_id = _member_account(member_id)
     account_service = get_account_service()
-
-    # Role: the base "User" Stalwart role always stays; only the admin-only roles are toggled.
-    if role is not None:
-        extra_roles = list(set(STALWART_DEFAULT_ADMIN_ROLES) - set(STALWART_DEFAULT_USER_ROLES))
-        toggle = add_account_role if role == "admin" else remove_account_role
-        execute_with_logging(
-            func=lambda: [toggle(member_id, r) for r in extra_roles],
-            title=_("Failed to update roles for {0}").format(member_id),
-            user_message=_("An error occurred while updating the role, check error logs for more details."),
-            with_context=False,
-            module="Mail",
-        )
 
     if not account_id:
         return
@@ -2147,30 +2132,13 @@ def update_queued_recipient(
 
 
 @frappe.whitelist()
-def add_queued_recipient(message_id: str, email: str) -> None:
-    """Adds a recipient (pending delivery) to a queued message."""
-
-    from datetime import timedelta
-
-    check_admin_permission("update queued messages", f"{message_id} ({email})")
-
-    email = (email or "").strip()
-    if not email:
-        frappe.throw(_("Recipient email is required."))
-
-    now = get_utc_now()
-    recipient = {
-        "status": {"@type": "Scheduled"},
-        "retryDue": to_utc_z(now),
-        "notifyDue": to_utc_z(now),
-        "expires": {"@type": "Ttl", "expiresAt": to_utc_z(now + timedelta(days=5))},
-    }
-    get_queued_message_service().update(message_id, {f"recipients/{email}": recipient})
-
-
-@frappe.whitelist()
 def remove_queued_recipient(message_id: str, email: str) -> None:
-    """Removes a recipient from a queued message."""
+    """Cancels delivery to one recipient of a queued message.
+
+    The server keeps the recipient row for the delivery report and marks it permanently
+    failed ("Delivery canceled."). Recipients cannot be added to a queued message - the
+    server only patches recipients that exist in the envelope.
+    """
 
     check_admin_permission("update queued messages", f"{message_id} ({email})")
     get_queued_message_service().update(message_id, {f"recipients/{email}": None})

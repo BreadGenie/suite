@@ -236,10 +236,6 @@ const { stream } = useAudioStream(props.participant.user_id, {
 	currentUser: meetingCtx?.currentUser,
 });
 
-const networkQuality = computed(
-	() => meetingCtx?.networkQuality.value ?? "good",
-);
-
 const resolvedDisplayName = computed(() => {
 	return (
 		props.displayName ||
@@ -250,7 +246,7 @@ const resolvedDisplayName = computed(() => {
 
 const computedNetworkQuality = computed(() => {
 	if (props.isLocal) {
-		return networkQuality.value;
+		return meetingCtx?.localNetworkQuality.value ?? "good";
 	}
 	return props.participant.networkQuality || "good";
 });

@@ -122,6 +122,12 @@ export const routes: RouteRecordRaw[] = [
 				props: true,
 			},
 			{
+				path: 'account/:accountId/scheduled',
+				name: 'mail-scheduled',
+				component: () => import('@/apps/mail/pages/ScheduledMailsView.vue'),
+				props: true,
+			},
+			{
 				path: 'account/:accountId/address-books/',
 				name: 'mail-address-books',
 				component: () => import('@/apps/mail/pages/AddressBooksView.vue'),

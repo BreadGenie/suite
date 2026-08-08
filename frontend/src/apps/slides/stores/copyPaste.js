@@ -12,6 +12,7 @@ import {
 	resetFocus,
 } from '@/apps/slides/stores/element'
 
+import { inCropMode } from '@/apps/slides/stores/imageCrop'
 import { useTextEditor } from '@/apps/slides/composables/useTextEditor'
 
 import { getDocFromHTML, generateUniqueId } from '@/apps/slides/utils/helpers'
@@ -206,6 +207,9 @@ const handleClipboardTextHTML = (imgSrc) => {
 const handlePaste = (e) => {
 	// do not override paste event if current element is input or content editable
 	if (isInputElement()) return
+
+	// a paste would steal the selection from the crop session mid-interaction
+	if (inCropMode.value) return
 
 	e.preventDefault()
 

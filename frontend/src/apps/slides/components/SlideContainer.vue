@@ -20,6 +20,8 @@
 
 				<ShapeDrawOverlay v-if="!inReadonlyMode" />
 
+				<CropOverlay v-if="!inReadonlyMode" />
+
 				<SnapGuides :ongoingInteraction="hasOngoingInteraction" :activeGuides="activeGuides" />
 
 				<SlideElement
@@ -62,6 +64,7 @@ import SnapGuides from '@/apps/slides/components/SnapGuides.vue'
 import SelectionBox from '@/apps/slides/components/SelectionBox.vue'
 import MarqueeOverlay from '@/apps/slides/components/MarqueeOverlay.vue'
 import ShapeDrawOverlay from '@/apps/slides/components/ShapeDrawOverlay.vue'
+import CropOverlay from '@/apps/slides/components/CropOverlay.vue'
 import SlideElement from '@/apps/slides/components/SlideElement.vue'
 import DropTargetOverlay from '@/apps/slides/components/DropTargetOverlay.vue'
 import OverflowContentOverlay from '@/apps/slides/components/OverflowContentOverlay.vue'
@@ -82,6 +85,7 @@ import {
 	pairElementId,
 	dragOccurred,
 	addFixedWidthToElement,
+	ensureExplicitHeight,
 	setEditableState,
 	duplicateElements,
 	activeElements,
@@ -382,6 +386,8 @@ const handlePositionChange = (total) => {
 let resizeStartBounds = null
 
 const startElementResize = (e, resizer) => {
+	ensureExplicitHeight(activeElement.value)
+
 	resizeStartBounds = {
 		left: selectionBounds.left,
 		top: selectionBounds.top,

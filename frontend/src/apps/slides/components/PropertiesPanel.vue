@@ -15,6 +15,10 @@
 				<Divider flexItem />
 				<ShapeStyleSection />
 			</template>
+			<template v-if="activeElement?.type === 'image'">
+				<Divider flexItem />
+				<ImageSection />
+			</template>
 			<template v-if="activeElement?.type === 'video'">
 				<Divider flexItem />
 				<PlaybackSection />
@@ -53,6 +57,7 @@ import LayoutSection from './LayoutSection.vue'
 import AppearanceSection from './AppearanceSection.vue'
 import TypographySection from './TypographySection.vue'
 import ShapeStyleSection from './ShapeStyleSection.vue'
+import ImageSection from './ImageSection.vue'
 import PlaybackSection from './PlaybackSection.vue'
 import BorderSection from './BorderSection.vue'
 import ShadowSection from './ShadowSection.vue'

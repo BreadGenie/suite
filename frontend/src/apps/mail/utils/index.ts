@@ -4,6 +4,8 @@ import { toast } from 'frappe-ui'
 
 import { FOLDER_ICON_MAP, SCREENER_MAILBOX_NAME } from '@/apps/mail/constants'
 import dayjs from '@/apps/mail/utils/dayjs'
+import { flattenMentions } from '@/apps/mail/utils/mentions'
+import { preserveEditorColors } from '@/apps/mail/utils/editorColors'
 import AudioIcon from '@/apps/mail/components/Icons/AudioIcon.vue'
 import ImageIcon from '@/apps/mail/components/Icons/ImageIcon.vue'
 import PDFIcon from '@/apps/mail/components/Icons/PDFIcon.vue'
@@ -42,8 +44,10 @@ export const raiseToast = (
 	message: string,
 	type = 'success',
 	action?: { label: string; onClick: () => void },
+	duration?: number,
 ) => {
-	if (type === 'success') return toast.success(message, action ? { action } : undefined)
+	if (type === 'success')
+		return toast.success(message, action || duration ? { action, duration } : undefined)
 
 	const div = document.createElement('div')
 	div.innerHTML = message
@@ -351,9 +355,18 @@ export const randomString = (length: number) => {
 	return result
 }
 
-export const processInlineImages = (mail: ComposeMailData) => {
+// `sending`: mentions are flattened to plain links only on the way out. A draft keeps
+// the editor's own mention nodes, so reopening one still shows the chips.
+export const processInlineImages = (mail: ComposeMailData, { sending = false } = {}) => {
 	const htmlBody = mail.html_body! + mail.quoted_content
 	const $ = cheerio.load(htmlBody)
+
+	// Unconditional, unlike the mention flattening below: a draft is rendered by the reader too,
+	// in the same iframe that can't see the editor's stylesheet, so a draft left holding the
+	// variables would already be showing the wrong colours back to its own author.
+	preserveEditorColors($)
+
+	if (sending) flattenMentions($)
 
 	const regularAttachments = mail.attachments?.filter((a) => a.disposition !== 'inline') || []
 	const inlineAttachments = mail.attachments?.filter((a) => a.disposition === 'inline') || []
@@ -400,12 +413,7 @@ export const getScriptName = (scriptName: string) => {
 export const isSystemScript = (scriptName: string) =>
 	['vacation', 'frappe_mail_automation'].includes(scriptName)
 
-export const hasHtmlContent = (content: string | null | undefined): boolean => {
-	if (!content) return false
-	return /<(html|head|body|div|p|span|table|td|tr|a|img|br|hr|h[1-6]|ul|ol|li|strong|em|b|i|font|style)[^>]*>/i.test(
-		content,
-	)
-}
+export { decodeHtmlEntities, escapeHtml, hasHtmlContent } from '@/apps/mail/utils/html'
 
 export const getIcon = (mailbox: MailboxData) => {
 	// The Screener is a system folder: its 'eye' icon is authoritative and can't be overridden by a

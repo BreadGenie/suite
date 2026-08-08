@@ -16,11 +16,11 @@
           <div class="mb-2 text-ink-gray-5 text-sm">General access</div>
           <div class="flex items-start justify-between gap-2">
             <div class="flex flex-col items-start gap-2">
-              <Select v-model="generalAccessLevel" variant="outline" :options="levelOptions" @update:model-value="
+              <Select v-model="generalAccessLevel" variant="outline" :options="levelOptions" :disabled="!generalAccessLoaded" @update:model-value="
                 (val) => updateGeneralAccess(val, generalPerms)
               " />
             </div>
-            <AccessSelect v-if="generalAccessLevel !== 'restricted'" v-model="generalPerms" variant="outline" :options="accessOptions"
+            <AccessSelect v-if="generalAccessLevel !== 'restricted'" v-model="generalPerms" variant="outline" :options="accessOptions" :disabled="!generalAccessLoaded"
               @update:model-value="
                 (val) => updateGeneralAccess(generalAccessLevel, val)
               " />
@@ -104,7 +104,8 @@ import {
   Dialog,
   Select,
   Skeleton,
-  useCall,
+  createResource,
+  toast,
   Button,
 } from 'frappe-ui'
 import AccessSelect from './AccessSelect.vue'
@@ -181,29 +182,27 @@ const accessOptions = computed(() =>
 // cover all logged-in site users; restricted writes explicit deny rows.
 const generalAccessLevel = ref(levelOptions[0].value)
 const generalPerms = ref('reader')
+const generalAccessLoaded = ref(false)
 
-let generalParams = {}
-const getGeneralAccess = useCall({
-  url: '/api/v2/method/suite.drive.api.permissions.get_user_access',
-  immediate: false,
-  onSuccess: (data) => {
-    if (!data || !data.read) {
-      if (generalParams.user === 'Guest') fetchGeneralAccess({ user: '$GENERAL' })
-      return
+createResource({
+  url: 'suite.drive.api.permissions.get_general_access',
+  params: { entity: props.file.name },
+  auto: true,
+  onSuccess(data) {
+    generalAccessLevel.value = data.type
+    if (data.read) {
+      generalPerms.value = data.write
+        ? 'editor'
+        : data.upload
+          ? 'upload'
+          : 'reader'
     }
-    generalAccessLevel.value = generalParams.user === 'Guest' ? 'public' : 'site'
-    generalPerms.value = data.write
-      ? 'editor'
-      : data.upload
-        ? 'upload'
-        : 'reader'
+    generalAccessLoaded.value = true
+  },
+  onError(error) {
+    toast.error(error.messages?.at(-1) || 'Could not load general access.')
   },
 })
-const fetchGeneralAccess = (params) => {
-  generalParams = params
-  getGeneralAccess.submit({ entity: props.file.name, ...params })
-}
-fetchGeneralAccess({ user: 'Guest' })
 const updateGeneralAccess = (level, perms) => {
   if (level !== 'restricted') {
     props.updateAccess.submit({

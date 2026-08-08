@@ -107,6 +107,12 @@ function onArrowStep(event) {
 		inputRef.value?.blur()
 		return
 	}
+	if (event.key === 'Escape') {
+		event.stopPropagation()
+		live.value = null
+		inputRef.value?.blur()
+		return
+	}
 	if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
 	event.preventDefault()
 	const typed = live.value !== null ? parseFloat(live.value) : Number(model.value)

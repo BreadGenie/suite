@@ -27,7 +27,7 @@
 					</div>
 				</DashboardCard>
 
-				<DashboardCard :title="__('Recipients')" :button-label="__('Add')" @action="showAddRecipient = true">
+				<DashboardCard :title="__('Recipients')">
 					<div class="flex flex-col">
 						<template v-if="data.recipients.length">
 							<div
@@ -65,7 +65,6 @@
 		:message="data"
 		@reload="message.reload()"
 	/>
-	<AddQueuedRecipientModal v-model="showAddRecipient" :message-id="messageId" @reload="message.reload()" />
 	<EditQueuedRecipientModal
 		v-model="showEditRecipient"
 		:message-id="messageId"
@@ -109,7 +108,6 @@ import DashboardLayout from '@/apps/mail/components/DashboardLayout.vue'
 import DashboardCard from '@/apps/mail/components/DashboardCard.vue'
 import DashboardDetailHeader from '@/apps/mail/components/DashboardDetailHeader.vue'
 import InformationField from '@/apps/mail/components/InformationField.vue'
-import AddQueuedRecipientModal from '@/apps/mail/components/Modals/AddQueuedRecipientModal.vue'
 import EditQueuedRecipientModal from '@/apps/mail/components/Modals/EditQueuedRecipientModal.vue'
 import EditQueuedMessageModal from '@/apps/mail/components/Modals/EditQueuedMessageModal.vue'
 
@@ -142,7 +140,6 @@ const router = useRouter()
 usePageMeta(() => ({ title: __('Queued Message') }))
 
 const showEditMessage = ref(false)
-const showAddRecipient = ref(false)
 const showEditRecipient = ref(false)
 const showCancel = ref(false)
 const showSource = ref(false)
@@ -228,7 +225,7 @@ const removeRecipient = (email: string) =>
 		makeParams: () => ({ message_id: messageId, email }),
 		onSuccess: () => {
 			message.reload()
-			raiseToast(__('Recipient removed.'))
+			raiseToast(__('Delivery to the recipient canceled.'))
 		},
 		onError: (error: { messages?: string[] }) =>
 			raiseToast(error.messages?.[0] || __('Request failed.'), 'error'),

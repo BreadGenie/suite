@@ -51,6 +51,7 @@ import { selectionBounds } from '@/apps/slides/stores/slide'
 import { commitInteraction } from '@/apps/slides/stores/interaction'
 import { rotationDelta } from '@/apps/slides/stores/interaction'
 import { normalizeRotation } from '@/apps/slides/utils/helpers'
+import { isAspectLocked } from '@/apps/slides/utils/resize'
 import { useInteractionScrub } from '@/apps/slides/composables/useInteractionScrub'
 
 const isMultiSelect = computed(() => activeElementIds.value?.length > 1)
@@ -71,8 +72,23 @@ const rotationValue = computed(() => {
 	return Math.round(normalizeRotation(deg))
 })
 
-const sizeScrub = useInteractionScrub(['width', 'height'], () => {
+const hasLockedAspect = computed(() => {
+	if (!isAspectLocked(activeElement.value?.type)) return false
+	// legacy media without explicit height keeps its aspect via auto height
+	return Boolean(activeElement.value?.height)
+})
+
+const ensureFixedWidth = () => {
 	if (!activeElement.value.width) addFixedWidthToElement()
+}
+
+const deriveLockedHeight = (property, value, startBounds) => {
+	if (property != 'width' || !hasLockedAspect.value) return
+	return { height: value * (startBounds.height / startBounds.width) }
+}
+
+const sizeScrub = useInteractionScrub(['width', 'height'], ensureFixedWidth, {
+	getLinkedValues: deriveLockedHeight,
 })
 
 let rotateStartAngle = null

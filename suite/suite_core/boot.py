@@ -5,8 +5,8 @@ hooks (after_install, after_migrate, after_app_install, extend_bootinfo, ...).
 A Frappe app can register only ONE handler per lifecycle hook key, so the
 per-app handlers are gathered here and invoked in a deterministic order. Each
 former app's function is preserved and called; if any single handler raises,
-the error is logged and the remaining handlers still run so one app cannot
-block another's setup.
+a labeled error is logged and the exception propagates, so install/migrate
+fails loudly instead of half-completing.
 
 Imports are performed lazily inside each dispatcher so that importing
 ``suite.hooks`` never eagerly pulls in every module's heavy dependencies.
@@ -16,7 +16,7 @@ import frappe
 
 
 def _run(label, func, *args, **kwargs):
-    """Invoke a single handler, isolating failures so siblings still run."""
+    """Log a labeled error for the failing handler, then let it propagate."""
     try:
         return func(*args, **kwargs)
     except Exception:

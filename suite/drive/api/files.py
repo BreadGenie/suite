@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename, send_file
 from werkzeug.wrappers import Response
 from werkzeug.wsgi import wrap_file
 
-from suite.drive.api.storage import validate_quota
+from suite.drive.api.storage import acquire_owner_storage_lock, validate_quota
 from suite.drive.utils import (
     ATTACHMENT_CONTENT_DOCTYPE,
     STATUS_ACTIVE,
@@ -95,6 +95,7 @@ def upload_file(
 
     # Validate that file size is matching
     file_size = temp_path.stat().st_size
+    acquire_owner_storage_lock(frappe.session.user)
     validate_quota(incoming_size=file_size)
 
     mime_type = mimemapper.get_mime_type(str(temp_path), native_first=False)
@@ -321,6 +322,7 @@ def _serve_resumable(manager, key, download_name, mime_type=None):
 
     xaccel_prefix = frappe.conf.get("drive_xaccel_prefix")
     if xaccel_prefix:
+        key = str(manager.get_local_path(key).relative_to(manager.site_folder.resolve()))
         response = Response(status=200)
         # header values must be latin-1 and nginx expects an encoded URI
         response.headers["X-Accel-Redirect"] = f"{xaccel_prefix.rstrip('/')}/{quote(key)}"
@@ -330,7 +332,7 @@ def _serve_resumable(manager, key, download_name, mime_type=None):
         return response
 
     response = send_file(
-        str(manager.site_folder / key),
+        str(manager.get_local_path(key)),
         mimetype=mime_type or "application/octet-stream",
         as_attachment=True,
         download_name=download_name,
@@ -405,7 +407,7 @@ def stream_file_content(entity_name: str):
     if manager.s3_enabled:
         data = manager.get_file(entity, f"bytes={byte1}-{byte1 + length - 1}")
     else:
-        with manager.open_file(entity.file_url) as f:
+        with manager.open_file(storage_key(entity.file_url)) as f:
             f.seek(byte1)
             data = f.read(length)
 
@@ -671,10 +673,14 @@ def remove_or_restore(entity_names: list[str] | str):
     if not isinstance(entity_names, list):
         frappe.throw(f"Expected list but got {type(entity_names)}", ValueError)
     manager = FileManager()
+    locked_owners = set()
 
     def depth_zero_toggle_status(doc):
         if not user_has_permission(doc, "write"):
             raise frappe.PermissionError("You do not have permission to remove this file")
+        if doc.owner not in locked_owners:
+            acquire_owner_storage_lock(doc.owner)
+            locked_owners.add(doc.owner)
         if doc.status == STATUS_ACTIVE:
             flag = STATUS_TRASHED
             manager.move_to_trash(doc)
@@ -885,7 +891,17 @@ def redirect_to_original(file_id: str):
 
 
 @frappe.whitelist()
-def track_visit(entity_name: str):
+def track_visit(
+    entity_name: str | None = None,
+    doctype: str | None = None,
+    docname: str | None = None,
+):
+    if not entity_name and doctype and docname:
+        entity_name = frappe.db.get_value(
+            "File", {"content_doctype": doctype, "content_docname": docname}, "name"
+        )
+    if not entity_name:
+        frappe.throw("A Drive file or content document is required", ValueError)
     entity = frappe.get_doc("File", entity_name)
     mark_as_viewed(entity)
     frappe.db.set_value(

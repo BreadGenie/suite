@@ -15,7 +15,6 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.push_notification import PushNotification
 from frappe.utils import (
-    add_to_date,
     cint,
     escape_html,
     random_string,
@@ -24,7 +23,7 @@ from frappe.utils import (
 
 from suite.mail.doctype.mail_queue.mail_queue import MailQueue
 from suite.mail.doctype.sieve_script.sieve_script import SCREENER_MAILBOX_NAME
-from suite.mail.doctype.user_account.user_account import get_user_for_jmap_account, get_user_jmap_accounts
+from suite.mail.doctype.user_account.user_account import get_user_for_jmap_account
 from suite.mail.jmap import get_email_service, get_jmap_connection, get_thread_service
 from suite.mail.jmap.services.mail.email import EmailService
 from suite.mail.jmap.services.mail.mailbox import MailboxService
@@ -38,7 +37,7 @@ from suite.mail.utils.email_parser import EmailParser
 from suite.mail.utils.logger import get_push_logger
 from suite.mail.utils.user import get_account_emails, get_sync_state, update_sync_state
 from suite.utils import clean_text, convert_html_to_text, enqueue_job, parse_filters, user_context
-from suite.utils.dt import convert_to_utc, get_utc_now
+from suite.utils.dt import get_utc_now
 from suite.utils.lock import acquire_lock, release_lock
 
 PREVIEW_MAX_LENGTH = 256
@@ -357,10 +356,10 @@ class MailMessage(Document):
         return self._update_or_submit_draft(save_as_draft=True)
 
     @frappe.whitelist()
-    def submit(self) -> MailQueue:
-        """Submit the draft Mail Message."""
+    def submit(self, send_at: str | None = None) -> MailQueue:
+        """Submit the draft Mail Message. `send_at` (system-time string) schedules delivery via FUTURERELEASE."""
 
-        return self._update_or_submit_draft(save_as_draft=False)
+        return self._update_or_submit_draft(save_as_draft=False, send_at=send_at)
 
     @frappe.whitelist()
     def move_to_mailbox(self, mailbox_id: str) -> None:
@@ -583,7 +582,7 @@ class MailMessage(Document):
         ]:
             self.__dict__.pop(property, None)
 
-    def _update_or_submit_draft(self, save_as_draft: bool = True) -> MailQueue:
+    def _update_or_submit_draft(self, save_as_draft: bool = True, send_at: str | None = None) -> MailQueue:
         """Update or submit the draft Mail Message."""
 
         if not self.draft:
@@ -622,6 +621,7 @@ class MailMessage(Document):
             id=self.id,
             in_reply_to=self.in_reply_to,
             save_as_draft=save_as_draft,
+            send_at=send_at,
             delivery_mode="Immediate",
         )
 
@@ -1364,6 +1364,10 @@ def fetch_changes(user: str, account: str, email_state: str | None = None, ctx: 
 
         result = email_service.changes(current_state)
 
+        if not result:
+            logger.warning("empty-changes-response")
+            return
+
         if created_ids := result["created"]:
             logger.info("new-messages-created", count=len(created_ids))
 
@@ -1513,60 +1517,3 @@ def enqueue_fetch_changes(
             queue="short",
             enqueue_after_commit=True,
         )
-
-
-def schedule_fetch_changes() -> None:
-    """Schedule fetch_changes for every (user, account) whose email state hasn't been
-    updated in the last 3 hours.
-
-    JMAP Account is now shared per account ID, so the set of accounts to sync is
-    derived from each JMAP-configured user's accounts, and the last-update timestamp is
-    read from that user's per-account data store."""
-
-    USER = frappe.qb.DocType("User")
-    USER_SETTINGS = frappe.qb.DocType("User Settings")
-
-    threshold = add_to_date(get_utc_now(), hours=-3)
-
-    users = (
-        frappe.qb.from_(USER_SETTINGS)
-        .join(USER)
-        .on(USER.name == USER_SETTINGS.user)
-        .select(USER_SETTINGS.user)
-        .where(
-            (USER.enabled == 1)
-            & (USER_SETTINGS.username != "")
-            & (USER_SETTINGS.username.isnotnull())
-            & (USER_SETTINGS.skip_schedule_fetch_changes == 0)
-        )
-    ).run(pluck="user")
-
-    if not users:
-        return
-
-    selected_user_accounts = []
-    for user in users:
-        try:
-            accounts = get_user_jmap_accounts(user, raise_exception=True)
-        except Exception:
-            continue
-
-        for account in accounts:
-            store = get_data_store(account)
-            last_update = store.get(Entity.STATE, "email_state_last_update")
-            # convert_to_utc reads new aware ``...Z`` stamps directly and legacy naive
-            # system-time stamps as system time, so both compare correctly.
-            if not last_update or convert_to_utc(last_update) < threshold:
-                selected_user_accounts.append((user, account))
-
-    if not selected_user_accounts:
-        return
-
-    req_id = random_string(10)
-    logger = get_push_logger({"req_id": req_id})
-
-    logger.info("scheduling-fetch-changes", account_count=len(selected_user_accounts))
-
-    for idx, (user, account) in enumerate(selected_user_accounts, start=1):
-        ctx = {"req_id": f"{req_id}-{idx}", "account": account}
-        enqueue_fetch_changes(user, account, ctx=ctx)

@@ -16,6 +16,7 @@ class EmailSubmissionService(CoreService):
         "urn:ietf:params:jmap:mail",
         "urn:ietf:params:jmap:submission",
     ]
+    SUBMISSION_PROPERTIES: ClassVar[list[str]] = ["id", "emailId", "undoStatus", "sendAt"]
 
     def __post_init__(self) -> None:
         """Post-initialization to check if the JMAP server supports the Mail and EmailSubmission capability and raise an error if not."""
@@ -33,6 +34,126 @@ class EmailSubmissionService(CoreService):
         """Returns the primary account ID for the logged-in user."""
 
         return self.connection.primary_accounts["urn:ietf:params:jmap:submission"]
+
+    @property
+    def max_delayed_send(self) -> int:
+        """Returns the maximum delay in seconds allowed for a FUTURERELEASE (RFC 4865) submission, defaulting to 30 days."""
+
+        account = self.connection.accounts.get(self.account) or {}
+        submission_caps = (account.get("accountCapabilities") or {}).get(
+            "urn:ietf:params:jmap:submission"
+        ) or {}
+
+        return int(submission_caps.get("maxDelayedSend") or 2_592_000)
+
+    @staticmethod
+    def _build_envelope(
+        from_email: str,
+        rcpt_emails: set[str] | list[str],
+        envelope_id: str,
+        priority: int,
+        hold_until: int | None = None,
+    ) -> dict:
+        """Builds the SMTP envelope for a submission; `hold_until` (epoch seconds) adds the RFC 4865 HOLDUNTIL parameter so the server holds delivery."""
+
+        parameters = {
+            "RET": "FULL",
+            "ENVID": envelope_id,
+            "MT-PRIORITY": str(priority),
+        }
+
+        if hold_until:
+            parameters["HOLDUNTIL"] = str(hold_until)
+
+        return {
+            "mailFrom": {
+                "email": from_email,
+                "parameters": parameters,
+            },
+            "rcptTo": [
+                {
+                    "email": rcpt,
+                    "parameters": {
+                        "NOTIFY": "DELAY,FAILURE",
+                        "ORCPT": f"rfc822;{rcpt}",
+                    },
+                }
+                for rcpt in sorted(set(rcpt_emails))
+            ],
+        }
+
+    def get(self, ids: list[str], properties: list[str] | None = None) -> list[dict]:
+        """Public method to get email submissions by ids, handling batching if the number of ids exceeds the server's maximum allowed in a single 'get' call."""
+
+        results = []
+        for batch in self.create_batches(ids, self.max_objects_in_get):
+            response = self._get(batch, properties=properties or self.SUBMISSION_PROPERTIES)
+
+            if method_responses := response.get("methodResponses"):
+                results.extend(method_responses[0][1].get("list", []))
+
+        return results
+
+    def cancel(self, submission_id: str) -> None:
+        """Cancels a held (FUTURERELEASE) submission by setting its undoStatus to 'canceled' — the only mutable property per RFC 8621 §7.5."""
+
+        from suite.mail.jmap import get_jmap_set_error_message
+
+        response = self._update({submission_id: {"undoStatus": "canceled"}})
+
+        result = {}
+        if method_responses := response.get("methodResponses"):
+            result = method_responses[0][1]
+
+        if submission_id not in (result.get("updated") or {}):
+            raise ValueError(get_jmap_set_error_message(result, "notUpdated", submission_id))
+
+    def resubmit(
+        self,
+        email_id: str,
+        from_email: str,
+        rcpt_emails: list[str],
+        envelope_id: str,
+        priority: int = 0,
+        hold_until: int | None = None,
+    ) -> dict:
+        """Creates a new submission for an already-stored email (reschedule / send-now: the old
+        submission must be canceled first, since undoStatus is the only mutable property).
+
+        Returns the created object; its echoed undoStatus is unreliable (Stalwart echoes "final"
+        for held submissions) — use `get` for the real state.
+        """
+
+        from suite.mail.jmap import get_jmap_set_error_message
+
+        identity_service = IdentityService(self.account, self.connection)
+        identity_id = identity_service.get_identity_id_by_email(from_email, raise_exception=True)
+
+        submit_ref = f"submit-{envelope_id}"
+        # Not self._create — this service overrides it as the batch-compose hook used by
+        # EmailService.create; go straight to the generic 'set' primitive instead.
+        response = self._exec(
+            "set",
+            create={
+                submit_ref: {
+                    "identityId": identity_id,
+                    "emailId": email_id,
+                    "envelope": self._build_envelope(
+                        from_email, rcpt_emails, envelope_id, priority, hold_until
+                    ),
+                }
+            },
+        )
+
+        result = {}
+        if method_responses := response.get("methodResponses"):
+            result = method_responses[0][1]
+
+        created = (result.get("created") or {}).get(submit_ref)
+        if not created:
+            raise ValueError(get_jmap_set_error_message(result, "notCreated", submit_ref))
+
+        return created
 
     def _create(
         self, emails: list[EmailCreateModel], draft_refs: dict[str, str], call_id_gen: CallIdGenerator
@@ -75,26 +196,13 @@ class EmailSubmissionService(CoreService):
             create_payload[submit_ref] = {
                 "identityId": identity_id,
                 "emailId": f"#{draft_ref}",
-                "envelope": {
-                    "mailFrom": {
-                        "email": email.from_email,
-                        "parameters": {
-                            "RET": "FULL",
-                            "ENVID": email.creation_id,
-                            "MT-PRIORITY": str(email.priority),
-                        },
-                    },
-                    "rcptTo": [
-                        {
-                            "email": rcpt,
-                            "parameters": {
-                                "NOTIFY": "DELAY,FAILURE",
-                                "ORCPT": f"rfc822;{rcpt}",
-                            },
-                        }
-                        for rcpt in sorted({r.email for r in email.recipients})
-                    ],
-                },
+                "envelope": self._build_envelope(
+                    from_email=email.from_email,
+                    rcpt_emails={r.email for r in email.recipients},
+                    envelope_id=email.creation_id,
+                    priority=email.priority,
+                    hold_until=email.hold_until,
+                ),
             }
 
             # -----------------------------

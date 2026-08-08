@@ -276,10 +276,16 @@ class CalendarEventService(CalendarsService):
 
             if method_responses := response.get("methodResponses"):
                 result["parsed"].update(method_responses[0][1].get("parsed", {}))
-                if not_found := method_responses[0][1].get("notFound", {}):
-                    result["notFound"].update(not_found)
-                if not_parsable := method_responses[0][1].get("notParsable", {}):
-                    result["notParsable"].update(not_parsable)
+                # The server reports notFound/notParsable as blob-id arrays; keep the
+                # dict shape callers read (.keys()) by keying the ids.
+                if not_found := method_responses[0][1].get("notFound"):
+                    result["notFound"].update(
+                        dict.fromkeys(not_found) if isinstance(not_found, list) else not_found
+                    )
+                if not_parsable := method_responses[0][1].get("notParsable"):
+                    result["notParsable"].update(
+                        dict.fromkeys(not_parsable) if isinstance(not_parsable, list) else not_parsable
+                    )
 
         return result
 

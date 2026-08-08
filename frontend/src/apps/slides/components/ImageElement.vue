@@ -1,11 +1,13 @@
 <template>
-	<div>
-		<img
-			v-if="imageSrc"
-			class="object-cover"
-			:style="imageStyle"
-			:src="getAttachmentUrl(imageSrc)"
-		/>
+	<div class="h-full" @dblclick="handleDoubleClick">
+		<div :style="maskStyle">
+			<img
+				v-if="imageSrc"
+				:class="imageClasses"
+				:style="imageStyle"
+				:src="getAttachmentUrl(imageSrc)"
+			/>
+		</div>
 		<div
 			v-if="showReplaceImageButton"
 			class="absolute left-0 top-0 size-full overflow-hidden bg-gray-900 opacity-40 transition-opacity duration-500 ease-in-out"
@@ -31,14 +33,16 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, inject, ref } from 'vue'
 
 import { FileUploader } from 'frappe-ui'
 
 import { presentationId } from '@/apps/slides/stores/presentation'
-import { activeElement } from '@/apps/slides/stores/element'
+import { activeElement, activeElementIds } from '@/apps/slides/stores/element'
+import { startCrop } from '@/apps/slides/stores/imageCrop'
 import { allowedImageFileTypes, defaultBorderColor } from '@/apps/slides/utils/constants'
 import { getAttachmentUrl } from '@/apps/slides/utils/mediaUploads'
+import { getCroppedImageBox } from '@/apps/slides/utils/cropGeometry'
 import { useBoxShadow } from '@/apps/slides/composables/useShadow'
 
 const props = defineProps({
@@ -56,6 +60,17 @@ const element = defineModel('element', {
 	type: Object,
 	default: null,
 })
+
+const inReadonlyMode = inject('inReadonlyMode', ref(false))
+const inSlideShowMode = inject('inSlideShowMode', ref(false))
+
+const handleDoubleClick = (e) => {
+	if (props.mode != 'editor' || inReadonlyMode.value || inSlideShowMode.value) return
+
+	e.stopPropagation()
+	activeElementIds.value = [element.value.id]
+	startCrop(element.value)
+}
 
 const replaceButtonClasses =
 	'absolute inset-[calc(50%-16px)] flex size-8 cursor-pointer items-center justify-center rounded-lg bg-white'
@@ -85,24 +100,43 @@ const isGifImage = computed(() => {
 
 const boxShadow = useBoxShadow(element)
 
+// the mask carries the cosmetics and clips the image
+const maskStyle = computed(() => ({
+	position: 'relative',
+	overflow: 'hidden',
+	width: '100%',
+	height: element.value.height ? '100%' : 'auto',
+	opacity: (element.value.opacity ?? 100) / 100,
+	borderRadius: `${element.value.borderRadius}px`,
+	borderStyle: element.value.borderStyle || 'none',
+	borderColor: element.value.borderColor || defaultBorderColor,
+	borderWidth: `${element.value.borderWidth}px`,
+	boxShadow: boxShadow.value,
+	transform: `scale(${element.value.invertX || 1}, ${element.value.invertY || 1})`,
+	...props.transitionStyles,
+}))
+
+const imageClasses = computed(() => ({
+	'object-cover': !element.value.crop,
+}))
+
 const imageStyle = computed(() => {
-	const styles = {
-		width: '100%',
-		opacity: (element.value.opacity ?? 100) / 100,
-		borderRadius: `${element.value.borderRadius}px`,
-		borderStyle: element.value.borderStyle || 'none',
-		borderColor: element.value.borderColor || defaultBorderColor,
-		borderWidth: `${element.value.borderWidth}px`,
-		boxShadow: boxShadow.value,
-		transform: `scale(${element.value.invertX || 1}, ${element.value.invertY || 1})`,
-		userSelect: 'none',
+	// no stored height: legacy path, the image sizes the element
+	if (!element.value.height) {
+		return { width: '100%', userSelect: 'none' }
 	}
-	if (element.value.useTemplateDimensions) {
-		styles.height = `${element.value.height}px`
-	}
+
+	// percentages so the image tracks the frame through live gestures
+	const box = getCroppedImageBox(element.value.crop, { width: 100, height: 100 })
 	return {
-		...styles,
-		...props.transitionStyles,
+		position: 'absolute',
+		left: `${box.left}%`,
+		top: `${box.top}%`,
+		width: `${box.width}%`,
+		height: `${box.height}%`,
+		// preflight clamps img to max-width 100%
+		maxWidth: 'none',
+		userSelect: 'none',
 	}
 })
 

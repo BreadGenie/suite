@@ -3,11 +3,12 @@
 		ref="container"
 		class="flex-1 min-h-0"
 		data-testid="meeting-layout"
-		:class="
+		:class="[
 			mode === 'sidebar'
 				? 'relative flex flex-col md:flex-row overflow-hidden rounded-lg'
-				: 'relative h-full rounded-lg overflow-hidden'
-		"
+				: 'relative h-full rounded-lg overflow-hidden',
+			!interactive ? 'pointer-events-none' : '',
+		]"
 	>
 		<!-- ── Pinned area (empty placeholder; the pinned tile will be rendered here) ─────────────────── -->
 		<div
@@ -48,6 +49,7 @@
 		>
 			<!-- Local camera tile -->
 			<ParticipantTile
+				v-if="showLocalTile"
 				:key="`local-${localParticipant.user_id}`"
 				:participant="localParticipant"
 				:isLocal="true"
@@ -82,9 +84,9 @@
 				:count="displayParticipants.extra"
 				:tooltip="hiddenParticipantsTooltip"
 				:participants="displayParticipants.hidden"
-				:size="mode === 'sidebar' ? 'small' : 'medium'"
+				:size="mode === 'sidebar' ? 'xl' : '2xl'"
 				:style="tileStyle"
-				@click="emit('open-people-panel')"
+				@click="interactive && emit('open-people-panel')"
 			/>
 		</TransitionGroup>
 
@@ -115,15 +117,25 @@ const emit = defineEmits<{
 	"open-people-panel": [];
 }>();
 
+const props = withDefaults(defineProps<{
+	showLocalTile?: boolean;
+	interactive?: boolean;
+}>(), {
+	showLocalTile: true,
+	interactive: true,
+});
+const showLocalTile = computed(() => props.showLocalTile);
+const interactive = computed(() => props.interactive);
+
 const meetingCtx = useMeetingContext();
 const setLocalVideoRef = inject<(el: unknown) => void>("setLocalVideoRef");
 const setRemoteVideoRef =
 	inject<(participantId: string, el: HTMLVideoElement | null) => void>(
 		"setRemoteVideoRef",
 	);
-const setScreenShareVideoRef = inject<(el: HTMLVideoElement | null) => void>(
-	"setScreenShareVideoRef",
-);
+const setScreenShareVideoRef = inject<
+	(consumerId: string, el: HTMLVideoElement | null) => void
+>("setScreenShareVideoRef");
 const getParticipantName =
 	inject<(participantId: string) => string>("getParticipantName") ||
 	(() => "Unknown");
@@ -201,13 +213,18 @@ const { screenShareTiles: allScreenShareTiles } = useScreenShareTiles({
 
 const getScreenShareTileBindings = (shareTile: {
 	pinId: string;
+	consumerId: string;
 	participant:
 		| Record<string, unknown>
 		| { user_id: string; user_name: string; avatar: string };
 }) => {
 	const isPinned = isPinnedScreenShare(shareTile.pinId);
 	const wrappedVideoRef = setScreenShareVideoRef
-		? (el: unknown) => setScreenShareVideoRef(el as HTMLVideoElement | null)
+		? (el: unknown) =>
+			setScreenShareVideoRef(
+				shareTile.consumerId,
+				el as HTMLVideoElement | null,
+			)
 		: undefined;
 
 	return {
@@ -229,6 +246,7 @@ const getScreenShareTileBindings = (shareTile: {
 		tileBackgroundClass: isPinned ? "bg-black" : undefined,
 		showAvatar: !isPinned,
 		showReaction: !isPinned,
+		showPinButton: interactive.value,
 		showRaisedHand: !isPinned,
 		showAudioState: !isPinned,
 		showNetworkState: !isPinned,
@@ -252,6 +270,7 @@ const getParticipantTileBindings = (
 		isActiveSpeaker: activeSpeakerIds.value.includes(participant.user_id),
 		videoRef: getRemoteVideoRef(participant.user_id),
 		showReaction: pinnedTiles.value.length === 0,
+		showPinButton: interactive.value,
 		style: isPinned
 			? pinnedTileStyles.value[`participant-${participant.user_id}`]
 			: participant.isVisible
@@ -322,6 +341,7 @@ const {
 		),
 	},
 	extraTileCount,
+	{ localTileCount: props.showLocalTile ? 1 : 0 },
 );
 
 const tileStyle = computed(() => {

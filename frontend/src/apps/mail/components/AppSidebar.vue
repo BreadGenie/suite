@@ -14,6 +14,7 @@
 			v-if="!isMobile || isSidebarOpen"
 			id="sidebar"
 			v-model:collapsed="isSidebarCollapsed"
+			class="border-r border-outline-gray-1"
 			:class="{ 'fixed left-0 top-0 z-10 w-60 !bg-surface-base': isMobile }"
 			:disable-collapse="isMobile"
 		>
@@ -148,6 +149,7 @@ import type { MailboxData } from '@/apps/mail/types'
 
 import ArrowLeft from '~icons/lucide/arrow-left'
 import BookUser from '~icons/lucide/book-user'
+import CalendarClock from '~icons/lucide/calendar-clock'
 import Clock from '~icons/lucide/clock'
 import ContactRound from '~icons/lucide/contact-round'
 import Crown from '~icons/lucide/crown'
@@ -543,7 +545,15 @@ const sidebarItems = computed(() => {
 		to: { name: 'mail-mailbox', params: { accountId: store.accountId, mailbox: 'starred' } },
 		activeFor: ['starred'],
 	}
-	const defaultItems = [...defaultMailboxes, starredItem]
+	// Synthetic like Starred, but backed by the Mail Queue's held (FUTURERELEASE)
+	// submissions rather than a mailbox, so it opens a dedicated page.
+	const scheduledItem = {
+		label: __('Scheduled'),
+		icon: CalendarClock,
+		to: { name: 'mail-scheduled', params: { accountId: store.accountId } },
+		activeFor: ['mail-scheduled'],
+	}
+	const defaultItems = [...defaultMailboxes, starredItem, scheduledItem]
 
 	const secondaryItems = mailboxItems.value
 		.filter((item) => {

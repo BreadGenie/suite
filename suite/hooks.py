@@ -140,6 +140,7 @@ permission_query_conditions = {
     "Sheet Snapshot": "suite.sheets.permissions.sheet_snapshot_query",
     # meet
     "Meet Room": "suite.meet.doctype.meet_room.meet_room.get_permission_query_conditions",
+    "Meet Recording": "suite.meet.doctype.meet_recording.meet_recording.get_permission_query_conditions",
     # mail
     "JMAP Account": "suite.mail.doctype.jmap_account.jmap_account.get_permission_query_condition",
     "Mail Sync History": "suite.mail.doctype.mail_sync_history.mail_sync_history.get_permission_query_condition",
@@ -168,6 +169,7 @@ has_permission = {
     "Sheet Snapshot": "suite.sheets.permissions.sheet_snapshot_has_permission",
     # meet
     "Meet Room": "suite.meet.doctype.meet_room.meet_room.has_permission",
+    "Meet Recording": "suite.meet.doctype.meet_recording.meet_recording.has_permission",
     # mail
     "JMAP Account": "suite.mail.doctype.jmap_account.jmap_account.has_permission",
     "Address Book": "suite.mail.doctype.address_book.address_book.has_permission",
@@ -220,6 +222,9 @@ override_whitelisted_methods = {
 # Document Events (deep-merged; per-doctype/per-event handler lists combined)
 # ============================================================================
 doc_events = {
+    "File": {
+        "on_update": "suite.meet.recording.ingest.delete_recording_metadata_for_removed_artifact",
+    },
     "User Group": {
         "on_update": "suite.drive.utils.clear_user_group_cache",
         "on_trash": "suite.drive.utils.clear_user_group_cache",
@@ -262,6 +267,15 @@ doc_events = {
     },
 }
 
+user_invitation = {
+    "allowed_roles": {
+        "System Manager": ["Suite User"],
+    },
+}
+
+# Suite's onboarding replaces the built-in desk setup wizard
+setup_wizard_url = "/suite/setup"
+
 # ============================================================================
 # Scheduled Tasks (per-frequency lists combined; cron keys de-duplicated)
 # ============================================================================
@@ -291,15 +305,16 @@ scheduler_events = {
     ],
     "hourly_long": [
         # mail
-        "suite.mail.doctype.mail_message.mail_message.schedule_fetch_changes",
+        "suite.mail.doctype.mail_queue.mail_queue.reconcile_scheduled_emails",
     ],
     "cron": {
+        "* * * * *": ["suite.meet.api.recording.reconcile_pending_recordings"],
         "*/5 * * * *": [
             # mail
             "suite.mail.doctype.server_job.server_job.retry_failed_jobs",
+            "suite.mail.doctype.mail_queue.mail_queue.enqueue_process_pending_emails",
             "suite.mail.doctype.server_deployment.server_deployment.retry_failed_deployments",
             "suite.mail.doctype.server_ansible_play.server_ansible_play.retry_failed_ansible_plays",
-            "suite.mail.doctype.mail_queue.mail_queue.enqueue_process_pending_emails",
         ],
     },
 }

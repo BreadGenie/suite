@@ -36,10 +36,10 @@ class TestStorageHelpers(unittest.TestCase):
             entity = frappe._dict(
                 name="w1a2b3c4d5",
                 file_name="Renamed document",
-                file_url="root/Original document",
+                file_url="private/files/root/Original document",
                 mime_type="frappe_doc",
                 content_doctype=WRITER_CONTENT_DOCTYPE,
-                parent_path=Path("root"),
+                parent_path=Path("private/files/root"),
             )
             embed = manager.site_folder / entity.file_url / ".embeds" / "image.png"
             embed.parent.mkdir(parents=True)
@@ -49,7 +49,9 @@ class TestStorageHelpers(unittest.TestCase):
             renamed_embed = manager.site_folder / entity.file_url / ".embeds" / "image.png"
             self.assertEqual(renamed_embed.read_bytes(), b"embed")
 
-            with patch("suite.drive.utils.files.get_root_folder", return_value={"file_url": "root"}):
+            with patch(
+                "suite.drive.utils.files.get_root_folder", return_value={"file_url": "private/files/root"}
+            ):
                 manager.move_to_trash(entity)
                 self.assertFalse(renamed_embed.exists())
                 manager.restore(entity)
@@ -71,8 +73,68 @@ class TestStorageHelpers(unittest.TestCase):
         for url in ["/private/files/x", "/files/y", "//z", "https://ext/u"]:
             self.assertFalse(storage_key(url).startswith("/"))
 
+    def test_local_path_stays_in_files_roots(self):
+        with TemporaryDirectory() as site_folder:
+            manager = object.__new__(FileManager)
+            manager.site_folder = Path(site_folder)
+            (manager.site_folder / "private" / "files").mkdir(parents=True)
+            path = manager.get_local_path("/private/files/folder/../file.txt")
+
+            self.assertEqual(path, (manager.site_folder / "private" / "files" / "file.txt").resolve())
+
+            with self.assertRaises(frappe.ValidationError):
+                manager.get_local_path("/private/files/../../invalid.txt")
+
     def test_get_s3_key_strips_disk_prefix(self):
         self.assertEqual(get_s3_key("/private/files/a/b.png"), "a/b.png")
         self.assertEqual(get_s3_key("/files/a/b.png"), "a/b.png")
         # Already a bare key: unchanged.
         self.assertEqual(get_s3_key("a/b.png"), "a/b.png")
+
+    def test_s3_root_paths_strip_disk_prefixes(self):
+        manager = object.__new__(FileManager)
+        manager.s3_enabled = True
+        manager.flat = True
+        manager.settings = frappe._dict(thumbnail_prefix=".thumbnails")
+
+        for root_url in [
+            "/private/files/prefix",
+            "/files/prefix",
+            get_s3_url("prefix"),
+            "prefix",
+        ]:
+            with self.subTest(root_url=root_url):
+                with patch("suite.drive.utils.files.get_root_folder", return_value={"file_url": root_url}):
+                    self.assertEqual(
+                        manager.get_disk_path(frappe._dict(name="file-id")), Path("prefix/file-id")
+                    )
+                    self.assertEqual(
+                        manager.get_thumbnail_path("file-id"),
+                        Path("prefix/.thumbnails/file-id.thumbnail"),
+                    )
+                    self.assertEqual(
+                        manager._FileManager__get_trash_path(frappe._dict(name="file-id")),
+                        Path("prefix/.trash/file-id"),
+                    )
+
+    def test_local_root_path_keeps_disk_prefix(self):
+        manager = object.__new__(FileManager)
+        manager.s3_enabled = False
+
+        with patch(
+            "suite.drive.utils.files.get_root_folder",
+            return_value={"file_url": "/private/files/prefix"},
+        ):
+            self.assertEqual(manager.get_root_storage_key(), "private/files/prefix")
+
+    def test_open_local_file_uses_site_relative_storage_key(self):
+        with TemporaryDirectory() as site_folder:
+            manager = object.__new__(FileManager)
+            manager.s3_enabled = False
+            manager.site_folder = Path(site_folder)
+            file_path = manager.site_folder / "private/files/video.mp4"
+            file_path.parent.mkdir(parents=True)
+            file_path.write_bytes(b"video")
+
+            with manager.open_file("/private/files/video.mp4") as file:
+                self.assertEqual(file.read(), b"video")

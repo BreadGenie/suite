@@ -45,10 +45,11 @@
 						<template v-if="column.key === 'user'">
 							<div class="flex items-center space-x-2">
 								<Avatar :image="row.user_image" :label="row.full_name" size="lg" />
-								<div class="text-sm">
-									<p class="font-medium">{{ row.full_name }}</p>
-									<p class="text-ink-gray-5 mt-0.5">{{ row.name }}</p>
-								</div>
+								<!-- A member row is a contact row: the User's docname is the address. -->
+								<ContactOption
+									:contact="{ email: row.name, display_name: row.full_name }"
+									class="text-sm"
+								/>
 							</div>
 						</template>
 						<template v-else-if="column.key === 'role'">
@@ -126,6 +127,7 @@ import {
 
 import { raiseToast } from '@/apps/mail/utils'
 import { fromNow } from '@/apps/mail/utils/datetime'
+import ContactOption from '@/apps/mail/components/Controls/ContactOption.vue'
 import DashboardListSkeleton from '@/apps/mail/components/DashboardListSkeleton.vue'
 
 type MemberRow = {

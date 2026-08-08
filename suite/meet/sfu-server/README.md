@@ -89,6 +89,10 @@ Set the required values in `.env`:
 | `SSL_EMAIL` | Email for Let's Encrypt notifications | `admin@example.com` |
 | `METRICS_TOKEN` | Optional bearer token enabling the Prometheus `/metrics` endpoint | `openssl rand -hex 32` |
 | `SENTRY_DSN` | Optional Sentry DSN for unexpected SFU failures | Sentry project DSN |
+| `RECORDER_SECRET` | Dedicated Frappe-to-recorder control secret; do not reuse `JWT_SECRET` | `openssl rand -base64 32` |
+| `RECORDER_METRICS_TOKEN` | Dedicated recorder metrics bearer token | `openssl rand -hex 32` |
+| `RECORDER_SITE` | Frappe site authorized to issue recorder commands | `site.example.com` |
+| `RECORDER_SITE_ORIGIN` | Exact HTTPS origin for that site | `https://site.example.com` |
 
 Then run setup:
 
@@ -96,7 +100,10 @@ Then run setup:
 ./deploy.sh setup
 ```
 
-This will pull the SFU image, provision an SSL certificate, and start everything.
+This pulls the SFU and recorder images, provisions an SSL certificate, and starts
+the stack. Recording grant consumption and recorder jobs/artifacts are stored in
+the persistent `sfu-grants` and `recorder-data` volumes. Back up both volumes and
+size `recorder-data` for in-progress segments plus artifacts awaiting upload.
 
 ### Frappe Configuration
 
@@ -105,9 +112,16 @@ Add to your Frappe site's `site_config.json`:
 ```json
 {
   "sfu_server_url": "https://sfu.example.com",
-  "sfu_secret": "<same JWT_SECRET from .env>"
+  "sfu_secret": "<same JWT_SECRET from .env>",
+  "recorder_server_url": "http://127.0.0.1:3010",
+  "recorder_secret": "<same RECORDER_SECRET from .env>"
 }
 ```
+
+The recorder does not mint or recover Recording Grants. Frappe remains required
+to issue every proof-bound grant; after a recorder restart, active jobs fail
+closed until the control plane explicitly coordinates recovery with a fresh
+grant. Only already-stopping local captures are finalized from persistent data.
 
 ### Management Commands
 
@@ -115,7 +129,7 @@ Add to your Frappe site's `site_config.json`:
 ./deploy.sh start      # Start all services
 ./deploy.sh stop       # Stop all services
 ./deploy.sh restart    # Restart all services
-./deploy.sh update     # Pull latest image and restart SFU
+./deploy.sh update     # Pull latest images and recreate SFU and recorder
 ./deploy.sh logs       # Tail logs (use: ./deploy.sh logs sfu)
 ./deploy.sh status     # Show health and container status
 ./deploy.sh ssl-renew  # Force SSL certificate renewal
@@ -123,7 +137,7 @@ Add to your Frappe site's `site_config.json`:
 
 ### Updating
 
-When new changes are pushed to `develop`, the GitHub Actions workflow builds and pushes a new Docker image. To update the SFU on your server:
+When new changes are pushed to `develop`, GitHub Actions builds and pushes the SFU and recorder images. To update both services on your server:
 
 ```bash
 cd /opt/meet-sfu

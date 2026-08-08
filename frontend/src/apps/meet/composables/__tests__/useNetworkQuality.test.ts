@@ -23,13 +23,15 @@ describe("useNetworkQuality", () => {
 		});
 
 		const observed = ref("unknown");
+		const observedDownlink = ref("unknown");
 		const root = document.createElement("div");
 
 		const TestComponent = defineComponent({
 			setup() {
-				const { networkQuality } = useNetworkQuality();
+				const { networkQuality, downlinkQuality } = useNetworkQuality();
 				watchEffect(() => {
 					observed.value = networkQuality.value;
+					observedDownlink.value = downlinkQuality.value;
 				});
 				return () => null;
 			},
@@ -39,8 +41,41 @@ describe("useNetworkQuality", () => {
 		app.provide("sfuManager", sfuManager);
 		app.mount(root);
 
-		return { observed, getNetworkStats, unmount: () => app.unmount() };
+		return {
+			observed,
+			observedDownlink,
+			getNetworkStats,
+			unmount: () => app.unmount(),
+		};
 	};
+
+	it("requires consecutive degraded downlink samples and healthy samples to recover", async () => {
+		const stats = {
+			rtt: 50,
+			packetLoss: 0,
+			availableOutgoingBitrate: 900_000,
+			downlinkPacketLoss: 10,
+			hasDownlinkSample: true,
+			timestamp: Date.now(),
+			isValid: true,
+		};
+		const { observedDownlink, unmount } = mountWithStats(stats);
+
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(observedDownlink.value).toBe("good");
+
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(observedDownlink.value).toBe("poor");
+
+		stats.downlinkPacketLoss = 0;
+		await vi.advanceTimersByTimeAsync(6000);
+		expect(observedDownlink.value).toBe("poor");
+
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(observedDownlink.value).toBe("good");
+
+		unmount();
+	});
 
 	it("keeps quality good when RTT is moderately high but video bitrate is healthy", async () => {
 		const { observed, unmount, getNetworkStats } = mountWithStats({
@@ -221,6 +256,8 @@ describe("useNetworkQuality", () => {
 					rtt: 50,
 					packetLoss: 0,
 					availableOutgoingBitrate: 800_000,
+					downlinkPacketLoss: 0,
+					hasDownlinkSample: true,
 					timestamp: Date.now(),
 					isValid: true,
 				}),
@@ -233,14 +270,14 @@ describe("useNetworkQuality", () => {
 			connectionManager: { resetReceiveSide },
 		});
 
-		const observed = ref("unknown");
+		const observedDownlink = ref("unknown");
 		const root = document.createElement("div");
 
 		const TestComponent = defineComponent({
 			setup() {
-				const { networkQuality } = useNetworkQuality();
+				const { downlinkQuality } = useNetworkQuality();
 				watchEffect(() => {
-					observed.value = networkQuality.value;
+					observedDownlink.value = downlinkQuality.value;
 				});
 				return () => null;
 			},
@@ -256,10 +293,15 @@ describe("useNetworkQuality", () => {
 		participant.video_enabled = true;
 		await vi.advanceTimersByTimeAsync(21_000);
 		expect(requestConsumerKeyFrame).toHaveBeenCalledOnce();
+		expect(observedDownlink.value).toBe("critical");
 		expect(requestConsumerKeyFrame).toHaveBeenCalledWith("c1");
 		expect(resetReceiveSide).not.toHaveBeenCalled();
 
-		await vi.advanceTimersByTimeAsync(30_000);
+		await vi.advanceTimersByTimeAsync(9000);
+		expect(observedDownlink.value).toBe("critical");
+		expect(requestConsumerKeyFrame).toHaveBeenCalledOnce();
+
+		await vi.advanceTimersByTimeAsync(21_000);
 		expect(requestConsumerKeyFrame).toHaveBeenCalledTimes(2);
 		expect(resetReceiveSide).not.toHaveBeenCalled();
 

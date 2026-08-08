@@ -4,11 +4,21 @@ import {
   type RouteLocationNormalizedLoaded,
   type RouteRecordRaw,
 } from 'vue-router'
+import { createResource } from 'frappe-ui'
 
 import { SUITE_APPS, SUITE_LOGO } from '@/apps/registry'
-import { useSessionStore } from '@/boot/session'
-
+import { hasServerBoot, useSessionStore } from '@/boot/session'
 import APPLE_SPLASH_DEVICES from './pwa-splash-devices.json'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    appId?: string
+    title?: string
+    favicon?: string
+    isShell?: boolean
+    allowGuest?: boolean
+  }
+}
 
 /**
  * ONE Vue Router for the whole suite.
@@ -63,6 +73,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/shell/LauncherView.vue'),
     meta: { isShell: true, title: 'Frappe Suite', favicon: SUITE_FAVICON },
   },
+  {
+    path: '/suite/setup',
+    name: 'suite-setup',
+    component: () => import('@/shell/SetupView.vue'),
+    meta: { isShell: true, title: 'Set up Frappe Suite', favicon: SUITE_FAVICON },
+  },
   ...placeholderGroups,
   {
     path: '/:pathMatch(.*)*',
@@ -80,6 +96,32 @@ const router = createRouter({
 
 // Apps whose real route groups have already been registered.
 const registeredApps = new Set<string>()
+
+// First-run onboarding state: boot globals in prod, fetch in dev.
+type OnboardingState = { isOnboarded: boolean; canOnboard: boolean }
+
+const onboardingStateResource = createResource({ url: 'suite.api.account.get_onboarding_state' })
+let onboardingStatePromise: Promise<OnboardingState> | undefined
+
+function ensureOnboardingState(): OnboardingState | Promise<OnboardingState> {
+  if (hasServerBoot) {
+    return { isOnboarded: !!window.suite_is_onboarded, canOnboard: !!window.suite_can_onboard }
+  }
+  if (!onboardingStatePromise) {
+    onboardingStatePromise = onboardingStateResource
+      .fetch()
+      .then(() => ({
+        isOnboarded: !!onboardingStateResource.data?.is_onboarded,
+        canOnboard: !!onboardingStateResource.data?.can_onboard,
+      }))
+      .catch(() => {
+        // Fail open: a failing check must not strand anyone on the setup screen.
+        onboardingStatePromise = undefined
+        return { isOnboarded: true, canOnboard: false }
+      })
+  }
+  return onboardingStatePromise
+}
 
 /**
  * Load `src/apps/<appId>/routes.ts`, register its routes under the app prefix
@@ -112,7 +154,7 @@ async function ensureAppRoutesLoaded(appId: string): Promise<void> {
 
 router.beforeEach(async (to) => {
   // 1. Lazy-load the target app's route module before resolving the route.
-  const appId = to.meta.appId as string | undefined
+  const appId = to.meta.appId
   if (appId && !registeredApps.has(appId)) {
     await ensureAppRoutesLoaded(appId)
     // Re-resolve now that the real routes exist without replacing the previous
@@ -125,6 +167,16 @@ router.beforeEach(async (to) => {
   if (!session.isLoggedIn && !to.meta.allowGuest) {
     window.location.href = `/login?redirect-to=${encodeURIComponent(to.fullPath)}`
     return false
+  }
+
+  // 3. First-run onboarding gate. Only System Managers are sent to /suite/setup —
+  // they alone can complete it; everyone else uses the site as-is.
+  const onboarding = await ensureOnboardingState()
+  const onSetupPage = to.path === '/suite/setup'
+  if (onboarding.canOnboard && !onboarding.isOnboarded) {
+    if (!onSetupPage) return '/suite/setup'
+  } else if (onSetupPage) {
+    return '/suite'
   }
 
   return true
@@ -141,17 +193,16 @@ router.afterEach((to, _from, failure) => {
 })
 
 function setDocumentTitle(to: RouteLocationNormalizedLoaded) {
-  const title = to.meta.title
-  if (typeof title === 'string' && title) {
-    document.title = title
+  if (to.meta.title) {
+    document.title = to.meta.title
   }
 }
 
 function setFavicon(to: RouteLocationNormalizedLoaded) {
   const favicon = to.meta.favicon
-  if (typeof favicon !== 'string' || !favicon) return
+  if (!favicon) return
 
-  const scope = (to.meta.appId as string | undefined) ?? 'suite'
+  const scope = to.meta.appId ?? 'suite'
   if (scope === currentFaviconScope) return
 
   const icon = getFaviconElement()

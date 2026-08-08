@@ -4,6 +4,9 @@ import { useSessionStore } from '@/boot/session'
 
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
 
+export const systemDark = ref(systemTheme.matches)
+systemTheme.addEventListener('change', (e) => (systemDark.value = e.matches))
+
 export function getThemeMode() {
 	return document.documentElement.getAttribute('data-theme-mode') || 'light'
 }
