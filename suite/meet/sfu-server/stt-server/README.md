@@ -7,9 +7,8 @@ GPU inference image for Frappe Meet captions using NVIDIA Nemotron 3.5 ASR throu
 - Container port: `8000`
 - Health check: `GET /health`
 - OpenAI transcription: `POST /v1/audio/transcriptions`
+- OpenAI Realtime transcription: `WS /v1/realtime`
 - Model listing: `GET /v1/models`
-- Session-scoped streaming transcription: `WS /stream`
-- PCM transcription fallback: `POST /transcribe-pcm`
 - GPU: NVIDIA CUDA-compatible GPU
 
 The model is downloaded at startup. Mount `/models` to persist the Hugging Face, NeMo, and Torch caches across container replacements.
@@ -36,7 +35,9 @@ curl http://localhost:8000/v1/audio/transcriptions \
   -F language=en-US
 ```
 
-Set `stream=true` to receive `transcript.text.delta` and `transcript.text.done` Server-Sent Events. Meet continues to use `/stream`, which emits session-scoped draft and final transcript events.
+Set `stream=true` to receive `transcript.text.delta` and `transcript.text.done` Server-Sent Events.
+
+For live input, connect to `/v1/realtime`, send a transcription `session.update` configured for 24 kHz PCM16 mono, append base64 audio with `input_audio_buffer.append`, and finalize turns with `input_audio_buffer.commit`. The server emits OpenAI Realtime transcription delta and completed events. Authentication is expected to be enforced by the private deployment boundary.
 
 ## Run
 

@@ -2,12 +2,15 @@
 """Nemotron ASR service for OpenAI clients and session-scoped Meet streams."""
 
 import asyncio
+import base64
+import binascii
 import copy
 import json
 import os
 import subprocess
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -23,14 +26,17 @@ from nemo.collections.asr.parts.preprocessing.features import normalize_batch
 from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
 from omegaconf import OmegaConf
 from protocol import (
-    TARGET_SAMPLE_RATE,
-    TranscriptEventFactory,
+    MODEL_SAMPLE_RATE,
+    REALTIME_SAMPLE_RATE,
     clean_transcript,
+    event_id,
+    item_id,
     openai_sse_event,
+    realtime_error,
+    realtime_session,
     transcript_delta,
-    validate_start_message,
+    validate_session_update,
 )
-from starlette.requests import Request
 
 NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3.5-asr-streaming-0.6b")
 NEMOTRON_LANGUAGE = os.getenv("NEMOTRON_LANGUAGE", "en-US").strip() or "en-US"
@@ -283,28 +289,28 @@ class IncrementalDecoder:
         return self.current_text
 
 
-class StreamSession:
-    def __init__(self, metadata: dict):
-        self.session_id = metadata["sessionId"]
-        self.room_id = metadata["roomId"]
-        self.participant_id = metadata["participantId"]
-        self.producer_id = metadata["producerId"]
-        self.participant_name = metadata.get("participantName")
-        self.sample_rate = int(metadata.get("sampleRate") or TARGET_SAMPLE_RATE)
-        self.language = metadata.get("language") or NEMOTRON_LANGUAGE
+class RealtimeTranscriptionSession:
+    def __init__(self, language: str):
+        self.language = language or NEMOTRON_LANGUAGE
         self.last_sent_text = ""
         self.utterance_audio: list[np.ndarray] = []
         self.incremental_decoder = IncrementalDecoder()
         self.incremental_failed = False
-        self.events = TranscriptEventFactory(metadata)
 
-    def append(self, audio_bytes: bytes) -> np.ndarray:
+    def append_and_decode(self, audio_bytes: bytes) -> str:
+        import librosa
+
         audio = pcm16le_to_float32(audio_bytes)
+        audio = librosa.resample(audio, orig_sr=REALTIME_SAMPLE_RATE, target_sr=MODEL_SAMPLE_RATE)
         self.utterance_audio.append(audio)
-        return audio
-
-    def process_incremental(self, audio: np.ndarray) -> str:
-        return self.incremental_decoder.feed(audio)
+        if self.incremental_failed:
+            return ""
+        try:
+            return self.incremental_decoder.feed(audio)
+        except Exception as incremental_error:
+            self.incremental_failed = True
+            _label(event="incremental_fallback", error=str(incremental_error))
+            return ""
 
     def finalize(self) -> str:
         if not self.utterance_audio:
@@ -316,14 +322,14 @@ class StreamSession:
             if NEMOTRON_FINAL_SILENCE_MS > 0:
                 audio = np.pad(
                     audio,
-                    (0, int(self.sample_rate * NEMOTRON_FINAL_SILENCE_MS / 1000)),
+                    (0, int(MODEL_SAMPLE_RATE * NEMOTRON_FINAL_SILENCE_MS / 1000)),
                 )
             text = FinalDecoder().transcribe(audio)
             self.incremental_decoder.reset()
         else:
             if NEMOTRON_FINAL_SILENCE_MS > 0:
                 silence = np.zeros(
-                    int(self.sample_rate * NEMOTRON_FINAL_SILENCE_MS / 1000),
+                    int(MODEL_SAMPLE_RATE * NEMOTRON_FINAL_SILENCE_MS / 1000),
                     dtype=np.float32,
                 )
                 self.incremental_decoder.feed(silence)
@@ -332,15 +338,16 @@ class StreamSession:
         return text
 
     def audio_duration_seconds(self) -> float:
-        return sum(len(audio) for audio in self.utterance_audio) / self.sample_rate
+        return sum(len(audio) for audio in self.utterance_audio) / MODEL_SAMPLE_RATE
+
+    def clear(self) -> None:
+        self.incremental_decoder.reset()
+        self.reset_utterance()
 
     def reset_utterance(self) -> None:
         self.last_sent_text = ""
         self.utterance_audio = []
         self.incremental_failed = False
-
-    def transcript_event(self, text: str, is_final: bool, duration_ms: float) -> dict:
-        return self.events.create(text, is_final, duration_ms)
 
 
 def _run_with_language(language: str, operation: Callable[..., Any], *args):
@@ -392,7 +399,7 @@ def load_uploaded_audio(audio_bytes: bytes, filename: str) -> np.ndarray:
                     "-ac",
                     "1",
                     "-ar",
-                    str(TARGET_SAMPLE_RATE),
+                    str(MODEL_SAMPLE_RATE),
                     "pipe:1",
                 ],
                 check=True,
@@ -404,20 +411,20 @@ def load_uploaded_audio(audio_bytes: bytes, filename: str) -> np.ndarray:
 
     if audio.ndim > 1:
         audio = audio.mean(axis=-1) if audio.shape[-1] <= audio.shape[0] else audio.mean(axis=0)
-    if sample_rate != TARGET_SAMPLE_RATE:
+    if sample_rate != MODEL_SAMPLE_RATE:
         import librosa
 
         audio = librosa.resample(
             np.asarray(audio, dtype=np.float32),
             orig_sr=sample_rate,
-            target_sr=TARGET_SAMPLE_RATE,
+            target_sr=MODEL_SAMPLE_RATE,
         )
     return np.asarray(audio, dtype=np.float32)
 
 
 def run_warmup() -> None:
     t0 = time.time()
-    _run_with_language(NEMOTRON_LANGUAGE, direct_transcribe, np.zeros(TARGET_SAMPLE_RATE, dtype=np.float32))
+    _run_with_language(NEMOTRON_LANGUAGE, direct_transcribe, np.zeros(MODEL_SAMPLE_RATE, dtype=np.float32))
     _label(event="warmup", elapsed=f"{time.time() - t0:.2f}s")
 
 
@@ -489,7 +496,7 @@ async def transcribe_audio_file(
         raise HTTPException(status_code=400, detail=f"Failed to process audio: {error}") from error
 
     resolved_language = language or NEMOTRON_LANGUAGE
-    duration = len(audio) / TARGET_SAMPLE_RATE
+    duration = len(audio) / MODEL_SAMPLE_RATE
     if stream:
 
         async def event_stream() -> AsyncGenerator[str]:
@@ -529,57 +536,37 @@ async def transcribe_audio_file(
     return {"text": text}
 
 
-@app.post("/transcribe-pcm")
-async def transcribe_pcm(request: Request):
-    if not ready or model is None:
-        return JSONResponse({"error": "Model not loaded"}, status_code=503)
-    audio_bytes = await request.body()
-    if not audio_bytes:
-        return JSONResponse({"error": "No audio data"}, status_code=400)
-    audio = pcm16le_to_float32(audio_bytes)
-
-    async def event_stream() -> AsyncGenerator[str]:
-        text = await run_inference(NEMOTRON_LANGUAGE, direct_transcribe, audio)
-        if text:
-            yield f"data: {json.dumps({'text': text, 'isFinal': True})}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-@app.websocket("/stream")
-async def stream(websocket: WebSocket):
+@app.websocket("/v1/realtime")
+async def realtime_transcription(websocket: WebSocket):
     await websocket.accept()
     if not ready or model is None:
+        await websocket.send_json(realtime_error("Model not loaded", code="server_not_ready"))
         await websocket.close(code=1013, reason="Model not loaded")
         return
 
-    session: StreamSession | None = None
-    try:
-        try:
-            start_message = json.loads(await websocket.receive_text())
-        except json.JSONDecodeError:
-            await websocket.close(code=1003, reason="Invalid JSON start message")
-            return
-        metadata, error = validate_start_message(start_message)
-        if error:
-            await websocket.close(code=1008, reason=error)
-            return
+    requested_model = websocket.query_params.get("model") or MODEL_ID
+    if requested_model not in {MODEL_ID, NEMOTRON_MODEL}:
+        await websocket.send_json(realtime_error(f"Unsupported transcription model: {requested_model}"))
+        await websocket.close(code=1008, reason="Unsupported model")
+        return
 
-        session = await run_inference(
-            metadata.get("language") or NEMOTRON_LANGUAGE,
-            StreamSession,
-            metadata,
-        )
-        queue: asyncio.Queue[tuple[str, bytes | str | None]] = asyncio.Queue(maxsize=STT_STREAM_QUEUE_FRAMES)
+    realtime_session_id = f"sess_{uuid.uuid4().hex}"
+    effective_session = realtime_session(realtime_session_id, requested_model, NEMOTRON_LANGUAGE)
+    await websocket.send_json(
+        {
+            "event_id": event_id(),
+            "type": "session.created",
+            "session": effective_session,
+        }
+    )
+
+    transcription: RealtimeTranscriptionSession | None = None
+    current_item_id = item_id()
+    previous_item_id: str | None = None
+    try:
+        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=STT_STREAM_QUEUE_FRAMES)
         closed = asyncio.Event()
-        _label(
-            event="stream_start",
-            session=session.session_id,
-            room=session.room_id,
-            participant=session.participant_id,
-            producer=session.producer_id,
-            language=session.language,
-        )
+        _label(event="realtime_start", session=realtime_session_id, model=requested_model)
 
         async def reader() -> None:
             try:
@@ -588,71 +575,186 @@ async def stream(websocket: WebSocket):
                     if message["type"] == "websocket.disconnect":
                         break
                     if message.get("bytes") is not None:
-                        await queue.put(("audio", message["bytes"]))
+                        await websocket.send_json(
+                            realtime_error("Binary WebSocket messages are not supported")
+                        )
                     elif message.get("text") is not None:
-                        await queue.put(("control", message["text"]))
+                        await queue.put(message["text"])
             except WebSocketDisconnect:
                 pass
             finally:
-                await queue.put(("end", None))
+                await queue.put(None)
 
         async def worker() -> None:
+            nonlocal transcription, effective_session, current_item_id, previous_item_id
             while not closed.is_set():
-                kind, payload = await queue.get()
+                payload = await queue.get()
                 try:
-                    if kind == "end":
+                    if payload is None:
                         return
-                    if kind == "audio" and isinstance(payload, bytes):
-                        audio = session.append(payload)
-                        if session.incremental_failed:
+                    try:
+                        client_event = json.loads(payload)
+                    except json.JSONDecodeError:
+                        await websocket.send_json(realtime_error("Invalid JSON event"))
+                        continue
+                    if not isinstance(client_event, dict):
+                        await websocket.send_json(realtime_error("WebSocket events must be JSON objects"))
+                        continue
+
+                    client_event_id = client_event.get("event_id")
+                    event_type = client_event.get("type")
+                    if event_type == "session.update":
+                        config, error = validate_session_update(
+                            client_event,
+                            {MODEL_ID, NEMOTRON_MODEL},
+                            effective_session["audio"]["input"]["transcription"]["model"],
+                            effective_session["audio"]["input"]["transcription"]["language"],
+                        )
+                        if error:
+                            await websocket.send_json(realtime_error(error, client_event_id))
                             continue
-                        try:
-                            text = await run_inference(
-                                session.language,
-                                session.process_incremental,
-                                audio,
+                        language = config.get("language") or NEMOTRON_LANGUAGE
+                        if transcription is None:
+                            transcription = await run_inference(
+                                language, RealtimeTranscriptionSession, language
                             )
-                        except Exception as incremental_error:
-                            session.incremental_failed = True
-                            _label(
-                                event="incremental_fallback",
-                                session=session.session_id,
-                                error=str(incremental_error),
-                            )
-                            continue
-                        if text and text != session.last_sent_text:
-                            session.last_sent_text = text
+                        elif transcription.utterance_audio:
                             await websocket.send_json(
-                                session.transcript_event(
-                                    text,
-                                    False,
-                                    session.audio_duration_seconds() * 1000,
+                                realtime_error(
+                                    "Cannot update the session while audio is buffered", client_event_id
                                 )
                             )
-                    elif kind == "control" and isinstance(payload, str):
-                        try:
-                            control = json.loads(payload)
-                        except json.JSONDecodeError:
                             continue
-                        if control.get("sessionId") != session.session_id:
-                            continue
-                        if control.get("type") == "end":
-                            return
-                        if control.get("type") != "final":
-                            continue
+                        else:
+                            transcription.language = language
+                        effective_session = realtime_session(realtime_session_id, config["model"], language)
+                        await websocket.send_json(
+                            {
+                                "event_id": event_id(),
+                                "type": "session.updated",
+                                "session": effective_session,
+                            }
+                        )
+                        continue
 
-                        duration_ms = float(control.get("durationMs") or 0)
-                        audio_seconds = session.audio_duration_seconds()
+                    if transcription is None:
+                        await websocket.send_json(
+                            realtime_error("Send a valid session.update before audio events", client_event_id)
+                        )
+                        continue
+
+                    if event_type == "input_audio_buffer.append":
+                        try:
+                            encoded_audio = client_event.get("audio")
+                            if not isinstance(encoded_audio, str):
+                                raise ValueError("audio must be a base64 string")
+                            audio_bytes = base64.b64decode(encoded_audio, validate=True)
+                            if not audio_bytes or len(audio_bytes) % 2:
+                                raise ValueError("audio must contain PCM16 samples")
+                            if len(audio_bytes) > 15 * 1024 * 1024:
+                                raise ValueError("audio event exceeds the 15 MiB limit")
+                        except (binascii.Error, ValueError) as decode_error:
+                            await websocket.send_json(realtime_error(str(decode_error), client_event_id))
+                            continue
+                        text = await run_inference(
+                            transcription.language,
+                            transcription.append_and_decode,
+                            audio_bytes,
+                        )
+                        if delta := transcript_delta(transcription.last_sent_text, text):
+                            transcription.last_sent_text = text
+                            await websocket.send_json(
+                                {
+                                    "event_id": event_id(),
+                                    "type": "conversation.item.input_audio_transcription.delta",
+                                    "item_id": current_item_id,
+                                    "content_index": 0,
+                                    "delta": delta,
+                                    "logprobs": None,
+                                }
+                            )
+                        continue
+
+                    if event_type == "input_audio_buffer.clear":
+                        await run_inference(transcription.language, transcription.clear)
+                        current_item_id = item_id()
+                        await websocket.send_json(
+                            {"event_id": event_id(), "type": "input_audio_buffer.cleared"}
+                        )
+                        continue
+
+                    if event_type == "input_audio_buffer.commit":
+                        if not transcription.utterance_audio:
+                            await websocket.send_json(
+                                realtime_error("Cannot commit an empty audio buffer", client_event_id)
+                            )
+                            continue
+                        committed_item_id = current_item_id
+                        audio_seconds = transcription.audio_duration_seconds()
+                        await websocket.send_json(
+                            {
+                                "event_id": event_id(),
+                                "type": "input_audio_buffer.committed",
+                                "previous_item_id": previous_item_id,
+                                "item_id": committed_item_id,
+                            }
+                        )
+                        previous_text = transcription.last_sent_text
                         t0 = time.time()
-                        text = await run_inference(session.language, session.finalize)
+                        try:
+                            text = await run_inference(transcription.language, transcription.finalize)
+                        except Exception as inference_error:
+                            await websocket.send_json(
+                                {
+                                    "event_id": event_id(),
+                                    "type": "conversation.item.input_audio_transcription.failed",
+                                    "item_id": committed_item_id,
+                                    "content_index": 0,
+                                    "error": {
+                                        "type": "server_error",
+                                        "code": "transcription_failed",
+                                        "message": str(inference_error),
+                                        "param": None,
+                                    },
+                                }
+                            )
+                            continue
                         _label(
-                            event="stream_final",
-                            session=session.session_id,
+                            event="realtime_final",
+                            session=realtime_session_id,
                             audio_seconds=f"{audio_seconds:.1f}",
                             text_len=len(text),
                             elapsed=f"{time.time() - t0:.2f}s",
                         )
-                        await websocket.send_json(session.transcript_event(text, True, duration_ms))
+                        if delta := transcript_delta(previous_text, text):
+                            await websocket.send_json(
+                                {
+                                    "event_id": event_id(),
+                                    "type": "conversation.item.input_audio_transcription.delta",
+                                    "item_id": committed_item_id,
+                                    "content_index": 0,
+                                    "delta": delta,
+                                    "logprobs": None,
+                                }
+                            )
+                        await websocket.send_json(
+                            {
+                                "event_id": event_id(),
+                                "type": "conversation.item.input_audio_transcription.completed",
+                                "item_id": committed_item_id,
+                                "content_index": 0,
+                                "transcript": text,
+                                "usage": {"type": "duration", "seconds": audio_seconds},
+                                "logprobs": None,
+                            }
+                        )
+                        previous_item_id = committed_item_id
+                        current_item_id = item_id()
+                        continue
+
+                    await websocket.send_json(
+                        realtime_error(f"Unsupported event type: {event_type}", client_event_id)
+                    )
                 finally:
                     queue.task_done()
 
@@ -677,8 +779,7 @@ async def stream(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        if session is not None:
-            _label(event="stream_end", session=session.session_id)
+        _label(event="realtime_end", session=realtime_session_id)
 
 
 if __name__ == "__main__":

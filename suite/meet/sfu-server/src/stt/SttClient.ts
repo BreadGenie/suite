@@ -32,16 +32,12 @@ export interface ISttClient {
 	isAvailable(): boolean;
 }
 
-interface SttServerMessage {
+interface RealtimeServerMessage {
 	type?: string;
-	sessionId?: string;
-	roomId?: string;
-	participantId?: string;
-	producerId?: string;
-	text?: string;
-	isFinal?: boolean;
-	durationMs?: number;
-	sequence?: number;
+	item_id?: string;
+	delta?: string;
+	transcript?: string;
+	error?: { message?: string };
 }
 
 export class SttClient implements ISttClient {
@@ -103,126 +99,221 @@ export class SttClient implements ISttClient {
 		onTranscript: (event: SttTranscriptEvent) => void,
 	): Promise<ISttStream> {
 		const socket = new WebSocket(this.getStreamUrl());
-
-		await new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				reject(new Error('Timed out connecting to STT stream'));
-			}, 5000);
-
-			socket.once('open', () => {
-				clearTimeout(timer);
-				resolve();
-			});
-			socket.once('error', (error) => {
-				clearTimeout(timer);
-				reject(error);
-			});
-		});
-
-		socket.send(
-			JSON.stringify({
-				type: 'start',
-				...metadata,
-			}),
-		);
-
-		socket.on('message', (data) => {
-			let message: SttServerMessage;
-			try {
-				message = JSON.parse(data.toString()) as SttServerMessage;
-			} catch {
-				loggers.stt.warn('Dropping malformed STT stream message');
-				return;
-			}
-
-			if (message.type !== 'transcript') return;
-			if (!this.messageMatchesSession(message, metadata)) {
-				loggers.stt.warn(
-					'Dropping cross-session STT message for session %s',
-					metadata.sessionId,
-				);
-				return;
-			}
-
-			const text = typeof message.text === 'string' ? message.text.trim() : '';
-			if (!text && !message.isFinal) return;
-			onTranscript({
-				text,
-				isFinal: Boolean(message.isFinal),
-				durationMs:
-					typeof message.durationMs === 'number' ? message.durationMs : 0,
-				sequence: typeof message.sequence === 'number' ? message.sequence : 0,
-			});
-		});
-
-		socket.on('close', (code, reason) => {
-			loggers.stt.debug(
-				'STT stream closed for %s (code=%d, reason=%s)',
-				metadata.sessionId,
-				code,
-				reason.toString(),
-			);
-		});
-
-		return new SttStream(socket, metadata.sessionId);
+		const stream = new SttStream(socket, metadata, onTranscript);
+		await stream.connect();
+		return stream;
 	}
 
 	private getStreamUrl(): string {
 		const wsBase = this.serverUrl
 			.replace(/^http:/, 'ws:')
 			.replace(/^https:/, 'wss:');
-		return `${wsBase}/stream`;
-	}
-
-	private messageMatchesSession(
-		message: SttServerMessage,
-		metadata: SttStreamMetadata,
-	): boolean {
-		return (
-			message.sessionId === metadata.sessionId &&
-			message.roomId === metadata.roomId &&
-			message.participantId === metadata.participantId &&
-			message.producerId === metadata.producerId
-		);
+		return `${wsBase}/v1/realtime`;
 	}
 }
 
 class SttStream implements ISttStream {
+	private sequence = 0;
+	private bufferedBytes = 0;
+	private pendingCommits = 0;
+	private pendingDurations: number[] = [];
+	private durationByItem = new Map<string, number>();
+	private textByItem = new Map<string, string>();
+	private pendingWaiters = new Set<() => void>();
+	private readyResolve: (() => void) | null = null;
+	private readyReject: ((error: Error) => void) | null = null;
+	private ready = false;
+
 	constructor(
 		private socket: WebSocket,
-		private sessionId: string,
-	) {}
+		private metadata: SttStreamMetadata,
+		private onTranscript: (event: SttTranscriptEvent) => void,
+	) {
+		this.socket.on('message', (data) => this.handleMessage(data.toString()));
+		this.socket.on('error', (error) => this.readyReject?.(error));
+		this.socket.on('close', (code, reason) => {
+			this.readyReject?.(
+				new Error(
+					`STT stream closed before setup (${code}: ${reason.toString()})`,
+				),
+			);
+			this.resolvePendingWaiters();
+			loggers.stt.debug(
+				'STT stream closed for %s (code=%d, reason=%s)',
+				this.metadata.sessionId,
+				code,
+				reason.toString(),
+			);
+		});
+	}
+
+	connect(): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(
+				() => reject(new Error('Timed out configuring STT Realtime session')),
+				5000,
+			);
+			this.readyResolve = () => {
+				clearTimeout(timer);
+				this.ready = true;
+				resolve();
+			};
+			this.readyReject = (error) => {
+				clearTimeout(timer);
+				reject(error);
+			};
+		});
+	}
 
 	sendAudio(frame: Buffer): void {
-		if (this.socket.readyState !== WebSocket.OPEN) return;
-		this.socket.send(frame);
+		if (!this.ready || this.socket.readyState !== WebSocket.OPEN) return;
+		this.bufferedBytes += frame.length;
+		this.sendEvent({
+			type: 'input_audio_buffer.append',
+			audio: frame.toString('base64'),
+		});
 	}
 
 	markFinal(durationMs: number): void {
-		if (this.socket.readyState !== WebSocket.OPEN) return;
-		this.socket.send(
-			JSON.stringify({
-				type: 'final',
-				sessionId: this.sessionId,
-				durationMs,
-			}),
-		);
+		if (
+			!this.ready ||
+			this.socket.readyState !== WebSocket.OPEN ||
+			this.bufferedBytes === 0
+		)
+			return;
+		this.pendingDurations.push(durationMs);
+		this.pendingCommits++;
+		this.bufferedBytes = 0;
+		this.sendEvent({ type: 'input_audio_buffer.commit' });
 	}
 
-	close(): Promise<void> {
-		return new Promise((resolve) => {
-			if (this.socket.readyState === WebSocket.CLOSED) {
-				resolve();
-				return;
-			}
+	async close(): Promise<void> {
+		await this.waitForPendingCommits();
+		if (this.socket.readyState === WebSocket.CLOSED) return;
+		await new Promise<void>((resolve) => {
 			this.socket.once('close', () => resolve());
-			if (this.socket.readyState === WebSocket.OPEN) {
-				this.socket.send(
-					JSON.stringify({ type: 'end', sessionId: this.sessionId }),
-				);
-			}
 			this.socket.close();
 		});
+	}
+
+	private handleMessage(raw: string): void {
+		let message: RealtimeServerMessage;
+		try {
+			message = JSON.parse(raw) as RealtimeServerMessage;
+		} catch {
+			loggers.stt.warn('Dropping malformed STT Realtime message');
+			return;
+		}
+
+		if (message.type === 'session.created') {
+			this.sendEvent({
+				type: 'session.update',
+				session: {
+					type: 'transcription',
+					audio: {
+						input: {
+							format: { type: 'audio/pcm', rate: this.metadata.sampleRate },
+							transcription: {
+								model:
+									process.env.NEMOTRON_MODEL ||
+									'nemotron-3.5-asr-streaming-0.6b',
+								language: this.metadata.language || 'en-US',
+							},
+							turn_detection: null,
+						},
+					},
+				},
+			});
+			return;
+		}
+		if (message.type === 'session.updated') {
+			this.readyResolve?.();
+			this.readyResolve = null;
+			this.readyReject = null;
+			return;
+		}
+		if (message.type === 'error') {
+			const error = new Error(message.error?.message || 'STT Realtime error');
+			if (!this.ready) this.readyReject?.(error);
+			else loggers.stt.warn('%s', error.message);
+			return;
+		}
+
+		const itemId = message.item_id;
+		if (!itemId) return;
+		if (message.type === 'input_audio_buffer.committed') {
+			this.durationByItem.set(itemId, this.pendingDurations.shift() || 0);
+			return;
+		}
+		if (message.type === 'conversation.item.input_audio_transcription.delta') {
+			const text = `${this.textByItem.get(itemId) || ''}${message.delta || ''}`;
+			this.textByItem.set(itemId, text);
+			if (text.trim())
+				this.emitTranscript(
+					text.trim(),
+					false,
+					this.durationByItem.get(itemId) || 0,
+				);
+			return;
+		}
+		if (
+			message.type === 'conversation.item.input_audio_transcription.completed'
+		) {
+			this.emitTranscript(
+				(message.transcript || this.textByItem.get(itemId) || '').trim(),
+				true,
+				this.durationByItem.get(itemId) || 0,
+			);
+			this.finishItem(itemId);
+			return;
+		}
+		if (message.type === 'conversation.item.input_audio_transcription.failed') {
+			loggers.stt.warn(
+				'STT transcription failed for item %s: %s',
+				itemId,
+				message.error?.message || 'unknown',
+			);
+			this.finishItem(itemId);
+		}
+	}
+
+	private emitTranscript(
+		text: string,
+		isFinal: boolean,
+		durationMs: number,
+	): void {
+		if (!text && !isFinal) return;
+		this.sequence++;
+		this.onTranscript({ text, isFinal, durationMs, sequence: this.sequence });
+	}
+
+	private finishItem(itemId: string): void {
+		this.durationByItem.delete(itemId);
+		this.textByItem.delete(itemId);
+		this.pendingCommits = Math.max(0, this.pendingCommits - 1);
+		if (this.pendingCommits === 0) this.resolvePendingWaiters();
+	}
+
+	private sendEvent(event: object): void {
+		if (this.socket.readyState === WebSocket.OPEN)
+			this.socket.send(JSON.stringify(event));
+	}
+
+	private waitForPendingCommits(): Promise<void> {
+		if (this.pendingCommits === 0) return Promise.resolve();
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer);
+				this.pendingWaiters.delete(done);
+				resolve();
+			};
+			const timer = setTimeout(done, 15_000);
+			this.pendingWaiters.add(done);
+		});
+	}
+
+	private resolvePendingWaiters(): void {
+		for (const resolve of [...this.pendingWaiters]) resolve();
 	}
 }
 

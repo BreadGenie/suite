@@ -8,7 +8,7 @@ Real-time captions are powered by an on-premise NVIDIA Nemotron ASR backend.
 
 ### Local Development
 
-Set `STT_SERVER_URL` to a running STT service that implements `/health` and `/stream`.
+Set `STT_SERVER_URL` to a running STT service that implements `/health` and the OpenAI Realtime transcription endpoint at `/v1/realtime`.
 
 ### Docker Compose
 

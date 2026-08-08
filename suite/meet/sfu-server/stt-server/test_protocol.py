@@ -5,47 +5,66 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from protocol import (
-    TranscriptEventFactory,
+    REALTIME_SAMPLE_RATE,
     clean_transcript,
     openai_sse_event,
+    realtime_error,
+    realtime_session,
     transcript_delta,
-    validate_start_message,
+    validate_session_update,
 )
 
 
 class ProtocolTest(unittest.TestCase):
     def setUp(self):
-        self.start = {
-            "type": "start",
-            "sessionId": "session-1",
-            "roomId": "room-1",
-            "participantId": "participant-1",
-            "producerId": "producer-1",
-            "sampleRate": 16000,
+        self.update = {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": REALTIME_SAMPLE_RATE},
+                        "transcription": {"model": "nemotron", "language": "en-US"},
+                        "turn_detection": None,
+                    }
+                },
+            },
         }
 
-    def test_validates_start_metadata_and_sample_rate(self):
-        metadata, error = validate_start_message(self.start.copy())
+    def test_validates_realtime_transcription_session(self):
+        config, error = validate_session_update(self.update, {"nemotron"}, "nemotron", "en-US")
         self.assertIsNone(error)
-        self.assertEqual(metadata, self.start)
+        self.assertEqual(config, {"model": "nemotron", "language": "en-US"})
 
-        _, error = validate_start_message({**self.start, "producerId": ""})
-        self.assertEqual(error, "Missing required stream metadata: producerId")
+        invalid = self.update | {
+            "session": self.update["session"]
+            | {
+                "audio": {
+                    "input": self.update["session"]["audio"]["input"]
+                    | {"format": {"type": "audio/pcm", "rate": 16000}}
+                }
+            }
+        }
+        _, error = validate_session_update(invalid, {"nemotron"}, "nemotron", "en-US")
+        self.assertEqual(error, "Only 24000 Hz audio/pcm is supported")
 
-        _, error = validate_start_message({**self.start, "sampleRate": 48000})
-        self.assertEqual(error, "sampleRate must be 16000")
+        config, error = validate_session_update(
+            {"type": "session.update", "session": {"type": "transcription"}},
+            {"nemotron"},
+            "nemotron",
+            "en-US",
+        )
+        self.assertIsNone(error)
+        self.assertEqual(config, {"model": "nemotron", "language": "en-US"})
 
-    def test_transcript_events_retain_session_identity_and_sequence(self):
-        factory = TranscriptEventFactory(self.start)
-        draft = factory.create("hello", False, 500)
-        final = factory.create("hello world", True, 900)
-
-        self.assertEqual(draft["sequence"], 1)
-        self.assertEqual(final["sequence"], 2)
-        self.assertEqual(final["sessionId"], "session-1")
-        self.assertEqual(final["roomId"], "room-1")
-        self.assertEqual(final["participantId"], "participant-1")
-        self.assertEqual(final["producerId"], "producer-1")
+    def test_builds_realtime_session_and_error_events(self):
+        session = realtime_session("sess_1", "nemotron", "en-US")
+        self.assertEqual(session["object"], "realtime.transcription_session")
+        self.assertEqual(session["audio"]["input"]["format"]["rate"], 24000)
+        self.assertEqual(session["audio"]["input"]["transcription"]["model"], "nemotron")
+        error = realtime_error("bad event", "client_event_1")
+        self.assertEqual(error["type"], "error")
+        self.assertEqual(error["error"]["event_id"], "client_event_1")
 
     def test_cleans_language_tags_and_frames_openai_events(self):
         self.assertEqual(clean_transcript(" <EN-us>  Hello   world "), "Hello world")

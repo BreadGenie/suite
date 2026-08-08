@@ -27,7 +27,7 @@ interface AudioIngesterOptions {
 }
 
 // ── VAD / Streaming Config ───────────────────────────────────────────────────
-const SAMPLE_RATE = 16000;
+const SAMPLE_RATE = 24000;
 const BYTES_PER_SAMPLE = 2; // s16le
 const OUTPUT_CHANNELS = 1; // ASR input is mono; Meet still publishes stereo Opus.
 
