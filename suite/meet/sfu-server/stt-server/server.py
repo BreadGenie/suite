@@ -37,6 +37,7 @@ from protocol import (
     transcript_delta,
     validate_session_update,
 )
+from resampling import StreamingResampler
 
 NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3.5-asr-streaming-0.6b")
 NEMOTRON_LANGUAGE = os.getenv("NEMOTRON_LANGUAGE", "en-US").strip() or "en-US"
@@ -294,15 +295,17 @@ class RealtimeTranscriptionSession:
         self.language = language or NEMOTRON_LANGUAGE
         self.last_sent_text = ""
         self.utterance_audio: list[np.ndarray] = []
+        self.input_sample_count = 0
+        self.resampler = StreamingResampler(REALTIME_SAMPLE_RATE, MODEL_SAMPLE_RATE)
         self.incremental_decoder = IncrementalDecoder()
         self.incremental_failed = False
 
     def append_and_decode(self, audio_bytes: bytes) -> str:
-        import librosa
-
         audio = pcm16le_to_float32(audio_bytes)
-        audio = librosa.resample(audio, orig_sr=REALTIME_SAMPLE_RATE, target_sr=MODEL_SAMPLE_RATE)
-        self.utterance_audio.append(audio)
+        self.input_sample_count += len(audio)
+        audio = self.resampler.process(audio)
+        if audio.size:
+            self.utterance_audio.append(audio)
         if self.incremental_failed:
             return ""
         try:
@@ -313,10 +316,19 @@ class RealtimeTranscriptionSession:
             return ""
 
     def finalize(self) -> str:
-        if not self.utterance_audio:
+        if not self.has_audio:
             self.incremental_decoder.reset()
             self.reset_utterance()
             return ""
+        tail = self.resampler.flush()
+        if tail.size:
+            self.utterance_audio.append(tail)
+            if not self.incremental_failed:
+                try:
+                    self.incremental_decoder.feed(tail)
+                except Exception as incremental_error:
+                    self.incremental_failed = True
+                    _label(event="incremental_fallback", error=str(incremental_error))
         if self.incremental_failed:
             audio = np.concatenate(self.utterance_audio)
             if NEMOTRON_FINAL_SILENCE_MS > 0:
@@ -338,7 +350,11 @@ class RealtimeTranscriptionSession:
         return text
 
     def audio_duration_seconds(self) -> float:
-        return sum(len(audio) for audio in self.utterance_audio) / MODEL_SAMPLE_RATE
+        return self.input_sample_count / REALTIME_SAMPLE_RATE
+
+    @property
+    def has_audio(self) -> bool:
+        return self.input_sample_count > 0
 
     def clear(self) -> None:
         self.incremental_decoder.reset()
@@ -347,6 +363,8 @@ class RealtimeTranscriptionSession:
     def reset_utterance(self) -> None:
         self.last_sent_text = ""
         self.utterance_audio = []
+        self.input_sample_count = 0
+        self.resampler = StreamingResampler(REALTIME_SAMPLE_RATE, MODEL_SAMPLE_RATE)
         self.incremental_failed = False
 
 
@@ -618,7 +636,7 @@ async def realtime_transcription(websocket: WebSocket):
                             transcription = await run_inference(
                                 language, RealtimeTranscriptionSession, language
                             )
-                        elif transcription.utterance_audio:
+                        elif transcription.has_audio:
                             await websocket.send_json(
                                 realtime_error(
                                     "Cannot update the session while audio is buffered", client_event_id
@@ -684,7 +702,7 @@ async def realtime_transcription(websocket: WebSocket):
                         continue
 
                     if event_type == "input_audio_buffer.commit":
-                        if not transcription.utterance_audio:
+                        if not transcription.has_audio:
                             await websocket.send_json(
                                 realtime_error("Cannot commit an empty audio buffer", client_event_id)
                             )
