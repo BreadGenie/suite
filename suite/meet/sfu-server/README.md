@@ -19,6 +19,7 @@ Set `STT_SERVER_URL` to an externally managed STT backend. The SFU deployment do
 | Variable | Description | Default |
 |---|---|---|
 | `STT_SERVER_URL` | SFU URL for the STT service | — |
+| `STT_CAPTURE_DIR` | Optional local directory for diagnostic utterance WAV/JSON captures | — |
 | `NEMOTRON_MODEL` | Hugging Face model ID | `nvidia/nemotron-3.5-asr-streaming-0.6b` |
 | `NEMOTRON_LANGUAGE` | Locale prompt such as `en-US`, or `auto` for multilingual rooms | `en-US` |
 | `NEMOTRON_ATT_CONTEXT_SIZE` | NeMo streaming attention context, `left,right` | `56,3` |

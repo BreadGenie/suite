@@ -9,6 +9,7 @@ interface SttManagerOptions {
 	sttServerUrl?: string;
 	/** Use mock client in development when no STT server is configured */
 	allowMockFallback?: boolean;
+	captureDirectory?: string;
 }
 
 type EmitSttToRoom = (
@@ -24,8 +25,16 @@ export class SttManager {
 	private roomActiveSpeakers = new Map<string, Set<string>>();
 	private emitToRoom: EmitSttToRoom | undefined;
 	private getRouter: ((roomId: string) => Router | undefined) | undefined;
+	private captureDirectory?: string;
 
 	constructor(options: SttManagerOptions) {
+		this.captureDirectory = options.captureDirectory;
+		if (this.captureDirectory) {
+			loggers.stt.warn(
+				'STT diagnostic audio capture enabled at %s',
+				this.captureDirectory,
+			);
+		}
 		if (options.sttServerUrl) {
 			const url = options.sttServerUrl.trim();
 			loggers.stt.info('Using STT server: %s', url);
@@ -134,6 +143,7 @@ export class SttManager {
 			producer,
 			router,
 			sttClient: this.sttClient,
+			captureDirectory: this.captureDirectory,
 			isActiveSpeaker: () => this.isActiveSpeaker(roomId, participantId),
 			onTranscript: (text, isFinal, durationMs) => {
 				this.handleTranscript(

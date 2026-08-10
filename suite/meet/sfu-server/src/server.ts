@@ -65,6 +65,7 @@ export class SFUServer {
 		this.sttManager = new SttManager({
 			sttServerUrl: config.stt.serverUrl,
 			allowMockFallback: config.stt.allowMockFallback,
+			captureDirectory: config.stt.captureDirectory,
 		});
 		this.mediasoup.setSttManager(this.sttManager);
 		const recordingPersistencePath = config.persistence.recordingGrantFile;

@@ -37,6 +37,7 @@ export interface SFUConfig {
 	stt: {
 		serverUrl?: string;
 		allowMockFallback: boolean;
+		captureDirectory?: string;
 	};
 	logging: {
 		level: SFULogLevel;
@@ -347,6 +348,7 @@ export function loadConfig(
 		stt: {
 			serverUrl: optional(env, 'STT_SERVER_URL'),
 			allowMockFallback: mode === 'development',
+			captureDirectory: optional(env, 'STT_CAPTURE_DIR'),
 		},
 		logging: { level: logLevel },
 		sentry: {

@@ -12,6 +12,7 @@ import type {
 	RtpCapabilities,
 } from 'mediasoup/types';
 import { loggers } from '../utils/logger';
+import { updatePcmCaptureTranscript, writePcmCapture } from './PcmCapture';
 import type { ISttClient, ISttStream } from './SttClient';
 
 interface AudioIngesterOptions {
@@ -21,6 +22,7 @@ interface AudioIngesterOptions {
 	producer: Producer;
 	router: Router;
 	sttClient: ISttClient;
+	captureDirectory?: string;
 	/** Called before each flush; if false, audio is discarded (active-speaker-only mode) */
 	isActiveSpeaker?: () => boolean;
 	onTranscript: (text: string, isFinal: boolean, durationMs: number) => void;
@@ -87,6 +89,9 @@ export class AudioIngester {
 	private router: Router;
 	private sttClient: ISttClient;
 	private sttStream: ISttStream | null = null;
+	private captureDirectory?: string;
+	private captureFrames: Buffer[] = [];
+	private pendingCaptureMetadata: string[] = [];
 	private sessionId = randomUUID();
 	private isActiveSpeaker?: () => boolean;
 	private onTranscript: (
@@ -118,6 +123,7 @@ export class AudioIngester {
 		this.producer = options.producer;
 		this.router = options.router;
 		this.sttClient = options.sttClient;
+		this.captureDirectory = options.captureDirectory;
 		this.isActiveSpeaker = options.isActiveSpeaker;
 		this.onTranscript = options.onTranscript;
 	}
@@ -145,6 +151,7 @@ export class AudioIngester {
 					language: process.env.NEMOTRON_LANGUAGE || 'en-US',
 				},
 				(event) => {
+					if (event.isFinal) this.recordCaptureTranscript(event.text);
 					this.onTranscript(event.text, event.isFinal, event.durationMs);
 				},
 			);
@@ -394,6 +401,7 @@ export class AudioIngester {
 			return;
 		}
 		this.sttStream?.sendAudio(frame);
+		if (this.captureDirectory) this.captureFrames.push(Buffer.from(frame));
 		this.streamedBytes += frame.length;
 	}
 
@@ -411,6 +419,7 @@ export class AudioIngester {
 			this.participantId,
 			this.sessionId,
 		);
+		this.writeCapture(durationMs);
 		this.sttStream?.markFinal(durationMs);
 		this.resetVadState();
 	}
@@ -420,6 +429,46 @@ export class AudioIngester {
 		this.silenceCheckCount = 0;
 		this.isInSpeech = false;
 		this.streamedBytes = 0;
+		this.captureFrames = [];
+	}
+
+	private writeCapture(durationMs: number): void {
+		if (!this.captureDirectory || this.captureFrames.length === 0) return;
+		try {
+			const metadataPath = writePcmCapture(
+				this.captureDirectory,
+				Buffer.concat(this.captureFrames),
+				{
+					sessionId: this.sessionId,
+					roomId: this.roomId,
+					participantId: this.participantId,
+					producerId: this.producer.id,
+					sampleRate: SAMPLE_RATE,
+					channels: OUTPUT_CHANNELS,
+					durationMs,
+				},
+			);
+			this.pendingCaptureMetadata.push(metadataPath);
+			loggers.stt.info('Captured STT utterance at %s', metadataPath);
+		} catch (error) {
+			loggers.stt.warn(
+				'Failed to capture STT utterance: %s',
+				(error as Error).message,
+			);
+		}
+	}
+
+	private recordCaptureTranscript(transcript: string): void {
+		const metadataPath = this.pendingCaptureMetadata.shift();
+		if (!metadataPath) return;
+		try {
+			updatePcmCaptureTranscript(metadataPath, transcript);
+		} catch (error) {
+			loggers.stt.warn(
+				'Failed to update STT capture transcript: %s',
+				(error as Error).message,
+			);
+		}
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────────
