@@ -9,12 +9,17 @@ from urllib.parse import quote
 import frappe
 import tantivy
 from frappe import _
+from frappe.deprecation_dumpster import deprecation_warning
 
 from suite.store import get_search_base_path
 from suite.store.base_store import Namespace, normalize_namespace, resolve_namespace_path
 from suite.utils.lock import write_lock
 
 SCHEMA_VERSION_FILE = "schema.version"
+
+# How many documents an unbounded fetch (`limit=None`) asks for before it knows how many match.
+# Sized so one pass almost always holds the whole match set; see `_run_search` for what a miss costs.
+UNBOUNDED_FETCH_PAGE = 5000
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,36 @@ class SearchStore:
         fields = fields or list(self.DEFAULT_SEARCH_FIELDS) or None
         return self._run_search(lambda index: index.parse_query(query, fields), limit, offset, order_by)
 
+    def search_prefix(
+        self,
+        terms: list[str],
+        limit: int | None = 20,
+        offset: int = 0,
+        fields: list[str] | None = None,
+        order_by: str | None = None,
+    ) -> tuple[list[dict], int]:
+        """Search for documents holding every term, with the last term matched as a prefix.
+
+        Built for as-you-type autocomplete: every term must appear in one of `fields`, with the
+        final one — the word still being typed — matched as a prefix. So "jane d" matches
+        "jane.d@example.com" and "Jane Doe", and also "Jane Ann Doe", since the terms need not be
+        adjacent or in order. Tantivy scores term and prefix queries alike as a constant, so these
+        hits come back in index order: ranking them is the caller's job (see
+        `EmailAddressIndex.search_email_addresses`). Returns `(hits, count)`.
+
+        A caller that ranks the hits itself has to see all of them — an unscored page is an
+        arbitrary slice, not the best matches — so `limit=None` returns every match.
+        """
+
+        terms = [term for term in terms if term]
+        if not terms:
+            return ([], 0)
+
+        fields = fields or list(self.DEFAULT_SEARCH_FIELDS)
+        return self._run_search(
+            lambda _index: self._build_prefix_query(terms, fields), limit, offset, order_by
+        )
+
     def search_phrase_prefix(
         self,
         terms: list[str],
@@ -150,13 +185,25 @@ class SearchStore:
         fields: list[str] | None = None,
         order_by: str | None = None,
     ) -> tuple[list[dict], int]:
-        """Search for the given terms as a consecutive, in-order phrase whose last term is a prefix.
+        """Deprecated: the phrase-prefix search that `search_prefix` replaced.
 
-        Built for as-you-type autocomplete: the terms must appear adjacent and in order in one of
-        `fields`, with the final term matched as a prefix — so "sagar s" matches "sagar.s@…" and
-        "Sagar Sharma", but not "sagar@…" (nothing follows "sagar") nor an address that merely
-        contains both words apart. A single term is a plain prefix match. Returns `(hits, count)`.
+        Kept with its semantics intact, so callers written against the old name keep getting what
+        that name promised: the terms must appear adjacent and in order in one of `fields`, with the
+        final one matched as a prefix — "jane d" matches "Jane Doe" but not "Jane Ann Doe".
+
+        `search_prefix` is the one to move to. It is looser, matching every term wherever it falls,
+        and it does not inherit what this carries: Tantivy expands the prefix to at most 50 terms,
+        so on a sizeable index a short prefix silently drops every match past those 50.
         """
+
+        deprecation_warning(
+            marked="2026-08-10",
+            graduation="v1",
+            msg=(
+                "SearchStore.search_phrase_prefix has been replaced by SearchStore.search_prefix, "
+                "which matches every term wherever it falls rather than as one adjacent phrase."
+            ),
+        )
 
         terms = [term for term in terms if term]
         if not terms:
@@ -168,12 +215,19 @@ class SearchStore:
         )
 
     def _run_search(
-        self, build_query, limit: int, offset: int, order_by: str | None
+        self, build_query, limit: int | None, offset: int, order_by: str | None
     ) -> tuple[list[dict], int]:
         """Open the index, build a query via `build_query(index)`, run it, and return `(hits, count)`.
 
-        Shared plumbing for `search`/`search_phrase_prefix`; swallows query errors (logged) into an
-        empty result so a malformed query never breaks the caller.
+        Shared plumbing for the `search*` methods; swallows query errors (logged) into an empty
+        result so a malformed query never breaks the caller. `limit=None` returns every match.
+
+        Everything runs against one searcher, which holds the segments as they stood when it was
+        made. That is what makes an unbounded fetch whole rather than nearly whole: Tantivy needs a
+        limit up front, so the fetch guesses a page and repeats with the count if it guessed short,
+        and both passes have to read the same index for the count to still describe what the second
+        pass fetches. Reopening between them would let a write land in between and leave the fetch
+        short of its own count — the very truncation `limit=None` exists to avoid.
         """
 
         # Nothing has been indexed yet for this key.
@@ -187,9 +241,17 @@ class SearchStore:
             index.reload()
 
             searcher = index.searcher()
-            result = searcher.search(
-                build_query(index), limit=limit, offset=offset, count=True, order_by_field=order_by
-            )
+            query = build_query(index)
+
+            page = UNBOUNDED_FETCH_PAGE if limit is None else limit
+            result = searcher.search(query, limit=page, offset=offset, count=True, order_by_field=order_by)
+
+            # Guessed short: ask this same searcher again, now knowing how many there are.
+            if limit is None and result.count - offset > page:
+                result = searcher.search(
+                    query, limit=result.count, offset=offset, count=True, order_by_field=order_by
+                )
+
             hits = [self._to_hit(searcher.doc(address), score) for score, address in result.hits]
             return (hits, result.count)
         except Exception:
@@ -198,8 +260,22 @@ class SearchStore:
             )
             return ([], 0)
 
+    def _build_prefix_query(self, terms: list[str], fields: list[str]) -> tantivy.Query:
+        """Build an all-terms-with-trailing-prefix query, matching within any one of `fields`."""
+
+        if len(fields) == 1:
+            return self._build_field_prefix_query(terms, fields[0])
+
+        # Match all the terms in any one of the fields.
+        clauses = [(tantivy.Occur.Should, self._build_field_prefix_query(terms, field)) for field in fields]
+        return tantivy.Query.boolean_query(clauses)
+
     def _build_phrase_prefix_query(self, terms: list[str], fields: list[str]) -> tantivy.Query:
-        """Build a phrase-prefix query over `terms`, matching in any one of `fields`."""
+        """Build a phrase-prefix query over `terms`, matching in any one of `fields`.
+
+        Only the deprecated `search_phrase_prefix` builds these; `search_prefix` deliberately does
+        not require the terms to be adjacent, and needs a prefix that expands without a cap.
+        """
 
         if len(fields) == 1:
             return tantivy.Query.phrase_prefix_query(self._schema, fields[0], terms)
@@ -209,6 +285,26 @@ class SearchStore:
             (tantivy.Occur.Should, tantivy.Query.phrase_prefix_query(self._schema, field, terms))
             for field in fields
         ]
+        return tantivy.Query.boolean_query(clauses)
+
+    def _build_field_prefix_query(self, terms: list[str], field: str) -> tantivy.Query:
+        """Require every term in `field`, matching the last one as a prefix.
+
+        The trailing term uses a zero-distance fuzzy *prefix* query rather than Tantivy's
+        phrase-prefix query: the latter expands a prefix to at most 50 terms, so on a sizeable
+        index a short prefix silently drops every match past those 50 — typing "j" would never
+        reach "jane@example.com" — while the automaton behind this one matches them all.
+        """
+
+        clauses = [
+            (tantivy.Occur.Must, tantivy.Query.term_query(self._schema, field, term)) for term in terms[:-1]
+        ]
+        clauses.append(
+            (
+                tantivy.Occur.Must,
+                tantivy.Query.fuzzy_term_query(self._schema, field, terms[-1], distance=0, prefix=True),
+            )
+        )
         return tantivy.Query.boolean_query(clauses)
 
     def drop(self) -> None:

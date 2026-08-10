@@ -1,5 +1,5 @@
 import type { Producer, Router } from 'mediasoup/types';
-import type { TranscriptSegment } from '../types';
+import type { ServerToClientEvents, TranscriptSegment } from '../types';
 import { loggers } from '../utils/logger';
 import { AudioIngester } from './AudioIngester';
 import { type ISttClient, MockSttClient, SttClient } from './SttClient';
@@ -11,14 +11,18 @@ interface SttManagerOptions {
 	allowMockFallback?: boolean;
 }
 
+type EmitSttToRoom = (
+	roomId: string,
+	event: 'stt:segment',
+	data: Parameters<ServerToClientEvents['stt:segment']>[0],
+) => void;
+
 export class SttManager {
 	private sttClient: ISttClient;
 	private activeSessions = new Map<string, AudioIngester>();
 	private roomSubscribers = new Map<string, Set<string>>();
 	private roomActiveSpeakers = new Map<string, Set<string>>();
-	private emitToRoom:
-		| ((roomId: string, event: string, data: unknown) => void)
-		| undefined;
+	private emitToRoom: EmitSttToRoom | undefined;
 	private getRouter: ((roomId: string) => Router | undefined) | undefined;
 
 	constructor(options: SttManagerOptions) {
@@ -36,9 +40,7 @@ export class SttManager {
 		}
 	}
 
-	setEmitToRoom(
-		fn: (roomId: string, event: string, data: unknown) => void,
-	): void {
+	setEmitToRoom(fn: EmitSttToRoom): void {
 		this.emitToRoom = fn;
 	}
 

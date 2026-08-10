@@ -74,7 +74,7 @@ provide("setScreenShareVideoRef", (consumerId: string, element: HTMLVideoElement
 });
 
 const attachmentRetryDelay = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
-const attachScreenShare = async (element: HTMLVideoElement, stream: MediaStream, onFailure: (error: unknown) => void): Promise<void> => {
+const attachScreenShare = async (element: HTMLVideoElement, stream: MediaStream, onFailure: (error: Error) => void): Promise<void> => {
 	while (!element.parentNode) await attachmentRetryDelay();
 	if (element.srcObject !== stream) element.srcObject = stream;
 	while (true) {
@@ -86,8 +86,9 @@ const attachScreenShare = async (element: HTMLVideoElement, stream: MediaStream,
 				await attachmentRetryDelay();
 				continue;
 			}
-			onFailure(error);
-			throw error;
+			const failure = error instanceof Error ? error : new Error("Screen playback failed");
+			onFailure(failure);
+			throw failure;
 		}
 	}
 };
@@ -102,5 +103,5 @@ const elapsed = computed(() => {
 </script>
 
 <style scoped>
-.stage{position:relative;display:flex;flex-direction:column;width:100vw;height:100vh;overflow:hidden;cursor:none;font:16px system-ui}.media{box-sizing:border-box}.rec{position:absolute;top:24px;right:28px;padding:8px 12px;border-radius:8px;background:#111c;font-variant-numeric:tabular-nums}.rec span{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444}.interruption{position:absolute;top:24px;left:50%;transform:translateX(-50%);padding:10px 16px;border-radius:8px;background:#991b1be8}.chat{position:absolute;right:28px;bottom:28px;display:grid;align-content:end;gap:8px;width:min(360px,calc(100vw - 56px));max-height:calc(100vh - 56px);overflow:hidden}
+.stage{position:relative;display:flex;flex-direction:column;width:100vw;height:100vh;overflow:hidden;cursor:none;font:16px system-ui}.media{box-sizing:border-box}.media :deep([data-active-speaker="true"]::after){content:"";position:absolute;inset:0;z-index:50;border:3px solid var(--outline-gray-4);border-radius:inherit;pointer-events:none}.rec{position:absolute;top:24px;right:28px;padding:8px 12px;border-radius:8px;background:#111c;font-variant-numeric:tabular-nums}.rec span{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444}.interruption{position:absolute;top:24px;left:50%;transform:translateX(-50%);padding:10px 16px;border-radius:8px;background:#991b1be8}.chat{position:absolute;right:28px;bottom:28px;display:grid;align-content:end;gap:8px;width:min(360px,calc(100vw - 56px));max-height:calc(100vh - 56px);overflow:hidden}
 </style>

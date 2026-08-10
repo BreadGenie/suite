@@ -46,11 +46,11 @@ const updatePresentationTitle = async (id, newTitle) => {
 		name: id,
 		title: newTitle,
 	}).then((response) => {
-		if (response) {
-			return response
-		} else {
-			throw new Error('Failed to rename presentation')
-		}
+		if (!response) throw new Error('Failed to rename presentation')
+		// autosave stamps this onto the local copy, so a stale value would make the
+		// next load discard edits that had not synced yet
+		if (presentationDoc.value?.name === id) presentationDoc.value.modified = response.modified
+		return response.slug
 	})
 }
 
@@ -230,18 +230,21 @@ const getPresentationResource = (name) => {
 
 			// restore unsynced local edits, but only if the server hasn't moved past them
 			const local = await getPresentationFromLocalDB(name)
-			if (local?.dirty && local.baseModified === doc.modified) {
-				const restored = JSON.parse(JSON.stringify(local.content))
-				// local content skips the load pipeline; migrate + dedup it here too
-				for (const slide of restored) {
-					slide.background = normalizeColor(slide.background)
-					slide.elements = parseElements(slide.elements, slide)
+			if (local?.dirty) {
+				if (local.baseModified === doc.modified) {
+					const restored = JSON.parse(JSON.stringify(local.content))
+					// local content skips the load pipeline; migrate + dedup it here too
+					for (const slide of restored) {
+						slide.background = normalizeColor(slide.background)
+						slide.elements = parseElements(slide.elements, slide)
+					}
+					ensureUniqueClientIds(restored)
+					slides.value = restored
+					slidesLength.value = slides.value.length
+					markDirty()
+					return
 				}
-				ensureUniqueClientIds(restored)
-				slides.value = restored
-				slidesLength.value = slides.value.length
-				markDirty()
-				return
+				toast.warning('Changes that never reached the server were discarded.')
 			}
 
 			slides.value = JSON.parse(JSON.stringify(doc.slides || []))
@@ -283,11 +286,16 @@ const savePresentationDoc = async (updatedSlides) => {
 		}
 	})
 
-	await presentationResource.value.setValue.submit({
+	const resource = presentationResource.value
+	const doc = await resource.setValue.submit({
 		slides: newSlides,
 	})
 
-	presentationDoc.value = presentationResource.value.doc
+	// the editor can move on mid-save, and repointing presentationDoc at whatever
+	// the resource ref holds now would stamp this save onto another presentation
+	if (presentationResource.value === resource) presentationDoc.value = resource.doc
+
+	return doc?.modified
 }
 
 const presentationResource = ref(null)

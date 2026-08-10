@@ -10,7 +10,7 @@ import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { JobManager } from './JobManager.js';
 import { JobStore } from './JobStore.js';
-import type { Logger } from './logger.js';
+import type { LogEntry, Logger } from './logger.js';
 import { FakeRendererBridge, TEST_PUBLIC_JWK } from './RendererBridge.js';
 import { COMMAND_AUDIENCE, COMMAND_TYPE, type CommandClaims } from './types.js';
 
@@ -36,13 +36,20 @@ const baseClaims = {
 } satisfies CommandClaims;
 
 function token(
-	overrides: Record<string, unknown> = {},
-	header: Record<string, unknown> = {},
+	overrides: Partial<Omit<CommandClaims, 'aud' | 'limits'>> & {
+		aud?: string;
+		limits?: CommandClaims['limits'];
+		extra?: boolean;
+	} = {},
+	header: { typ?: string; kid?: string } = {},
 ): string {
 	return jwt.sign(
 		{ ...baseClaims, jti: crypto.randomUUID(), ...overrides },
 		secret,
-		{ algorithm: 'HS256', header: { typ: COMMAND_TYPE, ...header } },
+		{
+			algorithm: 'HS256',
+			header: { alg: 'HS256', typ: COMMAND_TYPE, ...header },
+		},
 	);
 }
 
@@ -371,6 +378,68 @@ describe('JobStore and JobManager', () => {
 		);
 	});
 
+	it('does not block unrelated jobs while a health callback is pending', async () => {
+		const store = new JobStore(path);
+		await store.initialize();
+		const bridge = new FakeRendererBridge();
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const interrupted = vi.fn(async () => pending);
+		const manager = new JobManager(store, bridge, 2, undefined, interrupted);
+		await manager.reserve(baseClaims);
+		await bridge.emit({ job: 'job', type: 'configured' });
+		await bridge.emit({ job: 'job', type: 'proof_complete' });
+		await bridge.emit({ job: 'job', type: 'joined' });
+		await bridge.emit({ job: 'job', type: 'capture_ready' });
+
+		const delivery = bridge.emit({ job: 'job', type: 'interrupted' });
+		await vi.waitFor(() => expect(interrupted).toHaveBeenCalledOnce());
+		await expect(
+			manager.reserve({
+				...baseClaims,
+				job: 'job-2',
+				recording: 'recording-2',
+			}),
+		).resolves.toMatchObject({ status: 'accepted' });
+
+		release();
+		await delivery;
+	});
+
+	it('notifies the control plane when interrupted capture recovers', async () => {
+		const store = new JobStore(path);
+		await store.initialize();
+		const bridge = new FakeRendererBridge();
+		const recovered = vi.fn(async () => undefined);
+		const manager = new JobManager(
+			store,
+			bridge,
+			1,
+			undefined,
+			undefined,
+			async () => undefined,
+			recovered,
+		);
+		await manager.reserve(baseClaims);
+		await bridge.emit({ job: 'job', type: 'configured' });
+		await bridge.emit({ job: 'job', type: 'proof_complete' });
+		await bridge.emit({ job: 'job', type: 'joined' });
+		await bridge.emit({ job: 'job', type: 'capture_ready' });
+		await bridge.emit({ job: 'job', type: 'interrupted' });
+
+		await bridge.emit({ job: 'job', type: 'capture_ready' });
+
+		expect(recovered).toHaveBeenCalledWith(
+			expect.objectContaining({ job: 'job', state: 'capture_ready' }),
+		);
+		await bridge.emit({ job: 'job', type: 'interrupted' });
+		await bridge.emit({ job: 'job', type: 'capture_ready' });
+		expect(store.get('job')?.event_sequence).toBe(3);
+		expect(recovered).toHaveBeenCalledTimes(2);
+	});
+
 	it.each(['complete', 'partial', 'failed'] as const)(
 		'keeps %s terminal despite delayed lifecycle callbacks',
 		async (outcome) => {
@@ -582,7 +651,7 @@ describe('JobStore and JobManager', () => {
 describe('HTTP contract', () => {
 	let app: ReturnType<typeof createApp>;
 	let bridge: FakeRendererBridge;
-	let logs: Array<Record<string, unknown>>;
+	let logs: LogEntry[];
 	let config: Config;
 
 	beforeEach(async () => {
@@ -647,7 +716,13 @@ describe('HTTP contract', () => {
 			authenticated('POST', { job: 'job' }),
 		);
 		expect(reserve.status).toBe(202);
-		const reserveBody = (await reserve.json()) as Record<string, unknown>;
+		const reserveBody: {
+			status: 'accepted';
+			job: string;
+			accepted_at: string;
+			public_jwk: typeof TEST_PUBLIC_JWK;
+			state: string;
+		} = await reserve.json();
 		expect(Object.keys(reserveBody).sort()).toEqual([
 			'accepted_at',
 			'job',

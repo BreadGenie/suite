@@ -45,6 +45,7 @@ type RecordingEvent = {
 
 export function useRecording(meetingId: string) {
 	const state = ref<RecordingState | null>(null);
+	const globalEnabled = ref(false);
 	const requestId = ref<string | null>(null);
 	const socket = useSocket();
 	let stateVersion = 0;
@@ -77,18 +78,23 @@ export function useRecording(meetingId: string) {
 	});
 
 	const isLive = computed(() =>
-		["Recording", "Interrupted", "Stopping"].includes(state.value?.status || ""),
+		["Recording", "Interrupted"].includes(state.value?.status || ""),
 	);
 	const isStarting = computed(() => state.value?.status === "Pending");
 
 	async function loadState() {
 		try {
 			const version = stateVersion;
+			const recordingName = state.value?.name;
 			const revision = state.value?.state_revision;
 			const loaded = (await stateCall.submit({ meeting_id: meetingId })) ?? null;
 			if (stateVersion !== version) return;
 			if (state.value?.state_revision !== revision) return;
-			if (loaded && revision !== undefined && loaded.state_revision < revision)
+			if (
+				loaded?.name === recordingName &&
+				revision !== undefined &&
+				loaded.state_revision < revision
+			)
 				return;
 			setState(loaded);
 		} catch {
@@ -151,6 +157,7 @@ export function useRecording(meetingId: string) {
 		}
 		if (
 			state.value &&
+			event.recording.name === state.value.name &&
 			event.recording.state_revision < state.value.state_revision
 		)
 			return;
@@ -166,6 +173,10 @@ export function useRecording(meetingId: string) {
 		handleState({ meeting_id: meetingId, recording });
 	}
 
+	function setGlobalEnabled(enabled: boolean) {
+		globalEnabled.value = enabled;
+	}
+
 	onMounted(() => {
 		void loadState();
 		socket?.on("meeting:recording_state", handleState);
@@ -174,12 +185,14 @@ export function useRecording(meetingId: string) {
 
 	return {
 		state,
+		globalEnabled,
 		isLive,
 		isStarting,
 		preflightLoading: computed(() => preflightCall.loading),
 		startLoading: computed(() => startCall.loading),
 		stopLoading: computed(() => stopCall.loading),
 		getPreflight,
+		setGlobalEnabled,
 		syncState,
 		start,
 		stop,

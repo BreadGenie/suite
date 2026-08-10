@@ -1,4 +1,5 @@
 import type { Server } from 'socket.io';
+import type { SFUConfig } from '../config';
 import type { MediasoupManager } from '../mediasoup/MediasoupManager';
 import type { SttManager } from '../stt/SttManager';
 import type { Telemetry } from '../telemetry/Telemetry';
@@ -49,6 +50,7 @@ export class SocketHandlerManager {
 		authManager: AuthManager,
 		telemetry: Telemetry,
 		roster: E2eeRosterStore,
+		private readonly runtime: SFUConfig['runtime'],
 		coordinatorPersistence?: E2eeCoordinatorPersistence,
 		private readonly recordingGrantManager?: RecordingGrantManager,
 		sttManager?: SttManager,
@@ -66,6 +68,7 @@ export class SocketHandlerManager {
 			coordinatorPersistence,
 			this.rateLimiter,
 			telemetry,
+			this.runtime.bypassRateLimits,
 		);
 		this.e2eeEpochRelay.setRoster(roster);
 		sttManager?.setEmitToRoom((roomId, event, data) => {
@@ -82,6 +85,7 @@ export class SocketHandlerManager {
 			e2eeEpochRelay: this.e2eeEpochRelay,
 			e2eeRoster: roster,
 			telemetry,
+			runtime: this.runtime,
 		};
 
 		this.registerHandlers = [

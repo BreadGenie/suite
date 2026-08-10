@@ -1,21 +1,22 @@
 import { toast } from "frappe-ui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "vue";
+import type { RecordingState } from "../useRecording";
 
 const mocks = vi.hoisted(() => ({
 	startParams: [] as Array<{ meeting_id: string; request_id: string }>,
 	startCount: 0,
-	startResults: [] as Array<Record<string, unknown>>,
+	startResults: [] as Array<RecordingState | { status: "Rejected" }>,
 	getStateCount: 0,
 	getStateCompleted: 0,
 	getStateResults: [] as Array<
-		| Record<string, unknown>
+		| RecordingState
 		| null
-		| Promise<Record<string, unknown> | null>
+		| Promise<RecordingState | null>
 	>,
 	socketHandler: null as ((event: {
 		meeting_id: string;
-		recording: Record<string, unknown> | null;
+		recording: RecordingState | null;
 	}) => void) | null,
 	stopped: false,
 }));
@@ -106,11 +107,12 @@ describe("useRecording", () => {
 		await recording.start();
 		await recording.stop();
 		expect(recording.state.value?.status).toBe("Stopping");
+		expect(recording.isLive.value).toBe(false);
 	});
 
 	it("does not let a stale state load overwrite a newer command revision", async () => {
-		let resolveStale!: (value: Record<string, unknown>) => void;
-		const stale = new Promise<Record<string, unknown>>((resolve) => {
+		let resolveStale!: (value: RecordingState) => void;
+		const stale = new Promise<RecordingState>((resolve) => {
 			resolveStale = resolve;
 		});
 		mocks.getStateResults.push(stale, {
@@ -136,8 +138,8 @@ describe("useRecording", () => {
 	});
 
 	it("does not resurrect state after a realtime null transition", async () => {
-		let resolveStale!: (value: Record<string, unknown>) => void;
-		mocks.getStateResults.push(new Promise<Record<string, unknown>>((resolve) => {
+		let resolveStale!: (value: RecordingState) => void;
+		mocks.getStateResults.push(new Promise<RecordingState>((resolve) => {
 			resolveStale = resolve;
 		}));
 		let recording!: ReturnType<typeof useRecording>;
@@ -174,6 +176,32 @@ describe("useRecording", () => {
 		expect(recording.state.value?.status).toBe("Recording");
 		expect(recording.isLive.value).toBe(true);
 		expect(toast.info).toHaveBeenCalledWith("This meeting is being recorded");
+	});
+
+	it("accepts a new recording session with a lower revision", () => {
+		const recording = useRecording("room");
+		recording.syncState({
+			name: "old-recording",
+			status: "Processing",
+			state_revision: 4,
+		});
+
+		recording.syncState({
+			name: "new-recording",
+			status: "Recording",
+			state_revision: 1,
+		});
+
+		expect(recording.state.value?.name).toBe("new-recording");
+		expect(recording.isLive.value).toBe(true);
+	});
+
+	it("tracks global recording availability", () => {
+		const recording = useRecording("room");
+
+		expect(recording.globalEnabled.value).toBe(false);
+		recording.setGlobalEnabled(true);
+		expect(recording.globalEnabled.value).toBe(true);
 	});
 
 	it("does not store or announce an explicit capacity rejection as started", async () => {

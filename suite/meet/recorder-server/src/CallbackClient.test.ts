@@ -10,6 +10,7 @@ import type { JobRecord } from './types.js';
 const roots: string[] = [];
 
 afterEach(async () => {
+	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	await Promise.all(
 		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -52,7 +53,72 @@ describe('CallbackClient', () => {
 		});
 	});
 
-	it('uploads a finalized artifact with scoped chunk tokens', async () => {
+	it('publishes recovery for the active interruption sequence', async () => {
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: { status: 'Recording' } }), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' },
+				}),
+		);
+		vi.stubGlobal('fetch', fetch);
+		const job = {
+			job: 'job',
+			site: 'site.test',
+			origin: 'https://site.test',
+			room: 'room',
+			recording: 'recording',
+			state: 'capture_ready',
+		} as JobRecord;
+
+		await new CallbackClient({
+			origin: 'https://site.test',
+			site: 'site.test',
+			secret: 's'.repeat(32),
+			dataRoot: '/tmp',
+		}).recovered(job);
+
+		expect(String(fetch.mock.calls[0]?.[0])).toContain('recorder_recovered');
+		expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+			recording_id: 'recording',
+			job: 'job',
+			event_sequence: 2,
+		});
+	});
+
+	it('publishes later interruption cycles with their persisted sequence', async () => {
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: { status: 'Interrupted' } }), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' },
+				}),
+		);
+		vi.stubGlobal('fetch', fetch);
+		const job = {
+			job: 'job',
+			site: 'site.test',
+			origin: 'https://site.test',
+			room: 'room',
+			recording: 'recording',
+			state: 'interrupted',
+			event_sequence: 4,
+		} as JobRecord;
+
+		await new CallbackClient({
+			origin: 'https://site.test',
+			site: 'site.test',
+			secret: 's'.repeat(32),
+			dataRoot: '/tmp',
+		}).interrupted(job);
+
+		expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual(
+			expect.objectContaining({ event_sequence: 4 }),
+		);
+	});
+
+	it('rejects string offsets while uploading with scoped chunk tokens', async () => {
+		vi.useFakeTimers();
 		const root = join(tmpdir(), `callback-client-${crypto.randomUUID()}`);
 		roots.push(root);
 		const content = Buffer.from('recording artifact');
@@ -100,10 +166,12 @@ describe('CallbackClient', () => {
 			requests.push({ url: String(url), init });
 			const message =
 				requests.length === 1
-					? { offset: 0, complete: false }
+					? { offset: '0', complete: false }
 					: requests.length === 2
-						? { offset: content.length }
-						: { artifact: 'file', status: 'Ready' };
+						? { offset: 0, complete: false }
+						: requests.length === 3
+							? { offset: content.length }
+							: { artifact: 'file', status: 'Ready' };
 			return new Response(JSON.stringify({ message }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' },
@@ -112,15 +180,19 @@ describe('CallbackClient', () => {
 		vi.stubGlobal('fetch', fetch);
 		const secret = 's'.repeat(32);
 
-		await new CallbackClient({
+		const upload = new CallbackClient({
 			origin: 'https://site.test',
 			site: 'site.test',
 			secret,
 			dataRoot: root,
 		}).upload(job);
+		await vi.advanceTimersByTimeAsync(1_000);
+		await upload;
 
-		expect(requests).toHaveLength(3);
-		expect(JSON.parse(String(requests[0]?.init.body))).toMatchObject({
+		expect(requests).toHaveLength(4);
+		expect(requests[0]?.url).toContain('recorder_stopped');
+		expect(requests[1]?.url).toContain('recorder_stopped');
+		expect(JSON.parse(String(requests[1]?.init.body))).toMatchObject({
 			gaps: [
 				{
 					started_at: '2026-01-01T00:00:59.000Z',
@@ -129,8 +201,8 @@ describe('CallbackClient', () => {
 				},
 			],
 		});
-		expect(Buffer.from(requests[1]?.init.body as Uint8Array)).toEqual(content);
-		const authorization = new Headers(requests[1]?.init.headers).get(
+		expect(Buffer.from(requests[2]?.init.body as Uint8Array)).toEqual(content);
+		const authorization = new Headers(requests[2]?.init.headers).get(
 			'X-Meet-Recorder-Authorization',
 		);
 		const token = authorization?.slice('Bearer '.length) ?? '';

@@ -6,7 +6,7 @@ const presentationDoc = ref<any>({ modified: 'M1' })
 const inReadonlyMode = ref(false)
 const slides = ref<any[]>([{ clientId: 'c1', background: '#ff0000ff', elements: [] }])
 
-let serverSave: (content: any) => Promise<void>
+let serverSave: (content: any) => Promise<string | undefined>
 
 vi.mock('@/apps/slides/stores/presentation', () => ({
 	presentationId,
@@ -30,6 +30,7 @@ describe('saveCurrentState', () => {
 		slides.value = [{ clientId: 'c1', background: '#ff0000ff', elements: [] }]
 		serverSave = async () => {
 			presentationDoc.value = { modified: 'M2' }
+			return 'M2'
 		}
 	})
 
@@ -41,6 +42,7 @@ describe('saveCurrentState', () => {
 			slides.value[0].background = '#00ff00ff'
 			markDirty()
 			presentationDoc.value = { modified: 'M2' }
+			return 'M2'
 		}
 
 		await saveCurrentState()
@@ -51,23 +53,44 @@ describe('saveCurrentState', () => {
 		expect(local.content[0].background).toBe('#00ff00ff')
 	})
 
-	it('leaves the local copy alone when the editor moved on mid-save', async () => {
+	it('records the version the server took when the editor moved on mid-save', async () => {
 		markDirty()
 
 		serverSave = async () => {
-			// resetEditorState() blanks slides but leaves presentationId and the resource,
-			// and savePresentationDoc then repoints presentationDoc at the old doc
+			// resetEditorState() blanks slides, then the editor loads another presentation
 			slides.value = []
 			markDirty()
 			presentationId.value = 'p2'
-			presentationDoc.value = { modified: 'M2' }
+			// presentationDoc belongs to p2 by now, so baseModified has to come
+			// from what this save returned
+			presentationDoc.value = { modified: 'M9' }
+			return 'M2'
 		}
 
 		await saveCurrentState()
 
 		const local: any = await getPresentationFromLocalDB('p1')
+		// the snapshot the server took, not the blanked slides of the presentation
+		// the editor moved on to
 		expect(local.content).toHaveLength(1)
-		expect(local.baseModified).toBe('M1')
+		expect(local.dirty).toBe(false)
+		expect(local.baseModified).toBe('M2')
+	})
+
+	it('still marks the local copy clean when the editor moved on without editing', async () => {
+		markDirty()
+
+		serverSave = async () => {
+			presentationId.value = 'p2'
+			presentationDoc.value = { modified: 'M2' }
+			return 'M2'
+		}
+
+		await saveCurrentState()
+
+		const local: any = await getPresentationFromLocalDB('p1')
+		expect(local.dirty).toBe(false)
+		expect(local.baseModified).toBe('M2')
 	})
 
 	it('marks the local copy clean when nothing changed during the save', async () => {

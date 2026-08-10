@@ -1,5 +1,5 @@
 <template>
-	<div class="flex flex-col gap-3 py-3">
+	<div class="flex flex-col gap-3 py-3" :class="{ 'cursor-not-allowed': sectionInert }">
 		<div class="flex cursor-pointer items-center justify-between" @click="toggleContent">
 			<span :class="labelClasses">{{ label }}</span>
 			<lucide-chevron-down
@@ -8,14 +8,21 @@
 			/>
 		</div>
 
-		<div v-if="showContent" class="flex flex-col gap-2">
+		<div
+			v-if="showContent"
+			class="flex flex-col gap-2"
+			:inert="sectionInert"
+			:class="{ '[&_*]:text-ink-gray-5': sectionInert }"
+		>
 			<slot />
 		</div>
 	</div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { inject, ref } from 'vue'
+
+const sectionInert = inject('sectionInert', false)
 
 const props = defineProps({
 	label: String,

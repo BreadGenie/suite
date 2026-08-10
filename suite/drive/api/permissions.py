@@ -105,16 +105,18 @@ def _ref_doc_access(entity, user):
 
 
 @frappe.whitelist(allow_guest=True)
-def get_entity_with_permissions(entity_name: str):
+def get_entity_with_permissions(entity_name: str | None = None):
     """
     Return file data with permissions
     """
-    entity = frappe.get_all(
-        "File",
-        filters={"name": entity_name, "status": STATUS_ACTIVE},
-        fields=FILE_FIELDS,
-        limit=1,
-    )
+    entity = None
+    if entity_name:
+        entity = frappe.get_all(
+            "File",
+            filters={"name": entity_name, "status": STATUS_ACTIVE},
+            fields=FILE_FIELDS,
+            limit=1,
+        )
     if not entity:
         # Mimic API v2 points
         frappe.local.response.errors = [

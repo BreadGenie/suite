@@ -1,5 +1,9 @@
 import { ref, computed, nextTick } from 'vue'
-import { applyReverseTransition, presentationDoc } from '@/apps/slides/stores/presentation'
+import {
+	applyReverseTransition,
+	presentationDoc,
+	presentationId,
+} from '@/apps/slides/stores/presentation'
 import { focusedSlide, slideIndex, slides, setSlideIndex } from '@/apps/slides/stores/slide'
 
 import { router } from '@/apps/slides/router'
@@ -79,7 +83,10 @@ const getAssetUrl = (url) => {
 	if (presentationDoc.value?.owner === user || user === 'Administrator') {
 		return url
 	}
-	return `/api/method/suite.slides.api.file.get_media_file?src=${encodeURIComponent(url)}`
+	if (!presentationId.value) return url
+	return `/api/method/suite.slides.api.file.get_media_file?src=${encodeURIComponent(
+		url,
+	)}&presentation=${encodeURIComponent(presentationId.value)}`
 }
 
 const prefetchAsset = async (src, type) => {

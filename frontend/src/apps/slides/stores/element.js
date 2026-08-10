@@ -30,6 +30,8 @@ import {
 	removeElementCommand,
 } from '@/apps/slides/stores/commands'
 
+const findSlideElement = (id) => currentSlide.value?.elements.find((el) => el.id === id)
+
 const activeElementIds = ref([])
 const focusElementId = ref(null)
 const pairElementId = ref(null)
@@ -48,6 +50,18 @@ const activeElements = computed(() => {
 	return elements
 })
 
+const isSelectionLocked = computed(
+	() => activeElements.value.length > 0 && activeElements.value.every((el) => el.locked),
+)
+
+const hasLockedElements = computed(
+	() => currentSlide.value?.elements.some((el) => el.locked) ?? false,
+)
+
+const hasUnlockedElements = computed(
+	() => currentSlide.value?.elements.some((el) => !el.locked) ?? false,
+)
+
 const activeElement = computed(() => {
 	if (focusElementId.value) {
 		return currentSlide.value?.elements.find((element) => element.id === focusElementId.value)
@@ -61,6 +75,42 @@ const setActiveElements = (ids) => {
 	activeElementIds.value = ids
 	focusElementId.value = null
 }
+
+const setLocked = (elementIds, locked) => {
+	// the command carries one oldValue for the whole batch, so only pass ids that change
+	const idsToSet = elementIds.filter((id) => {
+		const element = findSlideElement(id)
+		return element && !!element.locked !== locked
+	})
+	if (!idsToSet.length) return
+
+	commandHistory.execute(
+		editElementCommand({
+			slideId: currentSlide.value.clientId,
+			elementIds: idsToSet,
+			property: 'locked',
+			oldValue: locked ? undefined : true,
+			newValue: locked ? true : undefined,
+		}),
+	)
+}
+
+const toggleLock = async () => {
+	const ids = [...activeElementIds.value]
+	if (!ids.length) return
+
+	const locking = !isSelectionLocked.value
+	if (locking && focusElementId.value) {
+		exitTextEditing()
+		await nextTick()
+	}
+
+	setLocked(ids, locking)
+}
+
+const lockAll = () => setLocked((currentSlide.value?.elements || []).map((el) => el.id), true)
+
+const unlockAll = () => setLocked((currentSlide.value?.elements || []).map((el) => el.id), false)
 
 const getElementContent = (element) => {
 	const contentJSON = {
@@ -642,6 +692,7 @@ const duplicateElements = async (e, elements, srcSlide, toDisplace = true) => {
 	sortedElements.forEach((element, index) => {
 		let newElement = JSON.parse(JSON.stringify(element))
 		newElement.id = generateUniqueId()
+		delete newElement.locked
 		newElement.zIndex = baseZIndex + index + 1
 		newElement.top += displaceByPx
 		newElement.left += displaceByPx
@@ -668,7 +719,8 @@ const duplicateElements = async (e, elements, srcSlide, toDisplace = true) => {
 }
 
 const deleteElements = async (e, ids) => {
-	const idsToDelete = ids || activeElementIds.value
+	const idsToDelete = (ids || activeElementIds.value).filter((id) => !findSlideElement(id)?.locked)
+	if (!idsToDelete.length) return
 	await resetFocus()
 	let commands = []
 
@@ -712,9 +764,15 @@ const deleteElements = async (e, ids) => {
 	)
 }
 
+// a selection skips locked elements, unless that would leave nothing to select
+const selectableIds = (ids) => {
+	const unlocked = ids.filter((id) => !findSlideElement(id)?.locked)
+	return unlocked.length ? unlocked : ids
+}
+
 const selectAllElements = (e) => {
-	e.preventDefault()
-	activeElementIds.value = currentSlide.value.elements.map((element) => element.id)
+	e?.preventDefault()
+	activeElementIds.value = selectableIds(currentSlide.value.elements.map((el) => el.id))
 }
 
 const resetFocus = () => {
@@ -866,13 +924,16 @@ const setEditableState = () => {
 const initEditorForElement = (element) => {
 	if (element?.type == 'text') {
 		const isEditable = focusElementId.value == element.id
-		initTextEditor(element.id, element.content, isEditable, element.editorMetadata?.lineHeight)
+		initTextEditor(
+			element.id,
+			element.content,
+			isEditable,
+			element.locked ? null : element.editorMetadata?.lineHeight,
+		)
 
 		if (isEditable) setEditableState()
 	}
 }
-
-const findSlideElement = (id) => currentSlide.value?.elements.find((el) => el.id === id)
 
 const replaceEditor = (fn) =>
 	nextTick(() => {
@@ -918,6 +979,15 @@ watch(
 	},
 )
 
+// undo and redo can set locked underneath an element that is already being
+// edited, which no call-site guard covers
+watch(
+	() => !!focusElementId.value && !!findSlideElement(focusElementId.value)?.locked,
+	(locked) => {
+		if (locked) nextTick(exitTextEditing)
+	},
+)
+
 const normalizeZIndices = (elements) => {
 	const els = cloneObj(elements).sort((a, b) => {
 		const zIndexA = a.zIndex || 1
@@ -936,13 +1006,6 @@ const normalizeZIndices = (elements) => {
 	})
 
 	return elements
-}
-
-const findElement = (state, slideId, elementId) => {
-	const slide = state.find((s) => s.clientId === slideId)
-	if (!slide) return null
-
-	return slide.elements.find((el) => el.id === elementId)
 }
 
 const cropSelectionToFitContent = (elementIds) => {
@@ -1003,6 +1066,8 @@ const updatePosition = (axis, value) => {
 }
 
 const flipElements = (direction) => {
+	if (isSelectionLocked.value) return
+
 	const property = direction == 'horizontal' ? 'invertX' : 'invertY'
 
 	const commands = activeElements.value.map((element) => {
@@ -1052,6 +1117,12 @@ export {
 	dragOccurred,
 	activeElements,
 	activeElement,
+	isSelectionLocked,
+	hasLockedElements,
+	hasUnlockedElements,
+	toggleLock,
+	lockAll,
+	unlockAll,
 	setActiveElements,
 	resetFocus,
 	exitTextEditing,
@@ -1061,6 +1132,7 @@ export {
 	duplicateElements,
 	deleteElements,
 	selectAllElements,
+	selectableIds,
 	getElementPosition,
 	addFixedWidthToElement,
 	ensureExplicitHeight,
@@ -1071,7 +1143,7 @@ export {
 	isWithinOverlappingBounds,
 	updatePosition,
 	flipElements,
-	findElement,
+	findSlideElement,
 	cropSelectionToFitContent,
 	getElementCenter,
 }

@@ -45,8 +45,10 @@ services:
       - METRICS_TOKEN=${METRICS_TOKEN:-}
       - PORT=${PORT:-3000}
       - HOST=${HOST:-127.0.0.1}
+      - SOCKET_PING_TIMEOUT=${SOCKET_PING_TIMEOUT:-60000}
+      - SOCKET_PING_INTERVAL=${SOCKET_PING_INTERVAL:-25000}
       - WEBRTC_LISTEN_IP=${WEBRTC_LISTEN_IP:-}
-      - WEBRTC_ANNOUNCED_IP=${WEBRTC_ANNOUNCED_IP}
+      - WEBRTC_ANNOUNCED_IP=${WEBRTC_ANNOUNCED_IP:?WEBRTC_ANNOUNCED_IP is required}
       - WEBRTC_SERVER_PORT=${WEBRTC_SERVER_PORT:-40000}
       - MEDIASOUP_NUM_WORKERS=${MEDIASOUP_NUM_WORKERS:-}
       - MEDIASOUP_WORKER_LOGLEVEL=${MEDIASOUP_WORKER_LOGLEVEL:-warn}
@@ -119,6 +121,7 @@ services:
     environment:
       - DOMAIN=${DOMAIN}
       - SFU_UPSTREAM=127.0.0.1:${PORT:-3000}
+      - RECORDER_UPSTREAM=127.0.0.1:${RECORDER_PORT:-3010}
     # nginx:alpine uses envsubst automatically on /etc/nginx/templates/*.template
     # Note: deploy.sh handles startup order (SFU first, then nginx)
     logging:
@@ -144,7 +147,36 @@ services:
         max-size: "10m"
         max-file: "2"
 
+  alloy:
+    image: grafana/alloy:v1.18.1@sha256:0f4434c92b3e6cdac38bb129b344e1790c246f7b6e2eaffcc16a5fa363240e33
+    restart: unless-stopped
+    profiles:
+      - observability
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/sfu.alloy
+    environment:
+      - ALLOY_ENVIRONMENT=${ALLOY_ENVIRONMENT:-production}
+      - ALLOY_HOST=${ALLOY_HOST:-}
+      - LOKI_PUSH_URL=${LOKI_PUSH_URL:-}
+      - LOKI_PUSH_USER=${LOKI_PUSH_USER:-alloy}
+    volumes:
+      - ./alloy/sfu.alloy:/etc/alloy/sfu.alloy:ro
+      - ./secrets/loki-password:/run/secrets/loki-password:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
 volumes:
+  alloy-data:
   sfu-grants:
   recorder-data:
   certbot-webroot:

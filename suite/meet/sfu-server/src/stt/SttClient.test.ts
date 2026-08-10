@@ -3,6 +3,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { SttClient, type SttTranscriptEvent } from './SttClient';
 
+interface ClientEvent {
+	type?: string;
+	audio?: string;
+	session?: {
+		type?: string;
+		audio?: { input?: { format?: { type?: string; rate?: number } } };
+	};
+}
+
 describe('SttClient Realtime protocol', () => {
 	let server: Server | undefined;
 	let websocketServer: WebSocketServer | undefined;
@@ -31,7 +40,7 @@ describe('SttClient Realtime protocol', () => {
 		if (!address || typeof address === 'string')
 			throw new Error('Missing test server address');
 
-		const clientEvents: Record<string, unknown>[] = [];
+		const clientEvents: ClientEvent[] = [];
 		websocketServer.on('connection', (socket) => {
 			socket.send(
 				JSON.stringify({
@@ -41,7 +50,7 @@ describe('SttClient Realtime protocol', () => {
 				}),
 			);
 			socket.on('message', (raw) => {
-				const event = JSON.parse(raw.toString()) as Record<string, unknown>;
+				const event = JSON.parse(raw.toString()) as ClientEvent;
 				clientEvents.push(event);
 				if (event.type === 'session.update') {
 					socket.send(
