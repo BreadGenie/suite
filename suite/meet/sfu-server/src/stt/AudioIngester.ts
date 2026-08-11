@@ -12,6 +12,7 @@ import type {
 	RtpCapabilities,
 } from 'mediasoup/types';
 import { loggers } from '../utils/logger';
+import { AudioPreRoll } from './AudioPreRoll';
 import { updatePcmCaptureTranscript, writePcmCapture } from './PcmCapture';
 import type { ISttClient, ISttStream } from './SttClient';
 
@@ -37,6 +38,12 @@ const OUTPUT_CHANNELS = 1; // ASR input is mono; Meet still publishes stereo Opu
 const VAD_CHECK_MS = 100;
 /** Bytes of audio per VAD check */
 const BYTES_PER_CHECK = (SAMPLE_RATE * BYTES_PER_SAMPLE * VAD_CHECK_MS) / 1000;
+const PRE_ROLL_CHECKS = Math.max(
+	0,
+	Math.ceil(
+		Number.parseInt(process.env.STT_PRE_ROLL_MS || '300', 10) / VAD_CHECK_MS,
+	),
+);
 
 /** Consecutive silent checks before we flush (500 ms pause by default) */
 const SILENCE_CHECKS_TO_FLUSH = Math.max(
@@ -115,6 +122,7 @@ export class AudioIngester {
 	private isInSpeech = false;
 	private vadTimer: NodeJS.Timeout | null = null;
 	private streamedBytes = 0;
+	private preRoll = new AudioPreRoll(PRE_ROLL_CHECKS);
 
 	constructor(options: AudioIngesterOptions) {
 		this.roomId = options.roomId;
@@ -355,6 +363,11 @@ export class AudioIngester {
 		const isSpeech = rms > SPEECH_RMS_THRESHOLD;
 
 		if (isSpeech) {
+			if (!this.isInSpeech) {
+				for (const preRollFrame of this.preRoll.drain()) {
+					this.sendFrame(preRollFrame);
+				}
+			}
 			this.silenceCheckCount = 0;
 			this.speechCheckCount++;
 			this.isInSpeech = true;
@@ -363,6 +376,8 @@ export class AudioIngester {
 			this.silenceCheckCount++;
 			if (this.isInSpeech) {
 				this.sendFrame(frame);
+			} else {
+				this.preRoll.remember(frame);
 			}
 		}
 
@@ -430,6 +445,7 @@ export class AudioIngester {
 		this.isInSpeech = false;
 		this.streamedBytes = 0;
 		this.captureFrames = [];
+		this.preRoll.clear();
 	}
 
 	private writeCapture(durationMs: number): void {

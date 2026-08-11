@@ -151,6 +151,10 @@ class FinalDecoder:
         return self.last_text
 
 
+def final_transcribe(audio: np.ndarray) -> str:
+    return FinalDecoder().transcribe(audio)
+
+
 def _streaming_value(value):
     if isinstance(value, list | tuple):
         return value[1] if len(value) > 1 else value[0]
@@ -323,29 +327,14 @@ class RealtimeTranscriptionSession:
         tail = self.resampler.flush()
         if tail.size:
             self.utterance_audio.append(tail)
-            if not self.incremental_failed:
-                try:
-                    self.incremental_decoder.feed(tail)
-                except Exception as incremental_error:
-                    self.incremental_failed = True
-                    _label(event="incremental_fallback", error=str(incremental_error))
-        if self.incremental_failed:
-            audio = np.concatenate(self.utterance_audio)
-            if NEMOTRON_FINAL_SILENCE_MS > 0:
-                audio = np.pad(
-                    audio,
-                    (0, int(MODEL_SAMPLE_RATE * NEMOTRON_FINAL_SILENCE_MS / 1000)),
-                )
-            text = FinalDecoder().transcribe(audio)
-            self.incremental_decoder.reset()
-        else:
-            if NEMOTRON_FINAL_SILENCE_MS > 0:
-                silence = np.zeros(
-                    int(MODEL_SAMPLE_RATE * NEMOTRON_FINAL_SILENCE_MS / 1000),
-                    dtype=np.float32,
-                )
-                self.incremental_decoder.feed(silence)
-            text = self.incremental_decoder.flush()
+        audio = np.concatenate(self.utterance_audio)
+        if NEMOTRON_FINAL_SILENCE_MS > 0:
+            audio = np.pad(
+                audio,
+                (0, int(MODEL_SAMPLE_RATE * NEMOTRON_FINAL_SILENCE_MS / 1000)),
+            )
+        text = FinalDecoder().transcribe(audio)
+        self.incremental_decoder.reset()
         self.reset_utterance()
         return text
 
@@ -541,7 +530,7 @@ async def transcribe_audio_file(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    text = await run_inference(resolved_language, direct_transcribe, audio)
+    text = await run_inference(resolved_language, final_transcribe, audio)
     if response_format == "text":
         return PlainTextResponse(text)
     if response_format == "verbose_json":

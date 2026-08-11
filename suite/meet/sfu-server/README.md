@@ -29,6 +29,7 @@ Set `STT_SERVER_URL` to an externally managed STT backend. The SFU deployment do
 | `STT_MIN_TAIL_MS` | Minimum speech duration for short utterance final | `200` |
 | `STT_SHORT_UTTERANCE_SILENCE_MS` | Silence duration before finalizing short utterances | `700` |
 | `STT_VAD_THRESHOLD` | Speech detection sensitivity (0.0–1.0) | `0.012` |
+| `STT_PRE_ROLL_MS` | Audio retained before speech detection to avoid clipped words | `300` |
 | `HF_TOKEN` | Hugging Face token (optional, avoids rate limits) | — |
 
 ## Development Setup
