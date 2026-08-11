@@ -1,19 +1,57 @@
 import { ref, reactive, watch } from 'vue'
 import { Editor } from '@tiptap/vue-3'
-import { extensions } from '@/apps/slides/stores/tiptapSetup'
+import { extensions, patchEmptyParagraphs } from '@/apps/slides/stores/tiptapSetup'
 import { TextSelection } from 'prosemirror-state'
 import { commandHistory } from '@/apps/slides/stores/historyMeta'
 import { markDirty } from '@/apps/slides/stores/saving'
-import { activeElement } from '@/apps/slides/stores/element'
+import {
+	activeElement,
+	findSlideElement,
+	getInitialShapeTextContent,
+} from '@/apps/slides/stores/element'
 import { editElementCommand } from '@/apps/slides/stores/commands'
 import { currentSlide } from '@/apps/slides/stores/slide'
 
 export const activeEditor = ref(null)
 
-const contentHistory = ref('')
+// the element this editor was built for: activeElement flips a tick earlier
+let editorElement = null
+let editorSlideId = null
+let lastCompositionId = null
+let stopContentWatch = null
 
-let lastFocusedSlideName = null
-let lastFocusedElementId = null
+let suppressRecording = false
+
+const withRecordingSuppressed = (fn) => {
+	suppressRecording = true
+	try {
+		return fn()
+	} finally {
+		suppressRecording = false
+	}
+}
+
+const patchedHTML = (html) => (html ? patchEmptyParagraphs(html).updatedHTML : html)
+
+const isEditorLive = () => activeEditor.value && editorElement?.id === activeElement.value?.id
+
+// history writes state; the mounted editor has to be told
+const reconcileEditorContent = (html) => {
+	if (!isEditorLive()) return
+
+	const editor = activeEditor.value
+
+	if (html == null) {
+		if (activeElement.value?.type !== 'shape') return
+		const seed = getInitialShapeTextContent(activeElement.value)
+		withRecordingSuppressed(() => editor.commands.setContent(seed, { emitUpdate: false }))
+		return
+	}
+
+	if (patchedHTML(editor.getHTML()) === html) return
+
+	withRecordingSuppressed(() => editor.commands.setContent(html, { emitUpdate: false }))
+}
 
 const editorStyles = reactive({
 	textAlign: null,
@@ -57,8 +95,31 @@ export const useTextEditor = () => {
 	}
 
 	const updateElementContent = (editor) => {
-		activeElement.value.content = editor.getHTML()
+		if (!editorElement) return
+		editorElement.content = patchedHTML(editor.getHTML())
 		markDirty()
+	}
+
+	const recordContentEdit = (oldValue, transaction) => {
+		const compositionId = transaction.getMeta('composition')
+		// an IME candidate pause routinely outlasts the coalesce window
+		const forceCoalesce = compositionId != null && compositionId === lastCompositionId
+		lastCompositionId = compositionId
+
+		const newValue = editorElement.content
+		if (!commandHistory || oldValue === newValue) return
+
+		commandHistory.record(
+			editElementCommand({
+				slideId: editorSlideId,
+				elementIds: [editorElement.id],
+				property: 'content',
+				oldValue,
+				newValue,
+				coalesceKey: `content:${editorSlideId}:${editorElement.id}`,
+			}),
+			{ forceCoalesce },
+		)
 	}
 
 	const handleOnTransaction = (editor, transaction) => {
@@ -68,33 +129,15 @@ export const useTextEditor = () => {
 		// since onUpdate also triggers when activeEditor changes from one text box to another
 		// leading to overwriting content for second one with first one's content
 
+		// history and init pushes must leave no trace at all
+		if (suppressRecording || !editorElement) return setEditorStyles(editor)
+
+		const oldValue = patchedHTML(editorElement.content)
+
 		updateElementContent(editor)
 		setEditorStyles(editor)
-	}
 
-	const handleOnFocus = (editor) => {
-		if (!editor) return
-		lastFocusedSlideName = currentSlide.value.clientId
-		lastFocusedElementId = activeElement.value.id
-		contentHistory.value = editor.getHTML()
-	}
-
-	const handleOnBlur = (editor) => {
-		if (!editor) return
-		if (contentHistory.value == editor.getHTML()) return
-		if (!commandHistory) return
-
-		commandHistory.execute(
-			editElementCommand({
-				slideId: lastFocusedSlideName,
-				elementIds: [lastFocusedElementId],
-				property: 'content',
-				oldValue: contentHistory.value,
-				newValue: editor.getHTML(),
-				// saving on blur must not pull selection back to this element
-				skipJumpOnExecute: true,
-			}),
-		)
+		recordContentEdit(oldValue, transaction)
 	}
 
 	const markCommands = {
@@ -207,24 +250,34 @@ export const useTextEditor = () => {
 	}
 
 	const initTextEditor = (id, content, isEditable = false, initialLineHeight = null) => {
-		activeEditor.value = new Editor({
-			extensions: extensions,
-			editable: isEditable,
-			content: content,
-			// to update styles in sidebar based on cursor position
-			onSelectionUpdate: ({ editor }) => setEditorStyles(editor),
-			// to update element content on every change
-			onTransaction: ({ editor, transaction }) => handleOnTransaction(editor, transaction),
-			onFocus: ({ editor }) => handleOnFocus(editor),
-			onBlur: ({ editor }) => handleOnBlur(editor),
-		})
+		editorElement = findSlideElement(id)
+		editorSlideId = currentSlide.value?.clientId
+		lastCompositionId = null
 
-		// If there is a legacy lineHeight to migrate for display, apply it in-memory
-		if (initialLineHeight != null) {
-			if (content != null) contentHistory.value = content
-			activeEditor.value.chain().focus().setGlobalLineHeight(initialLineHeight).run()
-			delete activeElement.value?.editorMetadata
-		}
+		stopContentWatch?.()
+		stopContentWatch = watch(() => activeElement.value?.content, reconcileEditorContent)
+
+		withRecordingSuppressed(() => {
+			activeEditor.value = new Editor({
+				extensions: extensions,
+				editable: isEditable,
+				content: content,
+				// focus only lands once EditorContent has adopted the view, so tiptap
+				// has to do it itself after mounting
+				autofocus: isEditable ? 'all' : false,
+				// to update styles in sidebar based on cursor position
+				onSelectionUpdate: ({ editor }) => setEditorStyles(editor),
+				// to update element content on every change
+				onTransaction: ({ editor, transaction }) =>
+					handleOnTransaction(editor, transaction),
+			})
+
+			// If there is a legacy lineHeight to migrate for display, apply it in-memory
+			if (initialLineHeight != null) {
+				activeEditor.value.commands.setGlobalLineHeight(initialLineHeight)
+				delete editorElement?.editorMetadata
+			}
+		})
 
 		setEditorStyles(activeEditor.value)
 	}

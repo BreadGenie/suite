@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -118,7 +119,6 @@ describe('CallbackClient', () => {
 	});
 
 	it('rejects string offsets while uploading with scoped chunk tokens', async () => {
-		vi.useFakeTimers();
 		const root = join(tmpdir(), `callback-client-${crypto.randomUUID()}`);
 		roots.push(root);
 		const content = Buffer.from('recording artifact');
@@ -162,8 +162,14 @@ describe('CallbackClient', () => {
 			stop_operation_ids: [],
 		};
 		const requests: Array<{ url: string; init: RequestInit }> = [];
+		let retainedWhileProcessing = false;
 		const fetch = vi.fn(async (url: URL, init: RequestInit) => {
 			requests.push({ url: String(url), init });
+			if (requests.length === 5)
+				retainedWhileProcessing = await stat(directory).then(
+					() => true,
+					() => false,
+				);
 			const message =
 				requests.length === 1
 					? { offset: '0', complete: false }
@@ -171,7 +177,9 @@ describe('CallbackClient', () => {
 						? { offset: 0, complete: false }
 						: requests.length === 3
 							? { offset: content.length }
-							: { artifact: 'file', status: 'Ready' };
+							: requests.length === 4
+								? { status: 'Processing' }
+								: { offset: content.length, complete: true };
 			return new Response(JSON.stringify({ message }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' },
@@ -185,11 +193,11 @@ describe('CallbackClient', () => {
 			site: 'site.test',
 			secret,
 			dataRoot: root,
+			sleep: async () => undefined,
 		}).upload(job);
-		await vi.advanceTimersByTimeAsync(1_000);
 		await upload;
 
-		expect(requests).toHaveLength(4);
+		expect(requests).toHaveLength(5);
 		expect(requests[0]?.url).toContain('recorder_stopped');
 		expect(requests[1]?.url).toContain('recorder_stopped');
 		expect(JSON.parse(String(requests[1]?.init.body))).toMatchObject({
@@ -202,6 +210,9 @@ describe('CallbackClient', () => {
 			],
 		});
 		expect(Buffer.from(requests[2]?.init.body as Uint8Array)).toEqual(content);
+		expect(requests[3]?.url).toContain('recorder_complete_upload');
+		expect(requests[4]?.url).toContain('recorder_stopped');
+		expect(retainedWhileProcessing).toBe(true);
 		const authorization = new Headers(requests[2]?.init.headers).get(
 			'X-Meet-Recorder-Authorization',
 		);
@@ -212,6 +223,7 @@ describe('CallbackClient', () => {
 			recording: 'recording',
 			job: 'job',
 			operation: 'upload_chunk',
+			body_sha256: createHash('sha256').update(content).digest('hex'),
 		});
 		expect(jwt.decode(token, { complete: true })?.header.typ).toBe(
 			'meet-recording-callback+jwt',

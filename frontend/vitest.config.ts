@@ -15,8 +15,21 @@ export default defineConfig({
 	},
 	test: {
 		environment: "jsdom",
-		include: ["src/**/*.test.ts", "recorder/**/*.test.ts"],
+		include: ["src/**/*.test.{js,ts}", "recorder/**/*.test.{js,ts}"],
 		setupFiles: ["fake-indexeddb/auto"],
+		retry: process.env.CI ? 2 : 0,
 		silent: true,
+		coverage: {
+			provider: "v8",
+			include: ["src/**/*.{js,ts,vue}", "recorder/**/*.{ts,vue}"],
+			exclude: [
+				"**/*.test.{js,ts}",
+				"**/test-utils.{js,ts}",
+				"src/apps/sheets/engine/difftest/**",
+				"src/test/**",
+			],
+			reporter: ["text", "json-summary", "lcov", "cobertura"],
+			reportsDirectory: "test-results/coverage",
+		},
 	},
 });

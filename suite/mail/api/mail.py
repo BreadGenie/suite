@@ -64,6 +64,7 @@ from suite.mail.jmap import (
 )
 from suite.mail.store import get_email_address_index
 from suite.mail.utils import get_config, log_mail_error
+from suite.mail.utils.delivery_status import parse_delivery_status
 from suite.mail.utils.dt import from_utc_z, normalize_utc_z, to_user_timezone, to_utc_z
 from suite.mail.utils.user import get_account_emails, is_jmap_configured
 from suite.mail.utils.validation import normalize_screened_value, validate_screened_value
@@ -496,7 +497,21 @@ def serialize_mail(mail: dict) -> dict:
         **{field: mail[field] for field in mail_fields},
         "text_body": "" if html else mail.get("text_body", ""),
         "attachments": serialize_attachments(mail.get("attachments", [])),
+        "dsn_blob_id": _get_dsn_blob_id(mail),
     }
+
+
+def _get_dsn_blob_id(mail: dict) -> str | None:
+    """Returns the blob id of a bounce message's `message/delivery-status` part, if it carries one.
+
+    The part has no filename, so it never survives `serialize_attachments` — the blob id is
+    surfaced separately for the UI to fetch the parsed report via `get_delivery_status` and
+    render it as a card instead of the raw MAILER-DAEMON text (see DeliveryStatusBanner)."""
+
+    for attachment in mail.get("attachments", []):
+        if (attachment.get("type") or "").lower() == "message/delivery-status" and attachment.get("blob_id"):
+            return attachment["blob_id"]
+    return None
 
 
 def serialize_attachments(attachments: list[dict]) -> list[dict]:
@@ -509,6 +524,16 @@ def serialize_attachments(attachments: list[dict]) -> list[dict]:
         for attachment in attachments
         if attachment.get("filename")
     ]
+
+
+@frappe.whitelist()
+def get_delivery_status(account: str, blob_id: str) -> dict:
+    """Returns the parsed report from a bounce message's `message/delivery-status` part."""
+
+    if not blob_id:
+        frappe.throw(_("Blob ID is required."))
+
+    return parse_delivery_status(fetch_blob(account, blob_id))
 
 
 @frappe.whitelist()

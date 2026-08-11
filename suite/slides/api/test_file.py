@@ -7,10 +7,11 @@ from werkzeug.exceptions import Forbidden, NotFound
 
 from suite.slides.api.file import get_reference_presentations, validate_media_file
 from suite.slides.tests.utils import (
+    PNG_1PX,
     make_presentation,
     make_private_image,
     make_public,
-    unique_image_content,
+    unique_bytes,
 )
 from suite.tests.utils import ensure_user
 
@@ -109,7 +110,7 @@ class TestMediaFileAccess(IntegrationTestCase):
     def make_shared_url(self, title):
         """Two presentations holding the same image, which frappe stores once and
         references from a File row per presentation."""
-        content = unique_image_content()
+        content = unique_bytes(PNG_1PX)
         files = [
             make_private_image(make_presentation(f"{title} {i}").name, content=content) for i in range(2)
         ]

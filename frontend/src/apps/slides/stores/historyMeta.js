@@ -31,7 +31,7 @@ const actionOrder = {
 	undo: {
 		addSlide: ['jumpToSlide', 'undo'],
 		removeSlide: ['undo', 'jumpToSlide'],
-		addElement: ['jumpToSlide', 'undo'],
+		addElement: ['jumpToSlide', 'undo', 'jumpToElements'],
 		removeElement: ['jumpToSlide', 'undo', 'jumpToElements'],
 		editElement: ['jumpToSlide', 'jumpToElements', 'undo'],
 		batch: ['jumpToSlide', 'undo', 'jumpToElements'],
@@ -40,11 +40,11 @@ const actionOrder = {
 	},
 }
 
-const jumpToSlideByIndex = async (index, focus) => {
+const jumpToSlideByIndex = (index, focus) => {
 	const onActiveSlide = index === slideIndex.value
 
 	if (!onActiveSlide && index != null) {
-		await changeEditorSlide(index, focus)
+		changeEditorSlide(index, focus)
 
 		recentlyRestored.value = true
 		setTimeout(() => {
@@ -53,22 +53,36 @@ const jumpToSlideByIndex = async (index, focus) => {
 	}
 }
 
+let latestJump = 0
+
 const jumpToElementsByIds = (jumpToIds, focusOnId) => {
 	if (!jumpToIds?.length) return
 
+	const jump = ++latestJump
 	const targetIds = selectableIds(jumpToIds)
 
+	// the elements are gone, so the selection naming them has to go too
 	if (!targetIds.every((id) => findSlideElement(id))) {
 		activeElementIds.value = []
+		if (!findSlideElement(focusElementId.value)) focusElementId.value = null
 		return
 	}
 
 	if (JSON.stringify(activeElementIds.value) === JSON.stringify(targetIds)) {
-		cropSelectionToFitContent(targetIds)
+		// the box is measured off the DOM, so it can only be fitted once the change renders
+		requestAnimationFrame(() => {
+			if (jump !== latestJump) return
+			cropSelectionToFitContent(targetIds)
+		})
 		return
 	}
 
 	nextTick(() => {
+		// a whole run of undos lands in one tick, so by now a later one may have
+		// decided the selection, or removed the elements this call named
+		if (jump !== latestJump) return
+		if (!targetIds.every((id) => findSlideElement(id))) return
+
 		// setActiveElements early-returns when the one surviving id is already
 		// selected, which would leave the locked ones in the selection
 		if (targetIds.length < jumpToIds.length) {

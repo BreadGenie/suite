@@ -3,6 +3,7 @@
 
 import json
 import re
+from contextlib import suppress
 from email.utils import formataddr
 from functools import cached_property
 from typing import Literal
@@ -27,7 +28,13 @@ from suite.mail.doctype.user_account.user_account import get_user_for_jmap_accou
 from suite.mail.jmap import get_email_service, get_jmap_connection, get_thread_service
 from suite.mail.jmap.services.mail.email import EmailService
 from suite.mail.jmap.services.mail.mailbox import MailboxService
-from suite.mail.store import Entity, get_blob_store, get_data_store, get_email_address_index
+from suite.mail.store import (
+    Entity,
+    get_blob_store,
+    get_data_store,
+    get_email_address_index,
+    rebuild_email_address_index,
+)
 from suite.mail.utils import (
     get_config,
     log_mail_error,
@@ -1285,25 +1292,74 @@ def _get_cached_messages(account: str, ids: list[str]) -> dict[str, dict | None]
 
 
 def _cache_messages(account: str, messages: dict[str, dict]) -> None:
-    """Store messages in cache with the message ID as the key, and index their addresses for search."""
+    """Store messages in cache with the message ID as the key, and index their addresses for search.
+
+    Only messages the cache hasn't held before are indexed. Caching runs again whenever a message is
+    re-fetched — a flag changed, a mailbox was re-synced — and the index counts every sighting of an
+    address to rank suggestions, so re-indexing the same message would score sync churn as
+    correspondence. The addresses on a message already cached were indexed when it first arrived.
+
+    Being cached is therefore what marks a message indexed, and a message whose addresses did not
+    reach the index does not stay cached. Otherwise the failure would be permanent: the message
+    would never be offered as new again, and the people on it could be missing from suggestions
+    until someone rebuilt the index by hand. If the store will not give the message up either, that
+    rebuild is queued rather than waited for.
+    """
 
     store = get_data_store(account)
-    store.set_many(Entity.EMAIL, items=messages)
+    # Which of these the cache had never held, answered by the write itself: two fetches racing to
+    # cache the same new message would otherwise both be told it was new and count its addresses
+    # twice. Only one of them gets the message back from here.
+    new_ids = store.set_many(Entity.EMAIL, items=messages)
+
+    new_messages = [message for message_id, message in messages.items() if message_id in new_ids]
+    if not new_messages:
+        return
 
     # Feed sender/recipient addresses into the shared address index; never let indexing break caching.
     try:
-        get_email_address_index(account).index_addresses(_message_addresses(messages.values()))
+        get_email_address_index(account).index_addresses(_message_addresses(new_messages))
     except Exception:
         log_mail_error(
             _("Failed to index message addresses for search"), frappe.get_traceback(with_context=True)
         )
+
+        # Uncache what was not indexed, so the next fetch of it is new again and tries once more.
+        # The message is still on the server; the cost of dropping it is one re-fetch, against
+        # addresses that would otherwise never be indexed at all.
+        #
+        # Unconditional on purpose, even though another request may have re-cached one of these in
+        # the meantime: that request found the id already there, so it skipped indexing too, and
+        # sparing its copy would leave the message cached with nobody left to index it — permanently,
+        # since only a cache miss brings it back through here. Its copy is a mirror of the server
+        # (flag changes write there first), so dropping it costs that request a re-fetch, not data.
+        try:
+            store.delete_many(Entity.EMAIL, keys=list(new_ids))
+        except Exception:
+            # The store just took these messages and now will not give them up, so nothing here can
+            # put it right: they stay cached, and being cached is what stops them being offered as
+            # new again. Hand it to a rebuild instead, which reconciles the whole index against the
+            # cache. It is deduplicated per account and runs on the long queue, so a spell of
+            # failures queues one repair rather than one apiece, and it is suppressed in turn
+            # because indexing must not break caching — a repair that cannot even be queued is
+            # still on the record above.
+            log_mail_error(
+                _("Failed to uncache messages that could not be indexed"),
+                frappe.get_traceback(with_context=True),
+            )
+
+            with suppress(Exception):
+                rebuild_email_address_index(account)
 
 
 def _remove_cached_messages(account: str, ids: list[str]) -> None:
     """Remove messages from cache for the provided IDs.
 
     Addresses are left in the search index on purpose: it is cumulative, and an address seen in an
-    evicted message is almost always still valid elsewhere.
+    evicted message is almost always still valid elsewhere. Their correspondence counts are left
+    standing too, and a message re-fetched after this counts again — the cache is what remembers
+    which messages have been seen. Counts rank addresses against each other, so that drift costs
+    an ordering nothing; `rebuild_email_address_index` recomputes them from the cache as it stands.
     """
 
     store = get_data_store(account)

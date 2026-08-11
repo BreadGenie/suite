@@ -1,3 +1,4 @@
 dist/
 integration/output/
 node_modules/
+test-results/

@@ -21,6 +21,10 @@ SCHEMA_VERSION_FILE = "schema.version"
 # Sized so one pass almost always holds the whole match set; see `_run_search` for what a miss costs.
 UNBOUNDED_FETCH_PAGE = 5000
 
+# How many IDs one `merge_document` lookup asks about at a time, bounding the size of the boolean
+# query it builds when a caller upserts a large batch.
+UPSERT_LOOKUP_CHUNK = 1000
+
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -50,6 +54,8 @@ class SearchStore:
     FIELDS: ClassVar[tuple[FieldSpec, ...]] = ()
     # Fields queried when a search call doesn't specify its own field list.
     DEFAULT_SEARCH_FIELDS: ClassVar[tuple[str, ...]] = ()
+    # Whether an upsert reads the document it replaces and hands it to `merge_document`.
+    MERGE_ON_UPSERT: ClassVar[bool] = False
 
     # Per-writer memory budget for indexing, in bytes.
     HEAP_SIZE: ClassVar[int] = 50 * 1024 * 1024
@@ -75,25 +81,47 @@ class SearchStore:
 
         Each source is deleted-then-added by its ID_FIELD, so re-indexing an existing
         document replaces it. Sources without an ID are skipped.
+
+        A store with MERGE_ON_UPSERT set reads the documents being replaced first and runs each
+        replacement through `merge_document`, so state already in the index can be carried into it.
+        That read happens under the same write lock as the write: the lock is not reentrant, so a
+        subclass could not take it itself, and reading outside it would let a concurrent upsert of
+        the same document land in between and lose whatever the merge carried forward.
         """
 
         if not sources:
             return 0
 
+        documents = [self.to_document(source) for source in sources]
+        documents = [document for document in documents if document.get(self.ID_FIELD) is not None]
+
         with write_lock(self._lockname, acquire_timeout=30, lock_timeout=300):
             index = self._open()
+
+            if self.MERGE_ON_UPSERT:
+                # Pick up commits made by other workers since this index was opened, so the merge
+                # builds on their documents rather than on a stale view of them.
+                index.reload()
+                indexed = self._existing_documents(index, [str(d[self.ID_FIELD]) for d in documents])
+
+                # Collected by ID, so a batch carrying the same document twice accumulates into one
+                # write: the second merges onto what the first produced instead of replacing it
+                # unread, which would drop whatever the first had carried forward.
+                merged = {}
+                for document in documents:
+                    doc_id = str(document[self.ID_FIELD])
+                    replaced = merged.get(doc_id) or indexed.get(doc_id)
+                    merged[doc_id] = self.merge_document(document, replaced)
+
+                documents = list(merged.values())
+
             writer = index.writer(heap_size=self.HEAP_SIZE, num_threads=1)
 
             try:
-                for source in sources:
-                    document = self._to_tantivy_document(self.to_document(source))
-                    doc_id = document.get_first(self.ID_FIELD)
-                    if doc_id is None:
-                        continue
-
+                for document in documents:
                     # Delete any existing doc with this ID first so re-indexing is an upsert.
-                    writer.delete_documents(self.ID_FIELD, str(doc_id))
-                    writer.add_document(document)
+                    writer.delete_documents(self.ID_FIELD, str(document[self.ID_FIELD]))
+                    writer.add_document(self._to_tantivy_document(document))
 
                 writer.commit()
                 writer.wait_merging_threads()
@@ -102,6 +130,35 @@ class SearchStore:
                 del writer
 
         return len(sources)
+
+    def _existing_documents(self, index: tantivy.Index, ids: list[str]) -> dict[str, dict]:
+        """Return the indexed documents for `ids`, keyed by ID_FIELD; absent IDs are simply missing.
+
+        Only the documents an upsert is about to replace are looked up, in chunks of
+        `UPSERT_LOOKUP_CHUNK` so one large batch doesn't build one enormous boolean query. Errors
+        are left to propagate: a lookup that quietly came back empty would read as "nothing indexed
+        yet" and let the merge discard what every one of these documents had accumulated.
+        """
+
+        searcher = index.searcher()
+        if not ids or not searcher.num_docs:
+            return {}
+
+        found = {}
+        for start in range(0, len(ids), UPSERT_LOOKUP_CHUNK):
+            chunk = ids[start : start + UPSERT_LOOKUP_CHUNK]
+            query = tantivy.Query.boolean_query(
+                [
+                    (tantivy.Occur.Should, tantivy.Query.term_query(self._schema, self.ID_FIELD, doc_id))
+                    for doc_id in chunk
+                ]
+            )
+            result = searcher.search(query, limit=len(chunk))
+            for score, address in result.hits:
+                hit = self._to_hit(searcher.doc(address), score)
+                found[str(hit[self.ID_FIELD])] = hit
+
+        return found
 
     def delete_documents(self, ids: list[str]) -> int:
         """Delete documents matching the given ID_FIELD values; returns the count requested."""
@@ -318,6 +375,16 @@ class SearchStore:
         """Map a raw source dict to a flat field/value dict. Override to reshape sources."""
 
         return source
+
+    def merge_document(self, document: dict, existing: dict | None) -> dict:
+        """Reconcile a document with the one it replaces, or None if the index doesn't hold one.
+
+        Called for every upsert when MERGE_ON_UPSERT is set; override to carry state across
+        re-indexing. `existing` holds the stored fields of the indexed document, so only stored
+        fields survive into a merge.
+        """
+
+        return document
 
     @property
     def _lockname(self) -> str:

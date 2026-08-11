@@ -666,6 +666,8 @@ const LineHeight = Extension.create({
 
 export const extensions = [
 	StarterKit.configure({
+		// the app's command history owns undo now
+		undoRedo: false,
 		paragraph: false,
 		bulletList: false,
 		orderedList: false,

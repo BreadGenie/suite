@@ -145,6 +145,32 @@ def complete_upload(recording_name: str, *, event_sequence: int) -> dict:
         frappe.throw(_("Recording upload is not ready to complete"))
     if cint(event_sequence) <= recording.recorder_event_sequence:
         frappe.throw(_("Recorder event is out of order"))
+    if recording.upload_offset != recording.upload_size:
+        frappe.throw(_("Recording upload is incomplete"))
+
+    frappe.enqueue(
+        process_upload,
+        recording_name=recording_name,
+        event_sequence=cint(event_sequence),
+        queue="long",
+        timeout=6 * 60 * 60 + 5 * 60,
+        enqueue_after_commit=True,
+        job_id=f"meet-recording-upload::{recording_name}",
+        deduplicate=True,
+    )
+    return {"status": "Processing"}
+
+
+def process_upload(recording_name: str, *, event_sequence: int) -> dict:
+    from suite.meet.api.recording import _publish_state
+
+    recording = frappe.get_doc("Meet Recording", recording_name)
+    if recording.status in ("Ready", "Partial"):
+        return {"artifact": recording.artifact, "status": recording.status}
+    if recording.status != "Processing" or not recording.upload_id:
+        return {"status": recording.status}
+    if cint(event_sequence) <= recording.recorder_event_sequence:
+        frappe.throw(_("Recorder event is out of order"))
 
     path = _upload_path(recording.upload_id)
     digest = _file_digest(path)
@@ -155,6 +181,15 @@ def complete_upload(recording_name: str, *, event_sequence: int) -> dict:
         1000, recording.upload_duration_ms * 0.05
     ):
         frappe.throw(_("Recording artifact duration does not match"))
+
+    upload_id = recording.upload_id
+    recording = _locked_recording(recording_name)
+    if recording.status in ("Ready", "Partial"):
+        return {"artifact": recording.artifact, "status": recording.status}
+    if recording.status != "Processing" or recording.upload_id != upload_id:
+        return {"status": recording.status}
+    if cint(event_sequence) <= recording.recorder_event_sequence:
+        frappe.throw(_("Recorder event is out of order"))
 
     acquire_owner_storage_lock(recording.room_owner)
     usage = get_storage_usage(recording.room_owner)
@@ -199,6 +234,7 @@ def complete_upload(recording_name: str, *, event_sequence: int) -> dict:
         recording.state_revision += 1
         recording.recorder_event_sequence = cint(event_sequence)
         recording.save(ignore_permissions=True)
+        _publish_state(frappe.get_doc("Meet Room", recording.meet_room), recording)
         frappe.db.after_commit.add(lambda: path.unlink(missing_ok=True))
     except Exception:
         _delete_drive_blob(manager, drive_file)
@@ -360,8 +396,21 @@ def _recordings_folder(recording) -> str:
     if existing:
         return existing
     manager = FileManager()
+    folder_name = "Meet Recordings"
+    suffix = 1
+    while frappe.db.exists(
+        "File",
+        {
+            "folder": recording.drive_home_folder,
+            "file_name": folder_name,
+            "is_folder": 1,
+            "status": "Active",
+        },
+    ):
+        folder_name = f"Meet Recordings ({suffix})"
+        suffix += 1
     folder = create_drive_file(
-        "Meet Recordings",
+        folder_name,
         recording.drive_home_folder,
         "Folder",
         lambda entity: manager.create_folder(entity),

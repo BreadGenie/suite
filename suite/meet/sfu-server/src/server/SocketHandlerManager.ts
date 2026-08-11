@@ -29,6 +29,7 @@ import { registerScreenShareHandlers } from './handlers/ScreenShareHandlers';
 import { registerSttHandlers } from './handlers/SttHandlers';
 import { registerWebRtcTransportHandlers } from './handlers/WebRtcTransportHandlers';
 import type { RecordingGrantManager } from './RecordingGrantManager';
+import { RoomLifecycleCoordinator } from './RoomLifecycleCoordinator';
 import { RoomRegistry } from './RoomRegistry';
 
 const RECORDING_PROOF_TIMEOUT_MS = 10_000;
@@ -40,6 +41,7 @@ export class SocketHandlerManager {
 	private registry: RoomRegistry;
 	private rateLimiter: RateLimiter;
 	private e2eeEpochRelay: E2EEEpochRelay;
+	private roomLifecycle: RoomLifecycleCoordinator;
 	private telemetry: Telemetry;
 	private registerHandlers: ((socket: import('socket.io').Socket) => void)[];
 	private idleExpirySweep: NodeJS.Timeout | null = null;
@@ -74,10 +76,17 @@ export class SocketHandlerManager {
 		sttManager?.setEmitToRoom((roomId, event, data) => {
 			this.registry.emitToFullAccessParticipants(roomId, event, data);
 		});
+		this.roomLifecycle = new RoomLifecycleCoordinator(
+			this.registry,
+			this.e2eeEpochRelay,
+			roster,
+			this.mediasoup,
+		);
 
 		const deps: HandlerDeps = {
 			io,
 			registry: this.registry,
+			roomLifecycle: this.roomLifecycle,
 			mediasoup,
 			authManager,
 			rateLimiter: this.rateLimiter,
@@ -247,6 +256,7 @@ export class SocketHandlerManager {
 	}
 
 	stop(): void {
+		this.roomLifecycle.stop();
 		if (this.idleExpirySweep) {
 			clearInterval(this.idleExpirySweep);
 			this.idleExpirySweep = null;

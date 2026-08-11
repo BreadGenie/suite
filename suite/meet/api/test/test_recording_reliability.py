@@ -13,6 +13,7 @@ from frappe.tests import IntegrationTestCase
 from frappe.utils import add_to_date, now_datetime
 
 from suite.drive.api.files import delete_entities, remove_or_restore
+from suite.drive.utils import create_drive_file, get_user_folder
 from suite.drive.utils.files import TRASH_PREFIX, FileManager
 from suite.meet.api.recording import (
     BYTES_PER_SECOND,
@@ -30,7 +31,13 @@ from suite.meet.api.recording import (
     start,
     stop,
 )
-from suite.meet.recording.ingest import _upload_path, append_chunk, begin_upload, complete_upload
+from suite.meet.recording.ingest import (
+    _recordings_folder,
+    _upload_path,
+    append_chunk,
+    begin_upload,
+    process_upload,
+)
 from suite.meet.recording.recorder_client import RecorderOutcome
 
 PUBLIC_JWK = {
@@ -104,6 +111,17 @@ class IntegrationTestRecordingReliability(IntegrationTestCase):
             1,
         )
 
+    def test_one_active_recording_per_room_owner_by_default(self):
+        other = frappe.get_doc({"doctype": "Meet Room", "meeting_type": "open"}).insert()
+        first = start(self.room.name, str(uuid.uuid4()))
+
+        with self.assertRaisesRegex(frappe.ValidationError, "Room Owner already has"):
+            start(other.name, str(uuid.uuid4()))
+
+        stop(self.room.name)
+        self.assertEqual(start(other.name, str(uuid.uuid4()))["status"], "Recording")
+        self.assertEqual(frappe.db.get_value("Meet Recording", first["name"], "status"), "Processing")
+
     def test_e2ee_and_recording_are_mutually_exclusive(self):
         self.room.enable_e2ee()
         frappe.db.commit()
@@ -154,13 +172,47 @@ class IntegrationTestRecordingReliability(IntegrationTestCase):
                 patch("suite.meet.recording.ingest.update_file_size"),
                 patch("suite.meet.recording.ingest.FileManager.upload_file"),
             ):
-                result = complete_upload(recording.name, event_sequence=3)
+                result = process_upload(recording.name, event_sequence=3)
             artifact = frappe.get_doc("File", result["artifact"])
             self.assertEqual(artifact.owner, self.owner)
         finally:
             path.unlink(missing_ok=True)
             if artifact:
                 frappe.delete_doc("File", artifact.name, force=True, ignore_permissions=True)
+
+    def test_recordings_folder_does_not_alias_foreign_owned_folder(self):
+        manager = FileManager()
+        if manager.flat:
+            self.skipTest("hierarchical Drive storage required")
+        home = get_user_folder(self.owner)
+        parent = create_drive_file(
+            f"recording-folder-test-{frappe.generate_hash(length=8)}",
+            home.name,
+            "Folder",
+            lambda file: manager.create_folder(file),
+        )
+        frappe.set_user(self.cohost)
+        foreign_folder = create_drive_file(
+            "Meet Recordings",
+            parent.name,
+            "Folder",
+            lambda file: manager.create_folder(file),
+        )
+        frappe.set_user(self.owner)
+        recording = frappe._dict(drive_home_folder=parent.name, room_owner=self.owner)
+        owner_folder = frappe.get_doc("File", _recordings_folder(recording))
+
+        try:
+            self.assertEqual(owner_folder.owner, self.owner)
+            self.assertNotEqual(owner_folder.file_name, foreign_folder.file_name)
+            self.assertNotEqual(owner_folder.file_url, foreign_folder.file_url)
+        finally:
+            manager.delete_file(owner_folder)
+            manager.delete_file(foreign_folder)
+            manager.delete_file(parent)
+            frappe.delete_doc("File", owner_folder.name, force=True, ignore_permissions=True)
+            frappe.delete_doc("File", foreign_folder.name, force=True, ignore_permissions=True)
+            frappe.delete_doc("File", parent.name, force=True, ignore_permissions=True)
 
     def test_recorder_acceptance_timestamp_must_be_bound_to_request(self):
         frappe.conf.recording_fixture_mode = False
@@ -438,7 +490,7 @@ class IntegrationTestRecordingReliability(IntegrationTestCase):
         recording = frappe.get_doc("Meet Recording", started["name"])
         append_chunk(recording.name, offset=0, chunk=content, chunk_sha256=digest)
         with patch("suite.meet.recording.ingest._validate_media", return_value={"duration_ms": 1000}):
-            result = complete_upload(recording.name, event_sequence=3)
+            result = process_upload(recording.name, event_sequence=3)
         artifact = frappe.get_doc("File", result["artifact"])
         active_path = manager.get_local_path(artifact.file_url)
         trash_path = manager.get_local_path(

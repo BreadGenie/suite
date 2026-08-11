@@ -163,6 +163,10 @@ def create_thumbnail_file(presentation_name: str, file_name: str, content: bytes
             "doctype": "File",
             "attached_to_doctype": "Presentation",
             "attached_to_name": presentation_name,
+            # thumbnail is an Attach Image field, so the framework's attach hook looks
+            # for a File carrying the fieldname; without it every save of the deck is
+            # treated as an unattached URL and re-creates the File from disk
+            "attached_to_field": "thumbnail",
             "file_name": file_name,
             "is_private": 1,
             "content": content,
@@ -320,7 +324,7 @@ def get_template_cover_thumbnail(template):
     )
 
 
-def set_duplicate_metadata(presentation, duplicate_from):
+def set_duplicate_metadata(presentation, duplicate_from) -> str:
     src_title, src_theme, src_thumbnail = frappe.get_value(
         "Presentation",
         duplicate_from,
@@ -328,13 +332,49 @@ def set_duplicate_metadata(presentation, duplicate_from):
     )
     presentation.title = f"Copy of {src_title}"
     presentation.theme = src_theme
-    presentation.thumbnail = src_thumbnail
+    return src_thumbnail
 
 
-def set_template_metadata(presentation, template):
+def set_template_metadata(presentation, template) -> str:
     presentation.title = "Untitled"
     presentation.theme = template
-    presentation.thumbnail = get_template_cover_thumbnail(template)
+    return get_template_cover_thumbnail(template)
+
+
+def copy_thumbnail_file(presentation_name: str, source_url: str) -> str:
+    source = frappe.db.get_value("File", {"file_url": source_url}, ["name", "file_name"], as_dict=True)
+    if not source:
+        return ""
+
+    try:
+        content = frappe.get_doc("File", source.name).get_content()
+    except FileNotFoundError:
+        # blob is already gone; the editor captures a fresh thumbnail on the next edit
+        return ""
+
+    _, _, ext = source.file_name.rpartition(".")
+    file_name = f"presentation-thumbnail-{presentation_name}.{ext or 'webp'}"
+
+    return create_thumbnail_file(presentation_name, file_name, content)
+
+
+def adopt_thumbnail(presentation: Document, source_url: str) -> None:
+    """Give a new deck its own copy of the thumbnail it started from.
+
+    Sharing the source's URL leaves the field pointing at a File this deck does not
+    own: once the source regenerates or deletes its thumbnail the blob can go with it,
+    and every later save of this deck retries the missing file through frappe's attach
+    hook. System template covers ship with the app, so they have no File to copy.
+    """
+    if not source_url:
+        return
+
+    thumbnail = (
+        copy_thumbnail_file(presentation.name, source_url)
+        if source_url.startswith(("/files/", "/private/files/"))
+        else source_url
+    )
+    presentation.db_set("thumbnail", thumbnail)
 
 
 @frappe.whitelist()
@@ -351,11 +391,14 @@ def create_presentation(
     if duplicate_from:
         if not frappe.has_permission("Presentation", "read", duplicate_from):
             frappe.throw("You cannot duplicate this presentation", frappe.PermissionError)
-        set_duplicate_metadata(presentation, duplicate_from)
+        source_thumbnail = set_duplicate_metadata(presentation, duplicate_from)
     else:
-        set_template_metadata(presentation, template)
+        source_thumbnail = set_template_metadata(presentation, template)
     presentation.flags.drive_parent = parent
     presentation.insert()
+
+    # only now does the deck have a name to attach its own thumbnail File to
+    adopt_thumbnail(presentation, source_thumbnail)
 
     presentation.slides = get_slides_from_ref(presentation.name, template, duplicate_from)
 

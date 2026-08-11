@@ -39,6 +39,7 @@ suite.slides.doctype.presentation.patches.sanitize_attachment_urls
 suite.slides.doctype.presentation.patches.move_attachments_to_private_folder
 suite.slides.doctype.presentation.patches.move_slide_thumbnail_to_presentation
 suite.slides.doctype.presentation.patches.cleanup_unused_thumbnail_files
+suite.slides.doctype.presentation.patches.clear_missing_presentation_thumbnails
 # --- writer ---
 suite.writer.patches.change_versioning_schema
 suite.writer.patches.autopopulate_html
@@ -76,7 +77,7 @@ suite.mail.patches.sync_jmap_accounts_for_configured_users
 suite.mail.patches.copy_sync_history_account_id_to_account
 suite.mail.patches.destroy_data_store
 suite.mail.patches.backfill_screened_email_address_account
-suite.mail.patches.rebuild_email_address_indexes #2
+suite.mail.patches.rebuild_email_address_indexes #3
 suite.mail.patches.enable_screening_for_personal_accounts
 suite.mail.patches.create_suite_user_role
 suite.mail.patches.rename_mail_admin_to_suite_admin

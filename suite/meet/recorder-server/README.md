@@ -2,9 +2,8 @@
 
 ## Dedicated production deployment
 
-Use the standalone deployment when the Recorder Endpoint runs on a dedicated
-host rather than beside the SFU. It deploys only the recorder and its HTTPS
-control proxy; it does not deploy or modify an SFU.
+The Recorder Endpoint uses a standalone production deployment. It deploys only
+the recorder and its HTTPS control proxy; it does not deploy or modify an SFU.
 
 Prerequisites:
 
@@ -29,7 +28,9 @@ openssl rand -hex 32
 
 Set `RECORDER_SECRET` to the first value and `RECORDER_METRICS_TOKEN` to the
 second. Set the exact Frappe site, Frappe HTTPS origin, existing public SFU
-origin, recorder hostname, and TLS email before starting:
+origin, recorder hostname, TLS email, and `RECORDER_MIN_FREE_BYTES` floor before
+starting. New sessions reserve twice their byte budget for retained segments and
+finalization output; `/ready` fails when free space falls below the floor.
 
 ```sh
 ./deploy.sh setup
@@ -61,6 +62,12 @@ Management commands:
 Back up the `suite-recorder_recorder-data`, `suite-recorder_caddy-data`, and
 `suite-recorder_caddy-config` volumes. Do not use `docker compose down -v`, and
 do not stop or update the deployment during an active Recording Session.
+
+The recorder runs as the image's unprivileged `node` user with all Linux
+capabilities dropped and a read-only root filesystem. Only `/data`, `/tmp`, and
+the ephemeral node home are writable. Restrict recorder-host egress separately
+to the configured Frappe and SFU origins plus the WebRTC media destinations
+required by that SFU deployment.
 
 ## Chromium integration test
 

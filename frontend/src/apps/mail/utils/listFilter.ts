@@ -39,16 +39,36 @@ export const useStoredFilter = ({ scope, onChange, starrable = () => true }: Sto
 	/** Re-read the remembered choice after the scope changed (a mailbox switch). */
 	const reloadFilter = () => (filter.value = localStorage.getItem(storageKey()) || null)
 
-	const FILTER_OPTIONS = [
-		{ label: __('All'), icon: Mails, onClick: () => setFilter(null) },
-		{ label: __('Unread'), icon: MailIcon, onClick: () => setFilter('unread') },
-		{ label: __('Starred'), icon: Star, onClick: () => setFilter('starred'), condition: starrable },
+	// Computed, not a constant array: `selected` is the menu's own boolean field (frappe-ui
+	// reads it as `Boolean(option.selected)`, so it can't be a getter), and it has to be
+	// re-evaluated whenever the filter changes.
+	const FILTER_OPTIONS = computed(() => [
+		{
+			label: __('All'),
+			icon: Mails,
+			onClick: () => setFilter(null),
+			selected: filter.value === null,
+		},
+		{
+			label: __('Unread'),
+			icon: MailIcon,
+			onClick: () => setFilter('unread'),
+			selected: filter.value === 'unread',
+		},
+		{
+			label: __('Starred'),
+			icon: Star,
+			onClick: () => setFilter('starred'),
+			condition: starrable,
+			selected: filter.value === 'starred',
+		},
 		{
 			label: __('Has attachments'),
 			icon: Paperclip,
 			onClick: () => setFilter('has_attachments'),
+			selected: filter.value === 'has_attachments',
 		},
-	]
+	])
 
 	/** What the toolbar's filter selector reads. Callers may show something else instead — a
 	 *  selection count, a result count — but this is the filter's own name for itself. */

@@ -1,8 +1,9 @@
 # Copyright (c) 2026, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
-"""The email-address index's normalization and ranking contracts: display names lose the quotes
-clients wrap them in, only syntactically valid addresses ever reach the index, and suggestions come
-back ordered by how well the query matches a name or address rather than in index order."""
+"""The email-address index's normalization, counting and ranking contracts: display names lose the
+quotes clients wrap them in, only syntactically valid addresses ever reach the index, every sighting
+of an address adds to the count that separates otherwise equal matches, and suggestions come back
+ordered by how well the query matches a name or address rather than in index order."""
 
 import unittest
 from unittest import mock
@@ -69,6 +70,7 @@ class ToDocument(unittest.TestCase):
                 "email": "Jane@Example.com",
                 "name": "Jane Doe",
                 "text": "Jane Doe Jane@Example.com",
+                "count": 0,
             },
         )
 
@@ -77,20 +79,24 @@ class ToDocument(unittest.TestCase):
         self.assertIsNone(document["name"])
         self.assertEqual(document["text"], "jane@example.com")
 
+    def test_batch_sightings_are_carried_into_the_count(self):
+        document = self.to_document({"email": "jane@example.com", "sightings": 3})
+        self.assertEqual(document["count"], 3)
+
 
 class IndexAddresses(unittest.TestCase):
-    """``index_addresses`` — silently drop entries without a syntactically valid email."""
+    """``index_addresses`` — drop invalid entries, dedupe the batch, tally every sighting."""
 
-    def index_addresses(self, addresses):
-        """Return the addresses that survive filtering and reach ``index_documents``."""
+    def index_addresses(self, addresses, count=True):
+        """Return the sources that survive filtering and reach ``index_documents``."""
 
         index = mock.Mock(spec=EmailAddressIndex)
-        EmailAddressIndex.index_addresses(index, addresses)
+        EmailAddressIndex.index_addresses(index, addresses, count=count)
         return index.index_documents.call_args[0][0]
 
     def test_valid_email_is_indexed(self):
         address = {"name": "Jane", "email": "jane@example.com"}
-        self.assertEqual(self.index_addresses([address]), [address])
+        self.assertEqual(self.index_addresses([address]), [{**address, "sightings": 1}])
 
     def test_missing_email_is_skipped(self):
         self.assertEqual(self.index_addresses([{"name": "Jane"}, {"name": "No Email", "email": ""}]), [])
@@ -107,12 +113,93 @@ class IndexAddresses(unittest.TestCase):
 
     def test_valid_survives_malformed_neighbours(self):
         valid = {"name": "Jane", "email": "jane@example.com"}
-        self.assertEqual(self.index_addresses([{"email": "not-an-email"}, valid]), [valid])
+        self.assertEqual(
+            self.index_addresses([{"email": "not-an-email"}, valid]), [{**valid, "sightings": 1}]
+        )
 
-    def test_batch_dedupes_case_insensitively(self):
+    def test_batch_dedupes_case_insensitively_and_counts_both(self):
+        # One upsert, but the address was on two messages: the batch is deduped, the sightings aren't.
         first = {"name": "Jane", "email": "jane@example.com"}
         second = {"name": "Jane Doe", "email": "Jane@Example.com"}
-        self.assertEqual(self.index_addresses([first, second]), [second])
+        self.assertEqual(self.index_addresses([first, second]), [{**second, "sightings": 2}])
+
+    def test_a_name_outlives_a_later_nameless_sighting(self):
+        # The same address arrives named from one message and bare from the next; last-wins alone
+        # would index it with no one behind it.
+        named = {"name": "Jane Doe", "email": "jane@example.com"}
+        bare = {"email": "jane@example.com"}
+        self.assertEqual(self.index_addresses([named, bare]), [{**named, "sightings": 2}])
+
+    def test_a_later_name_still_replaces_an_earlier_one(self):
+        old = {"name": "Jane Doe", "email": "jane@example.com"}
+        new = {"name": "Jane Roe", "email": "jane@example.com"}
+        self.assertEqual(self.index_addresses([old, new]), [{**new, "sightings": 2}])
+
+    def test_a_name_that_is_only_quotes_does_not_displace_a_real_one(self):
+        # It sanitizes to nothing, so treating it as a name would lose "Jane Doe" for no one.
+        named = {"name": "Jane Doe", "email": "jane@example.com"}
+        quotes = {"name": "''", "email": "jane@example.com"}
+        self.assertEqual(self.index_addresses([named, quotes]), [{**named, "sightings": 2}])
+
+    def test_a_name_is_picked_up_from_a_later_sighting(self):
+        bare = {"email": "jane@example.com"}
+        named = {"name": "Jane Doe", "email": "jane@example.com"}
+        self.assertEqual(self.index_addresses([bare, named]), [{**named, "sightings": 2}])
+
+    def test_each_address_is_tallied_on_its_own(self):
+        jane = {"email": "jane@example.com"}
+        john = {"email": "john@example.com"}
+        sources = self.index_addresses([jane, john, jane, jane])
+        self.assertEqual({s["email"]: s["sightings"] for s in sources}, {jane["email"]: 3, john["email"]: 1})
+
+    def test_uncounted_source_reports_no_sightings(self):
+        # A contact sync re-indexes the whole address book; it says nothing about correspondence.
+        address = {"name": "Jane", "email": "jane@example.com"}
+        self.assertEqual(self.index_addresses([address, address], count=False), [{**address, "sightings": 0}])
+
+
+class MergeDocument(unittest.TestCase):
+    """``merge_document`` — the first sighting establishes an address, every later one counts."""
+
+    def merge(self, document, existing=None):
+        # merge_document touches no instance state, so skip SearchStore's on-disk constructor.
+        return EmailAddressIndex.merge_document(mock.Mock(spec=EmailAddressIndex), document, existing)
+
+    def document(self, sightings, name="Jane Doe"):
+        return {
+            "id": "jane@example.com",
+            "email": "jane@example.com",
+            "name": name,
+            "text": " ".join(filter(None, (name, "jane@example.com"))),
+            "count": sightings,
+        }
+
+    def test_first_sighting_starts_the_count_at_zero(self):
+        self.assertEqual(self.merge(self.document(1))["count"], 0)
+
+    def test_first_batch_only_counts_sightings_past_the_first(self):
+        self.assertEqual(self.merge(self.document(4))["count"], 3)
+
+    def test_later_sightings_add_to_the_indexed_count(self):
+        merged = self.merge(self.document(2), {"count": 5, "name": "Jane Doe"})
+        self.assertEqual(merged["count"], 7)
+
+    def test_uncounted_upsert_leaves_the_count_alone(self):
+        merged = self.merge(self.document(0), {"count": 5, "name": "Jane Doe"})
+        self.assertEqual(merged["count"], 5)
+
+    def test_uncounted_first_sighting_starts_at_zero(self):
+        self.assertEqual(self.merge(self.document(0))["count"], 0)
+
+    def test_indexed_name_survives_a_nameless_sighting(self):
+        merged = self.merge(self.document(1, name=None), {"count": 0, "name": "Jane Doe"})
+        self.assertEqual(merged["name"], "Jane Doe")
+        self.assertEqual(merged["text"], "Jane Doe jane@example.com")
+
+    def test_a_named_sighting_replaces_the_indexed_name(self):
+        merged = self.merge(self.document(1, name="Jane Roe"), {"count": 0, "name": "Jane Doe"})
+        self.assertEqual(merged["name"], "Jane Roe")
+        self.assertEqual(merged["text"], "Jane Roe jane@example.com")
 
 
 class Tokenize(unittest.TestCase):
@@ -186,6 +273,30 @@ class Relevance(unittest.TestCase):
         self.assertEqual(
             self.rank("jane doe", [spanning, explained]), [explained["email"], spanning["email"]]
         )
+
+    def test_equally_good_matches_prefer_the_one_corresponded_with_most(self):
+        # The reported case: two addresses for the same person, matched identically by "user".
+        org = {"name": "Jane Doe", "email": "user@example.org", "count": 3}
+        com = {"name": "Jane Doe", "email": "user@example.com", "count": 42}
+        self.assertEqual(self.rank("user", [org, com]), [com["email"], org["email"]])
+
+    def test_correspondence_outranks_the_shortest_address_tie_break(self):
+        # Both match "zoe" the same way, and the shorter, alphabetically earlier address is the one
+        # with no correspondence behind it — so only the count can order these.
+        frequent = {"name": None, "email": "zoe.becker@example.com", "count": 9}
+        rare = {"name": None, "email": "zoe.ash@example.com", "count": 0}
+        self.assertEqual(self.rank("zoe", [rare, frequent]), [frequent["email"], rare["email"]])
+
+    def test_correspondence_never_beats_a_better_match(self):
+        # A much-mailed "Doeringer" still ranks below the "Doe" that was actually typed.
+        doe = {"name": "John Doe", "email": "john@example.com", "count": 0}
+        doeringer = {"name": "Jane Doeringer", "email": "jane@example.com", "count": 99}
+        self.assertEqual(self.rank("doe", [doeringer, doe]), [doe["email"], doeringer["email"]])
+
+    def test_an_uncounted_hit_ranks_as_never_corresponded_with(self):
+        counted = {"name": "Jane Doe", "email": "jane.doe@example.com", "count": 1}
+        uncounted = {"name": "Jane Doe", "email": "jane.doe@example.org"}
+        self.assertEqual(self.rank("jane", [uncounted, counted]), [counted["email"], uncounted["email"]])
 
     def test_equally_good_matches_prefer_named_then_shortest(self):
         named = {"name": "Jane Doe", "email": "jane.doe@example.com"}

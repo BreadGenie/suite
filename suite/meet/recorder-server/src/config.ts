@@ -17,6 +17,7 @@ export interface Config {
 	sfuOrigin: string;
 	sfuSocketPath: string;
 	dataRoot: string;
+	minimumFreeBytes: number;
 	segmentSeconds: number;
 	ffmpegExecutable: string;
 	xvfbExecutable: string;
@@ -82,10 +83,21 @@ function socketPath(value: string): string {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const secret = required(env, 'RECORDER_SECRET');
 	const metricsToken = required(env, 'RECORDER_METRICS_TOKEN');
-	if (Buffer.byteLength(secret) < 32)
-		throw new Error('RECORDER_SECRET must be at least 32 bytes');
-	if (Buffer.byteLength(metricsToken) < 32)
-		throw new Error('RECORDER_METRICS_TOKEN must be at least 32 bytes');
+	if (Buffer.byteLength(secret) < 32 || secret.startsWith('change-me-'))
+		throw new Error(
+			'RECORDER_SECRET must be a strong random value of at least 32 bytes',
+		);
+	if (
+		Buffer.byteLength(metricsToken) < 32 ||
+		metricsToken.startsWith('change-me-')
+	)
+		throw new Error(
+			'RECORDER_METRICS_TOKEN must be a strong random value of at least 32 bytes',
+		);
+	if (secret === metricsToken)
+		throw new Error(
+			'Recorder control and metrics credentials must be independent',
+		);
 	const path = required(env, 'RECORDER_LEDGER_PATH');
 	const allowHttp = boolean(env, 'RECORDER_ALLOW_HTTP');
 	return {
@@ -119,6 +131,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		sfuOrigin: origin(required(env, 'SFU_ORIGIN'), allowHttp),
 		sfuSocketPath: socketPath(required(env, 'SFU_SOCKET_PATH')),
 		dataRoot: resolve(env.RECORDER_DATA_ROOT ?? '/data/captures'),
+		minimumFreeBytes: integer(
+			env,
+			'RECORDER_MIN_FREE_BYTES',
+			1024 * 1024 * 1024,
+			0,
+			Number.MAX_SAFE_INTEGER,
+		),
 		segmentSeconds: integer(
 			env,
 			'RECORDER_SEGMENT_SECONDS',

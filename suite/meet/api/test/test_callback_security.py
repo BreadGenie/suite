@@ -47,6 +47,8 @@ class IntegrationTestRecordingCallbackSecurity(IntegrationTestCase):
         frappe.conf.recording_fixture_mode = True
         frappe.db.set_single_value("Meet Settings", "enable_recording", 1)
         frappe.clear_cache(doctype="Meet Settings")
+        frappe.db.delete("Meet Recording", {"room_owner": self.owner})
+        frappe.db.commit()
         frappe.set_user(self.owner)
         self.room = frappe.get_doc({"doctype": "Meet Room", "meeting_type": "open"}).insert()
         started = start(self.room.name, str(uuid.uuid4()))
@@ -63,6 +65,7 @@ class IntegrationTestRecordingCallbackSecurity(IntegrationTestCase):
         frappe.db.delete("Meet Recording", {"meet_room": self.room.name})
         frappe.delete_doc("Meet Room", self.room.name, force=True, ignore_permissions=True)
         frappe.db.set_single_value("Meet Settings", "enable_recording", 0)
+        frappe.db.commit()
         frappe.clear_cache(doctype="Meet Settings")
         frappe.conf.pop("recording_fixture_mode", None)
 
@@ -120,10 +123,21 @@ class IntegrationTestRecordingCallbackSecurity(IntegrationTestCase):
                 with self.assertRaises(frappe.AuthenticationError):
                     self._authenticate(now)
 
-        self._set_token(self._claims(now))
-        first = self._authenticate(now)
-        second = self._authenticate(now)
-        self.assertEqual(first, second)
+        claims = self._claims(now)
+        self._set_token(claims)
+        self.assertEqual(self._authenticate(now)["jti"], claims["jti"])
+        with self.assertRaises(frappe.AuthenticationError):
+            self._authenticate(now)
+
+    def test_callback_token_is_bound_to_exact_request_body(self):
+        now = int(time.time())
+        body = b'{"status":"ok"}'
+        claims = {**self._claims(now), "body_sha256": hashlib.sha256(body).hexdigest()}
+        self._set_token(claims, body=body)
+        frappe.local.request.get_data.return_value = b'{"status":"altered"}'
+
+        with self.assertRaises(frappe.AuthenticationError):
+            self._authenticate(now)
 
     def test_mutating_callbacks_are_post_only(self):
         for callback in (
@@ -227,19 +241,23 @@ class IntegrationTestRecordingCallbackSecurity(IntegrationTestCase):
             "job": self.recording.recorder_job_id,
             "operation": "stopped",
             "operation_id": "2",
+            "body_sha256": hashlib.sha256(b"{}").hexdigest(),
             "jti": str(uuid.uuid4()),
             "iat": now,
             "exp": now + 30,
         }
 
-    def _set_token(self, claims: dict, headers: dict | None = None):
+    def _set_token(self, claims: dict, headers: dict | None = None, body: bytes = b"{}"):
         token = jwt.encode(
             claims,
             frappe.conf.recorder_secret,
             algorithm="HS256",
             headers=headers or {"typ": CALLBACK_TYPE},
         )
-        frappe.local.request = Mock(headers={"X-Meet-Recorder-Authorization": f"Bearer {token}"})
+        frappe.local.request = Mock(
+            headers={"X-Meet-Recorder-Authorization": f"Bearer {token}"},
+            get_data=Mock(return_value=body),
+        )
 
     def _authenticate(self, now: int):
         return authenticate_callback(

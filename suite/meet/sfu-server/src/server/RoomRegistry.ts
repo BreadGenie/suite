@@ -33,6 +33,7 @@ export class RoomRegistry {
 	private raisedHands: Record<string, Record<string, string>> = {};
 	private hostOnlyChat: Record<string, boolean> = {};
 	private participantSockets: Record<string, Record<string, string>> = {};
+	private participantConnections = new Map<string, Map<string, Set<string>>>();
 	private activePolls: Record<string, Map<string, ActivePoll>> = {};
 	private fullAccessSockets: Map<string, Set<string>> = new Map();
 	private previewSockets: Map<string, Set<string>> = new Map();
@@ -91,6 +92,16 @@ export class RoomRegistry {
 			current.socket.disconnect(true);
 	}
 
+	deactivateRecorder(socket: Socket): void {
+		const recordingId = socket.recordingClaims?.recording_id;
+		if (
+			recordingId &&
+			this.activeRecordings.get(recordingId)?.socket.id === socket.id
+		) {
+			this.activeRecordings.delete(recordingId);
+		}
+	}
+
 	joinRecorder(socket: Socket, roomId: string, peerId: string): void {
 		socket.join(recorderRoom(roomId));
 		if (!this.recorderSockets.has(roomId))
@@ -113,13 +124,7 @@ export class RoomRegistry {
 			this.recorderPeerIds.get(roomId)?.delete(peerId);
 			this.recorderPeerSockets.get(roomId)?.delete(peerId);
 		}
-		const claims = socket.recordingClaims;
-		if (
-			claims &&
-			this.activeRecordings.get(claims.recording_id)?.socket.id === socket.id
-		) {
-			this.activeRecordings.delete(claims.recording_id);
-		}
+		this.deactivateRecorder(socket);
 		return ownsPeer;
 	}
 
@@ -149,6 +154,17 @@ export class RoomRegistry {
 		participantId: string,
 	): void {
 		if (!this.participantSockets[roomId]) this.participantSockets[roomId] = {};
+		let participants = this.participantConnections.get(roomId);
+		if (!participants) {
+			participants = new Map();
+			this.participantConnections.set(roomId, participants);
+		}
+		let connections = participants.get(participantId);
+		if (!connections) {
+			connections = new Set();
+			participants.set(participantId, connections);
+		}
+		connections.add(socket.id);
 		this.participantSockets[roomId][participantId] = socket.id;
 	}
 
@@ -157,12 +173,29 @@ export class RoomRegistry {
 		roomId: string,
 		participantId: string,
 	): boolean {
+		const participants = this.participantConnections.get(roomId);
+		const connections = participants?.get(participantId);
+		connections?.delete(socket.id);
+		if (connections?.size === 0) {
+			participants?.delete(participantId);
+			if (participants?.size === 0) this.participantConnections.delete(roomId);
+		}
 		if (this.participantSockets[roomId]?.[participantId] !== socket.id) {
 			return false;
 		}
 
 		delete this.participantSockets[roomId][participantId];
 		return true;
+	}
+
+	hasHumanParticipants(roomId: string): boolean {
+		return (this.participantConnections.get(roomId)?.size ?? 0) > 0;
+	}
+
+	getRecorderSockets(roomId: string): Socket[] {
+		return [...(this.recorderSockets.get(roomId) ?? [])]
+			.map((socketId) => this.io.sockets.sockets.get(socketId))
+			.filter((socket): socket is Socket => Boolean(socket));
 	}
 
 	setRaisedHand(roomId: string, peerId: string, isoTimestamp: string): void {
@@ -207,12 +240,22 @@ export class RoomRegistry {
 	}
 
 	cleanupRoom(roomId: string): void {
+		this.cleanupMediaRoom(roomId);
+		this.previewSockets.delete(roomId);
+	}
+
+	cleanupMediaRoom(roomId: string): void {
+		const recorderSocketIds = this.recorderSockets.get(roomId) ?? new Set();
+		for (const [recordingId, active] of this.activeRecordings) {
+			if (recorderSocketIds.has(active.socket.id))
+				this.activeRecordings.delete(recordingId);
+		}
 		delete this.raisedHands[roomId];
 		delete this.hostOnlyChat[roomId];
 		delete this.participantSockets[roomId];
+		this.participantConnections.delete(roomId);
 		delete this.activePolls[roomId];
 		this.fullAccessSockets.delete(roomId);
-		this.previewSockets.delete(roomId);
 		this.recorderSockets.delete(roomId);
 		this.recorderPeerIds.delete(roomId);
 		this.recorderPeerSockets.delete(roomId);

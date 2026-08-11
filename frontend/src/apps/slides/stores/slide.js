@@ -8,7 +8,7 @@ import {
 	presentationTheme,
 	transformElements,
 } from '@/apps/slides/stores/presentation'
-import { resetFocus } from '@/apps/slides/stores/element'
+import { flushPendingBlur, resetFocus } from '@/apps/slides/stores/element'
 import { saveChanges, dirty, saveFailed } from '@/apps/slides/stores/saving'
 import { commandHistory } from '@/apps/slides/stores/historyMeta'
 import { generateUniqueId, cloneObj } from '@/apps/slides/utils/helpers'
@@ -98,18 +98,21 @@ const setSlideIndex = (index) => {
 	slideIndex.value = index
 }
 
-const changeSlide = async (index, focus = true) => {
+const changeSlide = (index, focus = true) => {
 	index = Math.max(0, Math.min(index, slidesLength.value - 1))
 
-	await router.replace({
-		query: { slide: index + 1 },
-	})
+	slideIndex.value = index
 
 	if (focus) {
 		focusedSlide.value = index
 	} else {
 		focusedSlide.value = null
 	}
+
+	// the query only mirrors the slide we already landed on, so nothing waits on it
+	router.replace({
+		query: { slide: index + 1 },
+	})
 }
 
 const resetAndSave = async () => {
@@ -168,9 +171,10 @@ const deleteSlide = (deleteActive, index) => {
 	)
 }
 
-const changeEditorSlide = async (index, focus = true) => {
+const changeEditorSlide = (index, focus = true) => {
 	if (!inReadonlyMode.value) {
-		await resetFocus()
+		flushPendingBlur()
+		resetFocus()
 	}
 	return changeSlide(index, focus)
 }

@@ -15,6 +15,7 @@ interface CallbackClientOptions {
 	secret: string;
 	dataRoot: string;
 	timeoutMs?: number;
+	sleep?: (ms: number) => Promise<void>;
 }
 
 interface InterruptedRequest {
@@ -92,8 +93,12 @@ interface UploadChunkResponse {
 
 export class CallbackClient {
 	private readonly timeoutMs: number;
+	private readonly sleep: (ms: number) => Promise<void>;
 	constructor(private readonly options: CallbackClientOptions) {
 		this.timeoutMs = options.timeoutMs ?? 30_000;
+		this.sleep =
+			options.sleep ??
+			((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 	}
 
 	async interrupted(job: JobRecord): Promise<void> {
@@ -145,7 +150,7 @@ export class CallbackClient {
 				return;
 			} catch (error) {
 				if (attempt === 4) throw error;
-				await new Promise((resolve) => setTimeout(resolve, delay));
+				await this.sleep(delay);
 				delay *= 2;
 			}
 		}
@@ -227,7 +232,7 @@ export class CallbackClient {
 		} finally {
 			await file.close();
 		}
-		await this.json(
+		const completed = await this.json(
 			'recorder_complete_upload',
 			job,
 			'complete_upload',
@@ -239,6 +244,8 @@ export class CallbackClient {
 			},
 			parseStatusResponse,
 		);
+		if (!['Ready', 'Partial'].includes(completed.status))
+			throw new Error('Frappe recording artifact is still processing');
 	}
 
 	private async retryHealthCallback(
@@ -251,7 +258,7 @@ export class CallbackClient {
 				return;
 			} catch (error) {
 				if (attempt === 4) throw error;
-				await new Promise((resolve) => setTimeout(resolve, delay));
+				await this.sleep(delay);
 				delay *= 2;
 			}
 		}
@@ -326,7 +333,12 @@ export class CallbackClient {
 			...init,
 			headers: {
 				...init.headers,
-				'X-Meet-Recorder-Authorization': `Bearer ${this.token(job, operation, operationId)}`,
+				'X-Meet-Recorder-Authorization': `Bearer ${this.token(
+					job,
+					operation,
+					operationId,
+					init.body,
+				)}`,
 			},
 			signal: AbortSignal.timeout(this.timeoutMs),
 		});
@@ -347,8 +359,16 @@ export class CallbackClient {
 		job: JobRecord,
 		operation: CallbackOperation,
 		operationId: string,
+		body: BodyInit | null | undefined,
 	): string {
 		const now = Math.floor(Date.now() / 1000);
+		const bytes =
+			typeof body === 'string'
+				? Buffer.from(body)
+				: body instanceof Uint8Array
+					? Buffer.from(body)
+					: undefined;
+		if (!bytes) throw new Error('unsupported callback request body');
 		return jwt.sign(
 			{
 				iss: `meet-recorder:${this.options.site}`,
@@ -358,6 +378,7 @@ export class CallbackClient {
 				job: job.job,
 				operation,
 				operation_id: operationId,
+				body_sha256: createHash('sha256').update(bytes).digest('hex'),
 				jti: randomUUID(),
 				iat: now,
 				exp: now + 30,

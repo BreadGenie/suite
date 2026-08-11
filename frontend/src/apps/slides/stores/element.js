@@ -29,6 +29,7 @@ import {
 	addElementCommand,
 	removeElementCommand,
 } from '@/apps/slides/stores/commands'
+import { interactionOffset } from '@/apps/slides/stores/interaction'
 
 const findSlideElement = (id) => currentSlide.value?.elements.find((el) => el.id === id)
 
@@ -718,10 +719,10 @@ const duplicateElements = async (e, elements, srcSlide, toDisplace = true) => {
 	)
 }
 
-const deleteElements = async (e, ids) => {
+const deleteElements = (e, ids) => {
 	const idsToDelete = (ids || activeElementIds.value).filter((id) => !findSlideElement(id)?.locked)
 	if (!idsToDelete.length) return
-	await resetFocus()
+	resetFocus()
 	let commands = []
 
 	idsToDelete.forEach((id) => {
@@ -810,21 +811,27 @@ const getElementPosition = (elementId) => {
 
 const getElementLayoutPosition = (element) => {
 	const elementDiv = getElementDiv(element.id)
+
+	// a gesture in flight rides on a transform, so the rendered position is
+	// left/top plus the offset, which is what SelectionBox subtracts back out
+	const left = element.left + interactionOffset.left
+	const top = element.top + interactionOffset.top
+
 	// no rendered node yet: fall back to the element's stored bounds
 	if (!elementDiv) {
 		return {
-			left: element.left,
-			top: element.top,
-			right: element.left + (element.width || 0),
-			bottom: element.top + (element.height || 0),
+			left,
+			top,
+			right: left + (element.width || 0),
+			bottom: top + (element.height || 0),
 		}
 	}
 
 	return {
-		left: element.left,
-		top: element.top,
-		right: element.left + elementDiv.offsetWidth,
-		bottom: element.top + elementDiv.offsetHeight,
+		left,
+		top,
+		right: left + elementDiv.offsetWidth,
+		bottom: top + elementDiv.offsetHeight,
 	}
 }
 
@@ -870,10 +877,13 @@ const getEditorHTML = () => {
 }
 
 const updateElementContent = (element) => {
-	const { wasUpdated, updatedHTML } = getEditorHTML()
+	const { updatedHTML } = getEditorHTML()
 	const currentText = activeEditor.value.getText()
 
-	if (editorOldText == currentText && !wasUpdated) return
+	// legacy content keeps needing the patch, so idempotence has to come from
+	// comparing against what is stored, or a second blur-save runs the refId
+	// pairing again after the slide index has already moved on
+	if (editorOldText == currentText && element.content == updatedHTML) return
 
 	const refCommands = getCommandsToUpdateElementRefId(element) || []
 	if (refCommands.length) {
@@ -896,7 +906,8 @@ const updateElementContent = (element) => {
 
 const blurAndSaveContent = (element) => {
 	activeEditor.value.setEditable(false)
-	activeEditor.value.commands.blur()
+	// blur() drops the window selection, including one this editor never held
+	if (activeEditor.value.isFocused) activeEditor.value.commands.blur()
 
 	const isEmpty = (activeEditor.value?.getText() || '').replace(/\u200B/g, '') === ''
 
@@ -912,6 +923,14 @@ const blurAndSaveContent = (element) => {
 	}
 }
 
+// the watches below only fire after the slide has already changed, so leaving
+// a slide has to save the open editor while its element is still reachable
+const flushPendingBlur = () => {
+	const element = activeElement.value
+	if (!activeEditor.value || !['text', 'shape'].includes(element?.type)) return
+	blurAndSaveContent(element)
+}
+
 const setEditableState = () => {
 	activeEditor.value.setEditable(true)
 	activeEditor.value.commands.focus()
@@ -923,31 +942,31 @@ const setEditableState = () => {
 
 const initEditorForElement = (element) => {
 	if (element?.type == 'text') {
-		const isEditable = focusElementId.value == element.id
 		initTextEditor(
 			element.id,
 			element.content,
-			isEditable,
+			focusElementId.value == element.id,
 			element.locked ? null : element.editorMetadata?.lineHeight,
 		)
-
-		if (isEditable) setEditableState()
 	}
 }
 
-const replaceEditor = (fn) =>
-	nextTick(() => {
-		activeEditor.value?.destroy()
-		activeEditor.value = null
+// dropping the old editor before the next render keeps EditorContent from
+// mounting onto an editor that is about to be destroyed
+const replaceEditor = (fn) => {
+	activeEditor.value?.destroy()
+	activeEditor.value = null
+
+	return nextTick(() => {
 		fn?.()
 		editorOldText = activeEditor.value?.getText()
 	})
+}
 
 const initShapeEditor = (element) =>
-	replaceEditor(() => {
-		initTextEditor(element.id, element.content || getInitialShapeTextContent(element), true)
-		setEditableState()
-	})
+	replaceEditor(() =>
+		initTextEditor(element.id, element.content || getInitialShapeTextContent(element), true),
+	)
 
 watch(
 	() => activeElement.value,
@@ -1009,6 +1028,9 @@ const normalizeZIndices = (elements) => {
 }
 
 const cropSelectionToFitContent = (elementIds) => {
+	// every caller defers this, so the elements it names can be gone by now
+	if (!elementIds.every((id) => findSlideElement(id))) return
+
 	let l = 10000,
 		t = 10000,
 		r = 0,
@@ -1017,7 +1039,8 @@ const cropSelectionToFitContent = (elementIds) => {
 	// crop selection to selected element edges
 	elementIds.forEach((id) => {
 		const element = currentSlide.value.elements.find((el) => el.id === id)
-		const useLayoutBounds = elementIds.length == 1 && ['shape', 'image'].includes(element?.type)
+		// same source the resize observer writes from, so the two never disagree by a sub-pixel
+		const useLayoutBounds = elementIds.length == 1
 
 		const {
 			left: elementLeft,
@@ -1125,6 +1148,7 @@ export {
 	unlockAll,
 	setActiveElements,
 	resetFocus,
+	flushPendingBlur,
 	exitTextEditing,
 	addTextElement,
 	addMediaElement,
@@ -1144,6 +1168,7 @@ export {
 	updatePosition,
 	flipElements,
 	findSlideElement,
+	getInitialShapeTextContent,
 	cropSelectionToFitContent,
 	getElementCenter,
 }

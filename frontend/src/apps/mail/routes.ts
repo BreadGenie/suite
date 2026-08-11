@@ -115,6 +115,14 @@ export const routes: RouteRecordRaw[] = [
 				component: () => import('@/apps/mail/pages/MailboxView.vue'),
 				props: true,
 			},
+			// Profile as a page rather than a bottom sheet, so the tab behaves like the other
+			// three — a route the bar keeps a selected state for. It holds the mobile settings
+			// list itself; PWASettings stays for the sidebar and in-thread entry points.
+			{
+				path: 'account/:accountId/profile',
+				name: 'mail-profile',
+				component: () => import('@/apps/mail/pages/ProfileView.vue'),
+			},
 			{
 				path: 'account/:accountId/screener',
 				name: 'mail-screener',

@@ -24,6 +24,9 @@ export function registerDisconnectHandlers(deps: HandlerDeps) {
 
 			const roomId = socket.roomId;
 			const participantId = socket.participantId;
+			if (socket.scope === 'recording') {
+				deps.registry.deactivateRecorder(socket);
+			}
 
 			if (roomId && participantId) {
 				try {
@@ -74,27 +77,20 @@ export function registerDisconnectHandlers(deps: HandlerDeps) {
 								});
 							}
 
-							const wasLastSubscriber = deps.sttManager?.removeSubscriber(
-								roomId,
-								socket.id,
-							);
-							if (wasLastSubscriber) {
-								await deps.sttManager?.stopRoom(roomId);
-							}
-
 							loggers.socketHandler.info(
 								'Cleaned up user %s from room %s',
 								participantId,
 								roomId,
 							);
 						}
-					}
-
-					if (deps.registry.isEmpty(roomId)) {
-						deps.registry.cleanupRoom(roomId);
-						deps.e2eeEpochRelay.clearRoom(roomId);
-						await deps.e2eeRoster.clearRoom(roomId);
-						await deps.mediasoup.closeRoom(roomId);
+						const wasLastSubscriber = deps.sttManager?.removeSubscriber(
+							roomId,
+							socket.id,
+						);
+						if (wasLastSubscriber) {
+							await deps.sttManager?.stopRoom(roomId);
+						}
+						deps.roomLifecycle.scheduleCleanupIfHumanEmpty(roomId);
 					}
 				} catch (error) {
 					loggers.socketHandler.error('Error handling disconnect: %s', error);

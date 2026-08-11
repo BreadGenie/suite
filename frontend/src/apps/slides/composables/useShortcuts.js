@@ -27,7 +27,6 @@ import {
 	activeElements,
 	deleteElements,
 	duplicateElements,
-	activeElement,
 	isSelectionLocked,
 	toggleLock,
 } from '@/apps/slides/stores/element'
@@ -77,8 +76,6 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 		markDirty()
 	}
 
-	const isEditorFocused = () => activeEditor.value?.isEditable
-
 	const isPlainInput = (e) => {
 		const target = e?.target
 		return (
@@ -88,32 +85,25 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 		)
 	}
 
-	const performHistory = (operation) => {
-		if (isEditorFocused()) {
-			if (operation == 'undo' && !activeEditor.value?.can().undo()) {
-				commandHistory.undo()
-			} else if (operation == 'redo' && !activeEditor.value?.can().redo()) {
-				commandHistory.redo()
-			}
-			return
-		}
+	// every editable field except the slide editor keeps its own text undo. this
+	// has to gate the shortcut rather than its handler: a matched shortcut is
+	// preventDefaulted before the handler runs, which would kill the native undo too
+	const ownsNativeUndo = () => {
+		const target = document.activeElement
+		if (!target || target.closest('.ProseMirror')) return false
+		return (
+			target.isContentEditable ||
+			target.tagName == 'INPUT' ||
+			target.tagName == 'TEXTAREA'
+		)
+	}
 
-		if (
-			activeEditor.value?.can()[operation]() &&
-			activeElement.value?.type == 'text' &&
-			!isSelectionLocked.value
-		) {
-			activeEditor.value.commands[operation]()
-			return
-		}
+	const performHistory = (e, operation) => {
+		// an undo mid-composition destroys the IME node
+		if (e.isComposing || activeEditor.value?.view.composing) return
 
-		if (operation == 'undo' && commandHistory.canUndo.value) {
-			if (activeElement.value?.type == 'text') activeElementIds.value = []
-			commandHistory.undo()
-		} else if (operation == 'redo' && commandHistory.canRedo.value) {
-			if (activeElement.value?.type == 'text') activeElementIds.value = []
-			commandHistory.redo()
-		}
+		if (operation == 'undo') commandHistory.undo()
+		else commandHistory.redo()
 	}
 
 	const handleBold = (e) => {
@@ -200,11 +190,8 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 			description: 'Undo',
 			group: 'General',
 			allowInInput: true,
-			condition: inEditMode,
-			handler: (e) => {
-				if (isPlainInput(e)) return
-				performHistory('undo')
-			},
+			condition: () => inEditMode() && !ownsNativeUndo(),
+			handler: (e) => performHistory(e, 'undo'),
 		},
 		{
 			key: 'y',
@@ -212,11 +199,8 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 			description: 'Redo',
 			group: 'General',
 			allowInInput: true,
-			condition: inEditMode,
-			handler: (e) => {
-				if (isPlainInput(e)) return
-				performHistory('redo')
-			},
+			condition: () => inEditMode() && !ownsNativeUndo(),
+			handler: (e) => performHistory(e, 'redo'),
 		},
 		{
 			key: 'z',
@@ -225,11 +209,8 @@ export const useShortcuts = (inReadonlyMode, inSlideShowMode) => {
 			description: 'Redo',
 			group: 'General',
 			allowInInput: true,
-			condition: inEditMode,
-			handler: (e) => {
-				if (isPlainInput(e)) return
-				performHistory('redo')
-			},
+			condition: () => inEditMode() && !ownsNativeUndo(),
+			handler: (e) => performHistory(e, 'redo'),
 		},
 
 		{

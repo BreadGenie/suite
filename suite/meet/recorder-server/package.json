@@ -11,6 +11,7 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run",
+		"test:ci": "vitest run --coverage --reporter=default --reporter=junit --reporter=github-actions --outputFile=test-results/junit.xml",
 		"test:integration": "./integration/run.sh"
 	},
 	"packageManager": "yarn@1.22.22",
@@ -26,6 +27,7 @@
 		"@types/express": "^4.17.21",
 		"@types/jsonwebtoken": "^9.0.6",
 		"@types/node": "^20.11.24",
+		"@vitest/coverage-v8": "4.1.10",
 		"socket.io": "^4.8.3",
 		"typescript": "^5.3.3",
 		"vitest": "^4.1.6"
