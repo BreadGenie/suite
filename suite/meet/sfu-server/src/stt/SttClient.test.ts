@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WebSocketServer } from 'ws';
+import { type WebSocket, WebSocketServer } from 'ws';
 import { SttClient, type SttTranscriptEvent } from './SttClient';
 
 interface ClientEvent {
@@ -107,6 +107,8 @@ describe('SttClient Realtime protocol', () => {
 			},
 			(event) => transcripts.push(event),
 		);
+		const unexpectedClose = vi.fn();
+		stream.onUnexpectedClose(unexpectedClose);
 
 		stream.sendAudio(Buffer.from([0, 0, 1, 0]));
 		stream.markFinal(100);
@@ -131,6 +133,100 @@ describe('SttClient Realtime protocol', () => {
 			{ text: 'hello', isFinal: false, durationMs: 100, sequence: 1 },
 			{ text: 'hello world', isFinal: true, durationMs: 100, sequence: 2 },
 		]);
+		expect(unexpectedClose).not.toHaveBeenCalled();
+	});
+
+	it('reports a configured Realtime stream closing unexpectedly', async () => {
+		server = createServer((_request, response) => {
+			response.writeHead(200, { 'Content-Type': 'application/json' });
+			response.end('{"status":"ok"}');
+		});
+		websocketServer = new WebSocketServer({ server, path: '/v1/realtime' });
+		await new Promise<void>((resolve) =>
+			server!.listen(0, '127.0.0.1', resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === 'string')
+			throw new Error('Missing test server address');
+
+		let serverSocket: WebSocket | undefined;
+		websocketServer.on('connection', (socket) => {
+			serverSocket = socket;
+			socket.send(JSON.stringify({ type: 'session.created' }));
+			socket.on('message', (raw) => {
+				const event = JSON.parse(raw.toString()) as ClientEvent;
+				if (event.type === 'session.update') {
+					socket.send(JSON.stringify({ type: 'session.updated' }));
+				}
+			});
+		});
+
+		client = new SttClient(`http://127.0.0.1:${address.port}`);
+		const stream = await client.createStream(
+			{
+				sessionId: 'meet-session-1',
+				roomId: 'room-1',
+				participantId: 'participant-1',
+				producerId: 'producer-1',
+				sampleRate: 24000,
+			},
+			vi.fn(),
+		);
+		const unexpectedClose = vi.fn();
+		stream.onUnexpectedClose(unexpectedClose);
+
+		serverSocket?.close(1011, 'backend failure');
+		await vi.waitFor(() => expect(unexpectedClose).toHaveBeenCalledTimes(1));
+		await stream.close();
+		expect(unexpectedClose).toHaveBeenCalledTimes(1);
+	});
+
+	it('delivers an unexpected close that occurs before listener registration', async () => {
+		server = createServer((_request, response) => {
+			response.writeHead(200, { 'Content-Type': 'application/json' });
+			response.end('{"status":"ok"}');
+		});
+		websocketServer = new WebSocketServer({ server, path: '/v1/realtime' });
+		await new Promise<void>((resolve) =>
+			server!.listen(0, '127.0.0.1', resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === 'string')
+			throw new Error('Missing test server address');
+
+		websocketServer.on('connection', (socket) => {
+			socket.send(JSON.stringify({ type: 'session.created' }));
+			socket.on('message', (raw) => {
+				const event = JSON.parse(raw.toString()) as ClientEvent;
+				if (event.type === 'session.update') {
+					socket.send(JSON.stringify({ type: 'session.updated' }), () => {
+						socket.close(1011, 'backend failure');
+					});
+				}
+			});
+		});
+
+		client = new SttClient(`http://127.0.0.1:${address.port}`);
+		const stream = await client.createStream(
+			{
+				sessionId: 'meet-session-1',
+				roomId: 'room-1',
+				participantId: 'participant-1',
+				producerId: 'producer-1',
+				sampleRate: 24000,
+			},
+			vi.fn(),
+		);
+		await vi.waitFor(() => {
+			const internals = stream as unknown as { unexpectedlyClosed: boolean };
+			expect(internals.unexpectedlyClosed).toBe(true);
+		});
+		const unexpectedClose = vi.fn();
+
+		stream.onUnexpectedClose(unexpectedClose);
+
+		expect(unexpectedClose).toHaveBeenCalledTimes(1);
+		await stream.close();
 	});
 
 	it('notifies after each unhealthy-to-healthy recovery', async () => {

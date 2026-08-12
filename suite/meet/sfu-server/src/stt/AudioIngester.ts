@@ -26,6 +26,7 @@ interface AudioIngesterOptions {
 	captureDirectory?: string;
 	/** Called before each flush; if false, audio is discarded (active-speaker-only mode) */
 	isActiveSpeaker?: () => boolean;
+	onUnexpectedStreamClose: () => void;
 	onTranscript: (text: string, isFinal: boolean, durationMs: number) => void;
 }
 
@@ -97,6 +98,7 @@ export class AudioIngester {
 	private pendingCaptureMetadata: string[] = [];
 	private sessionId = randomUUID();
 	private isActiveSpeaker?: () => boolean;
+	private onUnexpectedStreamClose: () => void;
 	private onTranscript: (
 		text: string,
 		isFinal: boolean,
@@ -129,6 +131,7 @@ export class AudioIngester {
 		this.sttClient = options.sttClient;
 		this.captureDirectory = options.captureDirectory;
 		this.isActiveSpeaker = options.isActiveSpeaker;
+		this.onUnexpectedStreamClose = options.onUnexpectedStreamClose;
 		this.onTranscript = options.onTranscript;
 	}
 
@@ -138,13 +141,29 @@ export class AudioIngester {
 
 		try {
 			await this.setupPlainTransport();
+			if (!this.running) {
+				await this.stop();
+				return;
+			}
 			await this.createConsumer();
+			if (!this.running) {
+				await this.stop();
+				return;
+			}
 			await this.startFfmpeg();
-			this.plainTransport!.connect({
+			if (!this.running) {
+				await this.stop();
+				return;
+			}
+			await this.plainTransport!.connect({
 				ip: '127.0.0.1',
 				port: this.ffmpegPort,
 			});
-			this.sttStream = await this.sttClient.createStream(
+			if (!this.running) {
+				await this.stop();
+				return;
+			}
+			const stream = await this.sttClient.createStream(
 				{
 					sessionId: this.sessionId,
 					roomId: this.roomId,
@@ -159,6 +178,17 @@ export class AudioIngester {
 					this.onTranscript(event.text, event.isFinal, event.durationMs);
 				},
 			);
+			if (!this.running) {
+				await stream.close();
+				await this.stop();
+				return;
+			}
+			this.sttStream = stream;
+			stream.onUnexpectedClose(() => {
+				if (!this.running || this.sttStream !== stream) return;
+				this.onUnexpectedStreamClose();
+			});
+			if (!this.running || this.sttStream !== stream) return;
 			this.startVadLoop();
 
 			loggers.stt.info(
@@ -182,7 +212,6 @@ export class AudioIngester {
 	}
 
 	async stop(): Promise<void> {
-		if (!this.running) return;
 		this.running = false;
 
 		if (this.vadTimer) {
@@ -194,43 +223,46 @@ export class AudioIngester {
 			this.markFinal();
 		}
 
-		if (this.sttStream) {
-			await this.sttStream.close();
-			this.sttStream = null;
-		}
+		const stream = this.sttStream;
+		this.sttStream = null;
+		if (stream) await stream.close();
 
-		if (this.consumer) {
+		const consumer = this.consumer;
+		this.consumer = null;
+		if (consumer) {
 			try {
-				this.consumer.close();
+				consumer.close();
 			} catch {
 				/* ignore */
 			}
-			this.consumer = null;
 		}
-		if (this.plainTransport) {
+		const plainTransport = this.plainTransport;
+		this.plainTransport = null;
+		if (plainTransport) {
 			try {
-				this.plainTransport.close();
+				plainTransport.close();
 			} catch {
 				/* ignore */
 			}
-			this.plainTransport = null;
 		}
-		if (this.ffmpeg && !this.ffmpeg.killed) {
-			this.ffmpeg.kill('SIGTERM');
+		const ffmpeg = this.ffmpeg;
+		this.ffmpeg = null;
+		if (ffmpeg && !ffmpeg.killed) {
+			ffmpeg.kill('SIGTERM');
 			setTimeout(() => {
-				if (this.ffmpeg && !this.ffmpeg.killed) {
-					this.ffmpeg.kill('SIGKILL');
+				if (ffmpeg.exitCode === null && ffmpeg.signalCode === null) {
+					ffmpeg.kill('SIGKILL');
 				}
 			}, 1000);
-			this.ffmpeg = null;
 		}
-		if (this.sdpPath) {
+		const sdpPath = this.sdpPath;
+		this.sdpPath = '';
+		if (sdpPath) {
 			try {
-				fs.unlinkSync(this.sdpPath);
+				fs.unlinkSync(sdpPath);
 			} catch {
 				/* ignore */
 			}
-			this.sdpPath = '';
 		}
 
 		loggers.stt.info('AudioIngester stopped for %s', this.participantId);
@@ -350,35 +382,35 @@ export class AudioIngester {
 	}
 
 	private async runVadCheck(): Promise<void> {
-		if (this.vadQueueBytes < BYTES_PER_CHECK) return;
+		while (this.vadQueueBytes >= BYTES_PER_CHECK) {
+			const frame = this.dequeueBytes(BYTES_PER_CHECK);
+			const frameSumSq = this.calculateSumSq(frame);
+			const rms =
+				Math.sqrt(frameSumSq / (BYTES_PER_CHECK / BYTES_PER_SAMPLE)) / 32768;
+			const isSpeech = rms > SPEECH_RMS_THRESHOLD;
 
-		const frame = this.dequeueBytes(BYTES_PER_CHECK);
-		const frameSumSq = this.calculateSumSq(frame);
-		const rms =
-			Math.sqrt(frameSumSq / (BYTES_PER_CHECK / BYTES_PER_SAMPLE)) / 32768;
-		const isSpeech = rms > SPEECH_RMS_THRESHOLD;
-
-		if (isSpeech) {
-			if (!this.isInSpeech) {
-				for (const preRollFrame of this.preRoll.drain()) {
-					this.sendFrame(preRollFrame);
+			if (isSpeech) {
+				if (!this.isInSpeech) {
+					for (const preRollFrame of this.preRoll.drain()) {
+						this.sendFrame(preRollFrame);
+					}
 				}
-			}
-			this.silenceCheckCount = 0;
-			this.speechCheckCount++;
-			this.isInSpeech = true;
-			this.sendFrame(frame);
-		} else {
-			this.silenceCheckCount++;
-			if (this.isInSpeech) {
+				this.silenceCheckCount = 0;
+				this.speechCheckCount++;
+				this.isInSpeech = true;
 				this.sendFrame(frame);
 			} else {
-				this.preRoll.remember(frame);
+				this.silenceCheckCount++;
+				if (this.isInSpeech) {
+					this.sendFrame(frame);
+				} else {
+					this.preRoll.remember(frame);
+				}
 			}
-		}
 
-		if (this.shouldFlush()) {
-			this.markFinal();
+			if (this.shouldFlush()) {
+				this.markFinal();
+			}
 		}
 	}
 

@@ -31,7 +31,7 @@ export function registerAuthHandlers(deps: HandlerDeps) {
 						socket.id,
 					);
 					if (wasLastSubscriber) {
-						void deps.sttManager?.stopRoom(socket.roomId);
+						void deps.sttManager?.stopRoom(socket.roomId, true);
 					}
 				}
 				deps.telemetry.authEvents.inc({

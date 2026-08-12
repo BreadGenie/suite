@@ -88,7 +88,7 @@ export function registerDisconnectHandlers(deps: HandlerDeps) {
 							socket.id,
 						);
 						if (wasLastSubscriber) {
-							await deps.sttManager?.stopRoom(roomId);
+							await deps.sttManager?.stopRoom(roomId, true);
 						}
 						deps.roomLifecycle.scheduleCleanupIfHumanEmpty(roomId);
 					}

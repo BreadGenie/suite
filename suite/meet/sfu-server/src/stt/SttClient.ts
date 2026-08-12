@@ -21,6 +21,7 @@ export interface SttTranscriptEvent {
 export interface ISttStream {
 	sendAudio(frame: Buffer): void;
 	markFinal(durationMs: number): void;
+	onUnexpectedClose(listener: () => void): void;
 	close(): Promise<void>;
 }
 
@@ -113,8 +114,14 @@ export class SttClient implements ISttClient {
 	): Promise<ISttStream> {
 		const socket = new WebSocket(this.getStreamUrl());
 		const stream = new SttStream(socket, metadata, onTranscript);
-		await stream.connect();
-		return stream;
+		try {
+			await stream.connect();
+			return stream;
+		} catch (error) {
+			this.available = false;
+			await stream.close();
+			throw error;
+		}
 	}
 
 	private getStreamUrl(): string {
@@ -136,6 +143,10 @@ class SttStream implements ISttStream {
 	private readyResolve: (() => void) | null = null;
 	private readyReject: ((error: Error) => void) | null = null;
 	private ready = false;
+	private closeRequested = false;
+	private unexpectedlyClosed = false;
+	private unexpectedCloseDelivered = false;
+	private unexpectedCloseListener: (() => void) | null = null;
 
 	constructor(
 		private socket: WebSocket,
@@ -145,12 +156,18 @@ class SttStream implements ISttStream {
 		this.socket.on('message', (data) => this.handleMessage(data.toString()));
 		this.socket.on('error', (error) => this.readyReject?.(error));
 		this.socket.on('close', (code, reason) => {
+			const wasReady = this.ready;
+			this.ready = false;
 			this.readyReject?.(
 				new Error(
 					`STT stream closed before setup (${code}: ${reason.toString()})`,
 				),
 			);
 			this.resolvePendingWaiters();
+			if (wasReady && !this.closeRequested) {
+				this.unexpectedlyClosed = true;
+				this.deliverUnexpectedClose();
+			}
 			loggers.stt.debug(
 				'STT stream closed for %s (code=%d, reason=%s)',
 				this.metadata.sessionId,
@@ -200,9 +217,16 @@ class SttStream implements ISttStream {
 		this.sendEvent({ type: 'input_audio_buffer.commit' });
 	}
 
+	onUnexpectedClose(listener: () => void): void {
+		this.unexpectedCloseListener = listener;
+		this.deliverUnexpectedClose();
+	}
+
 	async close(): Promise<void> {
+		this.closeRequested = true;
+		if (this.isSocketClosed()) return;
 		await this.waitForPendingCommits();
-		if (this.socket.readyState === WebSocket.CLOSED) return;
+		if (this.isSocketClosed()) return;
 		await new Promise<void>((resolve) => {
 			this.socket.once('close', () => resolve());
 			this.socket.close();
@@ -312,6 +336,21 @@ class SttStream implements ISttStream {
 			this.socket.send(JSON.stringify(event));
 	}
 
+	private isSocketClosed(): boolean {
+		return this.socket.readyState === WebSocket.CLOSED;
+	}
+
+	private deliverUnexpectedClose(): void {
+		if (
+			!this.unexpectedlyClosed ||
+			this.unexpectedCloseDelivered ||
+			!this.unexpectedCloseListener
+		)
+			return;
+		this.unexpectedCloseDelivered = true;
+		this.unexpectedCloseListener();
+	}
+
 	private waitForPendingCommits(): Promise<void> {
 		if (this.pendingCommits === 0) return Promise.resolve();
 		return new Promise((resolve) => {
@@ -381,6 +420,8 @@ class MockSttStream implements ISttStream {
 		this.chunks = [];
 		this.bytes = 0;
 	}
+
+	onUnexpectedClose(_listener: () => void): void {}
 
 	async close(): Promise<void> {
 		this.chunks = [];

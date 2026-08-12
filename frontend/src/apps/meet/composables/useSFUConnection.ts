@@ -148,6 +148,8 @@ export function useSFUConnection(deps: {
 	onScreenShareStarted: (data: SFUScreenShareData) => void;
 	onScreenShareStopped: (data: SFUScreenShareData) => void;
 	onActiveSpeakerChanged: (participantIds: string[]) => void;
+	onRoomRejoined?: (sfuClient: SFUClient) => void;
+	onE2EERequired?: () => void;
 	onRecordingState?: (recording: RecordingState | null) => void;
 	onRecordingEnabled?: (enabled: boolean) => void;
 }): SFUConnectionAPI {
@@ -164,6 +166,8 @@ export function useSFUConnection(deps: {
 		onScreenShareStarted,
 		onScreenShareStopped,
 		onActiveSpeakerChanged,
+		onRoomRejoined,
+		onE2EERequired,
 		onRecordingState,
 		onRecordingEnabled,
 	} = deps;
@@ -193,6 +197,13 @@ export function useSFUConnection(deps: {
 		mediaState,
 		isCurrentTabHost,
 	});
+	const handleMeetingE2EEEnabled = async (data: {
+		meeting_id?: string;
+		e2ee_enabled?: boolean;
+	}) => {
+		if (data.meeting_id === meetingId) onE2EERequired?.();
+		await e2eeHandshake.handleMeetingE2EEEnabled(data);
+	};
 
 	const joinMeetingAPI = createResource({
 		url: "suite.meet.api.meeting.join_meeting",
@@ -311,6 +322,7 @@ export function useSFUConnection(deps: {
 				clientTelemetry.recordRecoveryState(state, detail);
 			},
 			onLifecycleStateChange: participantConnectionState.setLifecycleState,
+			onRoomRejoined: () => onRoomRejoined?.(sfuClient),
 			onParticipantJoined: handleParticipantJoined,
 			onParticipantLeft: handleParticipantLeft,
 			onParticipantUpdated: handleParticipantUpdated,
@@ -798,7 +810,7 @@ export function useSFUConnection(deps: {
 		socket.on("meeting_join_rejected", handleMeetingJoinRejected);
 		socket.on("meeting_user_approved", handleMeetingUserApproved);
 		socket.on("meeting_user_rejected", handleMeetingUserRejected);
-		socket.on("meeting:e2ee_enabled", e2eeHandshake.handleMeetingE2EEEnabled);
+		socket.on("meeting:e2ee_enabled", handleMeetingE2EEEnabled);
 
 		// SFU signal channel handlers and document listeners live in the
 		// E2EE handshake composable; see useE2EEConnectionHandshake.
@@ -815,7 +827,7 @@ export function useSFUConnection(deps: {
 		socket.off("meeting_join_rejected", handleMeetingJoinRejected);
 		socket.off("meeting_user_approved", handleMeetingUserApproved);
 		socket.off("meeting_user_rejected", handleMeetingUserRejected);
-		socket.off("meeting:e2ee_enabled", e2eeHandshake.handleMeetingE2EEEnabled);
+		socket.off("meeting:e2ee_enabled", handleMeetingE2EEEnabled);
 
 		e2eeHandshake.teardownRealtimeEventListeners();
 		e2eeHandshake.teardownForDisconnect();

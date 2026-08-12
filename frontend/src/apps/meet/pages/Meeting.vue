@@ -283,7 +283,10 @@ import RejectionOverlay from "../components/RejectionOverlay.vue";
 import StatsForNerdsOverlay from "../components/StatsForNerdsOverlay.vue";
 import { useBackgroundEffects } from "../composables/useBackgroundEffects";
 import { useCaptionStore } from "../composables/useCaptionStore";
-import { useCaptions } from "../composables/useCaptions";
+import {
+	restoreCaptionSubscription,
+	useCaptions,
+} from "../composables/useCaptions";
 import { useChat } from "../composables/useChat";
 import { useChatStore } from "../composables/useChatStore";
 import { useConnectionState } from "../composables/useConnectionState";
@@ -365,6 +368,7 @@ const reactionStore = useReactionStore();
 const raiseHandStore = useRaiseHandStore();
 const gridLayout = useGridLayout(mediaState);
 const captionStore = useCaptionStore();
+let captionRestoreGeneration = 0;
 
 // --- Lobby notification tracking ---
 const notifiedLobbyUsers = ref(new Set<string>());
@@ -565,6 +569,18 @@ const sfuConnection = useSFUConnection({
 	onActiveSpeakerChanged: (participantIds: string[]) => {
 		participantStore.activeSpeakerIds = participantIds;
 	},
+	onRoomRejoined: (sfuClient) => {
+		const generation = ++captionRestoreGeneration;
+		void restoreCaptionSubscription(
+			sfuClient,
+			captionStore.isCaptionsEnabled,
+		).then((restored) => {
+			if (generation === captionRestoreGeneration && !restored) {
+				captionStore.setCaptionsEnabled(false);
+			}
+		});
+	},
+	onE2EERequired: () => captions.disableCaptionsForE2EE(),
 	onRecordingState: recording.syncState,
 	onRecordingEnabled: recording.setGlobalEnabled,
 });
@@ -660,9 +676,13 @@ const raiseHand = useRaiseHand({
 	sfuClient: sfuConnection.sfuClient,
 });
 
-const { toggleCaptions } = useCaptions({
+const captions = useCaptions({
 	sfuClient: sfuConnection.sfuClient,
 });
+const toggleCaptions = async () => {
+	captionRestoreGeneration++;
+	await captions.toggleCaptions();
+};
 
 // --- Lobby ---
 const lobby = useLobby({

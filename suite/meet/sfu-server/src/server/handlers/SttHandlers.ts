@@ -32,20 +32,31 @@ export function registerSttHandlers(deps: HandlerDeps) {
 
 				if (enabled) {
 					const wasFirst = deps.sttManager.addSubscriber(roomId, socket.id);
+					callback({ success: true, enabled });
 					if (wasFirst) {
-						await deps.mediasoup.startSttForExistingProducers(
-							roomId,
-							deps.sttManager,
-						);
+						void deps.mediasoup
+							.startSttForExistingProducers(roomId, deps.sttManager)
+							.catch((error) => {
+								loggers.socketHandler.warn(
+									'Failed to start STT for room %s: %s',
+									roomId,
+									(error as Error).message,
+								);
+							});
 					}
 				} else {
 					const wasLast = deps.sttManager.removeSubscriber(roomId, socket.id);
+					callback({ success: true, enabled });
 					if (wasLast) {
-						await deps.sttManager.stopRoom(roomId);
+						void deps.sttManager.stopRoom(roomId, true).catch((error) => {
+							loggers.socketHandler.warn(
+								'Failed to stop STT for room %s: %s',
+								roomId,
+								(error as Error).message,
+							);
+						});
 					}
 				}
-
-				callback({ success: true, enabled });
 			} catch (error) {
 				loggers.socketHandler.warn(
 					'stt:toggle failed: %s',

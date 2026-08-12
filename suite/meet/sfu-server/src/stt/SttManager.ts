@@ -21,10 +21,13 @@ type EmitSttToSubscribers = (
 ) => void;
 
 export class SttManager {
+	private static readonly STREAM_RECOVERY_DELAYS_MS = [0, 1000, 5000, 10_000];
 	private sttClient: ISttClient;
 	private activeSessions = new Map<string, AudioIngester>();
 	private roomSubscribers = new Map<string, Set<string>>();
 	private roomActiveSpeakers = new Map<string, Set<string>>();
+	private sessionRecoveries = new Map<string, symbol>();
+	private stoppingRooms = new Map<string, number>();
 	private emitToSubscribers: EmitSttToSubscribers | undefined;
 	private getRouter: ((roomId: string) => Router | undefined) | undefined;
 	private restartRoomTranscription:
@@ -89,6 +92,7 @@ export class SttManager {
 	}
 
 	addSubscriber(roomId: string, socketId: string): boolean {
+		if ((this.stoppingRooms.get(roomId) ?? 0) > 0) return false;
 		if (!this.roomSubscribers.has(roomId)) {
 			this.roomSubscribers.set(roomId, new Set());
 		}
@@ -127,6 +131,7 @@ export class SttManager {
 		participantName: string | undefined,
 		producer: Producer,
 	): Promise<void> {
+		if ((this.stoppingRooms.get(roomId) ?? 0) > 0) return;
 		if (!this.hasSubscribers(roomId)) {
 			loggers.stt.debug('STT has no subscribers for room %s, skipping', roomId);
 			return;
@@ -158,6 +163,22 @@ export class SttManager {
 			sttClient: this.sttClient,
 			captureDirectory: this.captureDirectory,
 			isActiveSpeaker: () => this.isActiveSpeaker(roomId, participantId),
+			onUnexpectedStreamClose: () => {
+				void this.recoverIngester(
+					sessionKey,
+					ingester,
+					roomId,
+					participantId,
+					participantName,
+					producer,
+				).catch((error) => {
+					loggers.stt.warn(
+						'Failed to recover STT stream for %s: %s',
+						sessionKey,
+						(error as Error).message,
+					);
+				});
+			},
 			onTranscript: (text, isFinal, durationMs) => {
 				this.handleTranscript(
 					roomId,
@@ -174,7 +195,9 @@ export class SttManager {
 		try {
 			await ingester.start();
 		} catch (error) {
-			this.activeSessions.delete(sessionKey);
+			if (this.activeSessions.get(sessionKey) === ingester) {
+				this.activeSessions.delete(sessionKey);
+			}
 			throw error;
 		}
 	}
@@ -186,17 +209,19 @@ export class SttManager {
 	): Promise<void> {
 		if (producerId) {
 			const sessionKey = this.getSessionKey(roomId, participantId, producerId);
+			this.sessionRecoveries.delete(sessionKey);
 			const ingester = this.activeSessions.get(sessionKey);
 			if (!ingester) return;
 
-			await ingester.stop();
 			this.activeSessions.delete(sessionKey);
+			await ingester.stop();
 			return;
 		}
 
 		const stops: Promise<void>[] = [];
 		for (const [key, ingester] of this.activeSessions) {
 			if (key.startsWith(`${roomId}:${participantId}:`)) {
+				this.sessionRecoveries.delete(key);
 				this.activeSessions.delete(key);
 				stops.push(ingester.stop());
 			}
@@ -204,13 +229,36 @@ export class SttManager {
 		await Promise.all(stops);
 	}
 
-	async stopRoom(roomId: string): Promise<void> {
-		await this.stopRoomTranscriptions(roomId);
+	async stopRoom(roomId: string, restartIfSubscribed = false): Promise<void> {
+		const subscribers = this.roomSubscribers.get(roomId);
+		if (!restartIfSubscribed) {
+			this.stoppingRooms.set(roomId, (this.stoppingRooms.get(roomId) ?? 0) + 1);
+		}
 		this.roomSubscribers.delete(roomId);
 		this.roomActiveSpeakers.delete(roomId);
+		try {
+			await this.stopRoomTranscriptions(roomId);
+			if (restartIfSubscribed && subscribers?.size) {
+				this.roomSubscribers.set(roomId, subscribers);
+				await this.restartRoomTranscription?.(roomId);
+			}
+		} finally {
+			if (!restartIfSubscribed) {
+				this.roomSubscribers.delete(roomId);
+				this.roomActiveSpeakers.delete(roomId);
+				const remainingStops = (this.stoppingRooms.get(roomId) ?? 1) - 1;
+				if (remainingStops > 0) this.stoppingRooms.set(roomId, remainingStops);
+				else this.stoppingRooms.delete(roomId);
+			}
+		}
 	}
 
 	private async stopRoomTranscriptions(roomId: string): Promise<void> {
+		for (const sessionKey of this.sessionRecoveries.keys()) {
+			if (sessionKey.startsWith(`${roomId}:`)) {
+				this.sessionRecoveries.delete(sessionKey);
+			}
+		}
 		const stops: Promise<void>[] = [];
 		for (const [key, ingester] of this.activeSessions) {
 			if (key.startsWith(`${roomId}:`)) {
@@ -279,6 +327,73 @@ export class SttManager {
 		await this.stopRoomTranscriptions(roomId);
 		if (this.hasSubscribers(roomId)) {
 			await this.restartRoomTranscription?.(roomId);
+		}
+	}
+
+	private async recoverIngester(
+		sessionKey: string,
+		failedIngester: AudioIngester,
+		roomId: string,
+		participantId: string,
+		participantName: string | undefined,
+		producer: Producer,
+	): Promise<void> {
+		if (this.activeSessions.get(sessionKey) !== failedIngester) return;
+		const recovery = Symbol(sessionKey);
+		this.sessionRecoveries.set(sessionKey, recovery);
+
+		try {
+			await failedIngester.stop();
+			let currentIngester = failedIngester;
+			let attempt = 0;
+			while (this.sessionRecoveries.get(sessionKey) === recovery) {
+				const delayMs =
+					SttManager.STREAM_RECOVERY_DELAYS_MS[
+						Math.min(attempt, SttManager.STREAM_RECOVERY_DELAYS_MS.length - 1)
+					];
+				attempt++;
+				if (this.sessionRecoveries.get(sessionKey) !== recovery) return;
+				if (this.activeSessions.get(sessionKey) !== currentIngester) return;
+				if (
+					!this.hasSubscribers(roomId) ||
+					producer.closed ||
+					!this.sttClient.isAvailable()
+				) {
+					this.activeSessions.delete(sessionKey);
+					return;
+				}
+				if (delayMs > 0)
+					await new Promise((resolve) => setTimeout(resolve, delayMs));
+				if (this.sessionRecoveries.get(sessionKey) !== recovery) return;
+				if (this.activeSessions.get(sessionKey) !== currentIngester) return;
+
+				this.activeSessions.delete(sessionKey);
+				try {
+					await this.startTranscription(
+						roomId,
+						participantId,
+						participantName,
+						producer,
+					);
+					const replacement = this.activeSessions.get(sessionKey);
+					if (replacement && replacement !== currentIngester) return;
+					throw new Error('STT replacement did not start');
+				} catch (error) {
+					if (this.sessionRecoveries.get(sessionKey) !== recovery) return;
+					currentIngester =
+						this.activeSessions.get(sessionKey) ?? currentIngester;
+					this.activeSessions.set(sessionKey, currentIngester);
+					loggers.stt.warn(
+						'STT stream recovery attempt failed for %s: %s',
+						sessionKey,
+						(error as Error).message,
+					);
+				}
+			}
+		} finally {
+			if (this.sessionRecoveries.get(sessionKey) === recovery) {
+				this.sessionRecoveries.delete(sessionKey);
+			}
 		}
 	}
 
