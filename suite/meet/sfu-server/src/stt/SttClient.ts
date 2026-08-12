@@ -44,6 +44,7 @@ interface RealtimeServerMessage {
 export class SttClient implements ISttClient {
 	private serverUrl: string;
 	private available = false;
+	private healthCheckInFlight = false;
 	private healthCheckTimer: NodeJS.Timeout | null = null;
 	private availableListeners = new Set<() => void>();
 	private readonly healthCheckIntervalMs = 10_000;
@@ -56,16 +57,13 @@ export class SttClient implements ISttClient {
 
 	private startHealthCheckLoop(): void {
 		this.healthCheckTimer = setInterval(() => {
-			if (this.available) {
-				if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
-				this.healthCheckTimer = null;
-			} else {
-				this.checkHealth();
-			}
+			this.checkHealth();
 		}, this.healthCheckIntervalMs);
 	}
 
 	private checkHealth(): void {
+		if (this.healthCheckInFlight) return;
+		this.healthCheckInFlight = true;
 		fetch(`${this.serverUrl}/health`)
 			.then((res) => {
 				if (res.ok) {
@@ -76,6 +74,7 @@ export class SttClient implements ISttClient {
 						for (const listener of this.availableListeners) listener();
 					}
 				} else {
+					this.available = false;
 					loggers.stt.warn(
 						'STT server health check failed (status %d)',
 						res.status,
@@ -83,11 +82,15 @@ export class SttClient implements ISttClient {
 				}
 			})
 			.catch((err) => {
+				this.available = false;
 				loggers.stt.debug(
 					'STT server unreachable at %s: %s',
 					this.serverUrl,
 					err.message,
 				);
+			})
+			.finally(() => {
+				this.healthCheckInFlight = false;
 			});
 	}
 

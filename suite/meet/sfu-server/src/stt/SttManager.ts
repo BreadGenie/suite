@@ -205,6 +205,12 @@ export class SttManager {
 	}
 
 	async stopRoom(roomId: string): Promise<void> {
+		await this.stopRoomTranscriptions(roomId);
+		this.roomSubscribers.delete(roomId);
+		this.roomActiveSpeakers.delete(roomId);
+	}
+
+	private async stopRoomTranscriptions(roomId: string): Promise<void> {
 		const stops: Promise<void>[] = [];
 		for (const [key, ingester] of this.activeSessions) {
 			if (key.startsWith(`${roomId}:`)) {
@@ -220,8 +226,6 @@ export class SttManager {
 			}
 		}
 		await Promise.all(stops);
-		this.roomSubscribers.delete(roomId);
-		this.roomActiveSpeakers.delete(roomId);
 	}
 
 	destroy(): void {
@@ -261,13 +265,20 @@ export class SttManager {
 	private restartSubscribedRooms(): void {
 		if (!this.restartRoomTranscription) return;
 		for (const roomId of this.roomSubscribers.keys()) {
-			this.restartRoomTranscription(roomId).catch((error) => {
+			this.restartSubscribedRoom(roomId).catch((error) => {
 				loggers.stt.warn(
 					'Failed to restart STT for room %s: %s',
 					roomId,
 					(error as Error).message,
 				);
 			});
+		}
+	}
+
+	private async restartSubscribedRoom(roomId: string): Promise<void> {
+		await this.stopRoomTranscriptions(roomId);
+		if (this.hasSubscribers(roomId)) {
+			await this.restartRoomTranscription?.(roomId);
 		}
 	}
 

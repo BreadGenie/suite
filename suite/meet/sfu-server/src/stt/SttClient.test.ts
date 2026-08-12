@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { SttClient, type SttTranscriptEvent } from './SttClient';
 
@@ -19,6 +19,7 @@ describe('SttClient Realtime protocol', () => {
 
 	afterEach(async () => {
 		client?.destroy();
+		vi.restoreAllMocks();
 		await new Promise<void>(
 			(resolve) => websocketServer?.close(() => resolve()) ?? resolve(),
 		);
@@ -130,5 +131,33 @@ describe('SttClient Realtime protocol', () => {
 			{ text: 'hello', isFinal: false, durationMs: 100, sequence: 1 },
 			{ text: 'hello world', isFinal: true, durationMs: 100, sequence: 2 },
 		]);
+	});
+
+	it('notifies after each unhealthy-to-healthy recovery', async () => {
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce({ ok: false, status: 503 } as Response)
+			.mockResolvedValueOnce({ ok: true } as Response)
+			.mockResolvedValueOnce({ ok: false, status: 503 } as Response)
+			.mockResolvedValueOnce({ ok: true } as Response);
+		client = new SttClient('http://stt.example');
+		const recovered = vi.fn();
+		client.onAvailable(recovered);
+		const internals = client as unknown as {
+			checkHealth: () => void;
+			healthCheckInFlight: boolean;
+		};
+
+		await vi.waitFor(() => expect(internals.healthCheckInFlight).toBe(false));
+		internals.checkHealth();
+		await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(1));
+		await vi.waitFor(() => expect(internals.healthCheckInFlight).toBe(false));
+		internals.checkHealth();
+		await vi.waitFor(() => expect(internals.healthCheckInFlight).toBe(false));
+		expect(client.isAvailable()).toBe(false);
+		internals.checkHealth();
+		await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(2));
+
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 });
