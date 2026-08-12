@@ -18,6 +18,7 @@ interface CaptionSegment {
 	isFinal?: boolean;
 }
 
+/** Stores this participant's current caption preference and recent lines. */
 export const useCaptionStore = defineStore("caption", () => {
 	const maxLines = 50;
 	const isCaptionsEnabled = ref(false);

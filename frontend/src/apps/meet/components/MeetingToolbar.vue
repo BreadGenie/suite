@@ -268,14 +268,20 @@ const moreOptions = computed(() => [
 				},
 			]
 		: []),
-	{
-		icon: props.isCaptionsEnabled ? LucideCaptionsOff : LucideCaptions,
-		label: props.isCaptionsEnabled ? "Disable captions" : "Enable captions",
-		onClick: () => {
-			emit("toggle-captions");
-			resetHideTimer();
-		},
-	},
+	...(!isE2EEContextReady.value
+		? [
+				{
+					icon: props.isCaptionsEnabled ? LucideCaptionsOff : LucideCaptions,
+					label: props.isCaptionsEnabled
+						? "Disable captions"
+						: "Enable captions",
+					onClick: () => {
+						emit("toggle-captions");
+						resetHideTimer();
+					},
+				},
+			]
+		: []),
 	{
 		icon: "lucide-settings",
 		label: "Settings",

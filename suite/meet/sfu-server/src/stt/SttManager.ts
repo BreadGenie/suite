@@ -10,10 +10,12 @@ interface SttManagerOptions {
 	/** Use mock client in development when no STT server is configured */
 	allowMockFallback?: boolean;
 	captureDirectory?: string;
+	sttClient?: ISttClient;
 }
 
-type EmitSttToRoom = (
+type EmitSttToSubscribers = (
 	roomId: string,
+	socketIds: ReadonlySet<string>,
 	event: 'stt:segment',
 	data: Parameters<ServerToClientEvents['stt:segment']>[0],
 ) => void;
@@ -23,8 +25,11 @@ export class SttManager {
 	private activeSessions = new Map<string, AudioIngester>();
 	private roomSubscribers = new Map<string, Set<string>>();
 	private roomActiveSpeakers = new Map<string, Set<string>>();
-	private emitToRoom: EmitSttToRoom | undefined;
+	private emitToSubscribers: EmitSttToSubscribers | undefined;
 	private getRouter: ((roomId: string) => Router | undefined) | undefined;
+	private restartRoomTranscription:
+		| ((roomId: string) => Promise<void>)
+		| undefined;
 	private captureDirectory?: string;
 
 	constructor(options: SttManagerOptions) {
@@ -35,7 +40,9 @@ export class SttManager {
 				this.captureDirectory,
 			);
 		}
-		if (options.sttServerUrl) {
+		if (options.sttClient) {
+			this.sttClient = options.sttClient;
+		} else if (options.sttServerUrl) {
 			const url = options.sttServerUrl.trim();
 			loggers.stt.info('Using STT server: %s', url);
 			this.sttClient = new SttClient(url);
@@ -47,14 +54,20 @@ export class SttManager {
 			this.sttClient = new MockSttClient();
 			(this.sttClient as MockSttClient).isAvailable = () => false;
 		}
+		this.sttClient.onAvailable(() => this.restartSubscribedRooms());
 	}
 
-	setEmitToRoom(fn: EmitSttToRoom): void {
-		this.emitToRoom = fn;
+	setEmitToSubscribers(fn: EmitSttToSubscribers): void {
+		this.emitToSubscribers = fn;
 	}
 
 	setGetRouter(fn: (roomId: string) => Router | undefined): void {
 		this.getRouter = fn;
+	}
+
+	setRestartRoomTranscription(fn: (roomId: string) => Promise<void>): void {
+		this.restartRoomTranscription = fn;
+		if (this.sttClient.isAvailable()) this.restartSubscribedRooms();
 	}
 
 	setActiveSpeakers(roomId: string, participantIds: string[]): void {
@@ -236,8 +249,25 @@ export class SttManager {
 			segmentEnd: now,
 		};
 
-		if (this.emitToRoom) {
-			this.emitToRoom(roomId, 'stt:segment', { roomId, segment });
+		const subscribers = this.roomSubscribers.get(roomId);
+		if (this.emitToSubscribers && subscribers?.size) {
+			this.emitToSubscribers(roomId, subscribers, 'stt:segment', {
+				roomId,
+				segment,
+			});
+		}
+	}
+
+	private restartSubscribedRooms(): void {
+		if (!this.restartRoomTranscription) return;
+		for (const roomId of this.roomSubscribers.keys()) {
+			this.restartRoomTranscription(roomId).catch((error) => {
+				loggers.stt.warn(
+					'Failed to restart STT for room %s: %s',
+					roomId,
+					(error as Error).message,
+				);
+			});
 		}
 	}
 

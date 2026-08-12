@@ -73,8 +73,8 @@ export class SocketHandlerManager {
 			this.runtime.bypassRateLimits,
 		);
 		this.e2eeEpochRelay.setRoster(roster);
-		sttManager?.setEmitToRoom((roomId, event, data) => {
-			this.registry.emitToFullAccessParticipants(roomId, event, data);
+		sttManager?.setEmitToSubscribers((roomId, socketIds, event, data) => {
+			this.registry.emitToFullAccessSockets(roomId, socketIds, event, data);
 		});
 		this.roomLifecycle = new RoomLifecycleCoordinator(
 			this.registry,

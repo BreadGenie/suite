@@ -1,11 +1,14 @@
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
 import { isUnknownRecord } from "../types";
 import type { SFUClient } from "../utils/SFUClient";
 import { useCaptionStore } from "./useCaptionStore";
+import { useE2EEState } from "./useE2EEState";
 
+/** Connects the local caption store to this participant's SFU subscription. */
 export function useCaptions(deps: { sfuClient: SFUClient }) {
 	const { sfuClient } = deps;
 	const captionStore = useCaptionStore();
+	const { isContextReady: isE2EEContextReady } = useE2EEState();
 
 	const handleSttSegment = (data: unknown) => {
 		if (!isUnknownRecord(data) || !isUnknownRecord(data.segment)) return;
@@ -32,6 +35,7 @@ export function useCaptions(deps: { sfuClient: SFUClient }) {
 		if (!sfuClient.isConnected()) return;
 
 		const newEnabled = !captionStore.isCaptionsEnabled;
+		if (newEnabled && sfuClient.isE2EERequired()) return;
 		try {
 			await sfuClient.sendRequest("stt:toggle", {
 				enabled: newEnabled,
@@ -48,6 +52,15 @@ export function useCaptions(deps: { sfuClient: SFUClient }) {
 
 	onUnmounted(() => {
 		sfuClient.off("stt:segment");
+	});
+
+	watch(isE2EEContextReady, (ready) => {
+		if (!ready || !captionStore.isCaptionsEnabled) return;
+		captionStore.setCaptionsEnabled(false);
+		captionStore.clearCaptionLines();
+		if (sfuClient.isConnected()) {
+			void sfuClient.sendRequest("stt:toggle", { enabled: false });
+		}
 	});
 
 	return {

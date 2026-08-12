@@ -83,11 +83,7 @@ const SPEECH_RMS_THRESHOLD = Number.parseFloat(
 	process.env.STT_VAD_THRESHOLD || '0.012',
 );
 
-/**
- * Captures audio from a Mediasoup Producer via PlainTransport,
- * decodes Opus→PCM via ffmpeg, buffers audio, and flushes to
- * STT when the speaker pauses (VAD) or after a max duration.
- */
+/** Captures one producer, decodes its audio, and streams VAD-delimited speech to STT. */
 export class AudioIngester {
 	private roomId: string;
 	private participantId: string;

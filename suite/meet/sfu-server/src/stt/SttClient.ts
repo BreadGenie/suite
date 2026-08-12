@@ -30,6 +30,7 @@ export interface ISttClient {
 		onTranscript: (event: SttTranscriptEvent) => void,
 	): Promise<ISttStream>;
 	isAvailable(): boolean;
+	onAvailable(listener: () => void): void;
 }
 
 interface RealtimeServerMessage {
@@ -44,6 +45,7 @@ export class SttClient implements ISttClient {
 	private serverUrl: string;
 	private available = false;
 	private healthCheckTimer: NodeJS.Timeout | null = null;
+	private availableListeners = new Set<() => void>();
 	private readonly healthCheckIntervalMs = 10_000;
 
 	constructor(serverUrl: string) {
@@ -67,8 +69,12 @@ export class SttClient implements ISttClient {
 		fetch(`${this.serverUrl}/health`)
 			.then((res) => {
 				if (res.ok) {
+					const recovered = !this.available;
 					this.available = true;
 					loggers.stt.info('STT server reachable at %s', this.serverUrl);
+					if (recovered) {
+						for (const listener of this.availableListeners) listener();
+					}
 				} else {
 					loggers.stt.warn(
 						'STT server health check failed (status %d)',
@@ -92,6 +98,10 @@ export class SttClient implements ISttClient {
 
 	isAvailable(): boolean {
 		return this.available;
+	}
+
+	onAvailable(listener: () => void): void {
+		this.availableListeners.add(listener);
 	}
 
 	async createStream(
@@ -323,6 +333,8 @@ export class MockSttClient implements ISttClient {
 	isAvailable(): boolean {
 		return this.available;
 	}
+
+	onAvailable(_listener: () => void): void {}
 
 	async createStream(
 		metadata: SttStreamMetadata,

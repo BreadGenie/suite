@@ -132,6 +132,9 @@ export class MediasoupManager {
 		this.sttManager.setGetRouter((roomId) =>
 			this.roomManager.getRouter(roomId),
 		);
+		this.sttManager.setRestartRoomTranscription((roomId) =>
+			this.startSttForExistingProducers(roomId, sttManager),
+		);
 	}
 
 	private evaluateAndEmitNetworkQuality(roomId: string, peerId: string) {
