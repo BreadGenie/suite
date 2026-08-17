@@ -38,6 +38,7 @@ import type {
 	ParticipantInfo,
 	ParticipantJoinedEvent,
 	ParticipantLeftEvent,
+	PinnedChatMessage,
 	PreviewParticipantInfo,
 	ProducerCloseDetails,
 	ProducerClosedEvent,
@@ -87,6 +88,7 @@ export type {
 	ParticipantInfo,
 	ParticipantJoinedEvent,
 	ParticipantLeftEvent,
+	PinnedChatMessage,
 	PlainTransport,
 	PreviewParticipantInfo,
 	Producer,
@@ -135,6 +137,8 @@ export interface ServerToClientEvents {
 	screen_share_stopped: (data: ScreenShareStoppedEvent) => void;
 	'chat:message': (data: ChatMessage) => void;
 	'chat:restriction_updated': (data: { enabled: boolean }) => void;
+	'chat:pin_updated': (data: { pinned: PinnedChatMessage | null }) => void;
+	existing_pinned_message: (data: { pinned: PinnedChatMessage | null }) => void;
 	'reaction:message': (data: ReactionMessage) => void;
 	'poll:new': (data: PollPayloadFE) => void;
 	'poll:update': (data: PollPayloadFE) => void;
@@ -233,9 +237,15 @@ export interface ClientToServerEvents {
 	screen_share: (data: ScreenShareRequest) => void;
 	'chat:send': (
 		data: ChatSendRequest,
-		callback?: (response: SFUResponse & { timestamp?: string }) => void,
+		callback?: (
+			response: SFUResponse & { timestamp?: string; messageId?: string },
+		) => void,
 	) => void;
 	'chat:toggle_restriction': (data: { enabled: boolean }) => void;
+	'chat:pin': (
+		data: { messageId: string },
+		callback?: (response: SFUResponse) => void,
+	) => void;
 	'poll:create': (
 		data: {
 			question: string;

@@ -115,6 +115,13 @@ export function registerRoomJoinHandlers(deps: HandlerDeps) {
 				hands: deps.registry.getRaisedHands(scopedRoomId),
 			});
 
+			if (socket.scope === 'full') {
+				const pinned = deps.registry.getPinnedChatMessage(scopedRoomId);
+				if (pinned) {
+					socket.emit('existing_pinned_message', { pinned });
+				}
+			}
+
 			if (socket.scope === 'full' && !socket.e2eeRequired) {
 				const roomPolls = deps.registry.getActivePolls(scopedRoomId);
 				if (roomPolls && roomPolls.size > 0) {

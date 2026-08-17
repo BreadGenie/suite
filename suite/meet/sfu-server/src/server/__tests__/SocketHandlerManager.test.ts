@@ -1255,6 +1255,7 @@ describe('SocketHandlerManager characterization', () => {
 		expect(callback).toHaveBeenCalledWith({
 			success: true,
 			timestamp: receiverMsg?.data.timestamp,
+			messageId: expect.any(String),
 		});
 
 		const senderChatMessages = sender.emitCalls.filter(
@@ -1313,6 +1314,145 @@ describe('SocketHandlerManager characterization', () => {
 		expect(nonHost.emitCalls.some((c) => c.event === 'chat:message')).toBe(
 			false,
 		);
+	});
+
+	it('chat:pin broadcasts the pinned message to full-access participants and unpins on a repeat pin', async () => {
+		const harness = createManager();
+
+		const host = connectFullSocket(harness, {
+			id: 'sock-pin-host',
+			userId: 'pin-host-1',
+			userName: 'PinHost',
+			isHost: true,
+			isCohost: false,
+		});
+		emitJoin(host, { userId: 'pin-host-1', name: 'PinHost' });
+		await new Promise((r) => setImmediate(r));
+
+		const participant = connectFullSocket(harness, {
+			id: 'sock-pin-user',
+			userId: 'pin-user-1',
+			userName: 'PinUser',
+		});
+		emitJoin(participant, { userId: 'pin-user-1', name: 'PinUser' });
+		await new Promise((r) => setImmediate(r));
+
+		const sendCallback = vi.fn();
+		host.fire('chat:send', { message: 'pin me' }, sendCallback);
+		const messageId = sendCallback.mock.calls[0]?.[0].messageId as string;
+		expect(messageId).toBeTruthy();
+
+		host.emitCalls.length = 0;
+		participant.emitCalls.length = 0;
+
+		const pinCallback = vi.fn();
+		host.fire('chat:pin', { messageId }, pinCallback);
+
+		expect(pinCallback).toHaveBeenCalledWith({ success: true });
+		const pinnedUpdate = participant.emitCalls.find(
+			(c) => c.event === 'chat:pin_updated',
+		);
+		expect(pinnedUpdate).toBeDefined();
+		expect(pinnedUpdate?.data).toEqual({
+			pinned: {
+				messageId,
+				message: 'pin me',
+				fromUser: 'pin-host-1',
+				fromName: 'PinHost',
+				timestamp: expect.any(String),
+			},
+		});
+
+		participant.emitCalls.length = 0;
+		host.fire('chat:pin', { messageId }, pinCallback);
+		expect(
+			participant.emitCalls.find((c) => c.event === 'chat:pin_updated')?.data,
+		).toEqual({ pinned: null });
+	});
+
+	it('chat:pin rejects non-host participants and unknown message ids', async () => {
+		const harness = createManager();
+
+		const host = connectFullSocket(harness, {
+			id: 'sock-pin-host2',
+			userId: 'pin-host-2',
+			userName: 'PinHost2',
+			isHost: true,
+			isCohost: false,
+		});
+		emitJoin(host, { userId: 'pin-host-2', name: 'PinHost2' });
+		await new Promise((r) => setImmediate(r));
+
+		const participant = connectFullSocket(harness, {
+			id: 'sock-pin-user2',
+			userId: 'pin-user-2',
+			userName: 'PinUser2',
+		});
+		emitJoin(participant, { userId: 'pin-user-2', name: 'PinUser2' });
+		await new Promise((r) => setImmediate(r));
+
+		participant.emitCalls.length = 0;
+		const deniedCallback = vi.fn();
+		participant.fire('chat:pin', { messageId: 'any-id' }, deniedCallback);
+		expect(deniedCallback).toHaveBeenCalledWith({
+			success: false,
+			error: 'Only hosts and co-hosts can pin messages',
+		});
+		expect(
+			participant.emitCalls.some((c) => c.event === 'chat:pin_updated'),
+		).toBe(false);
+
+		host.emitCalls.length = 0;
+		const unknownCallback = vi.fn();
+		host.fire('chat:pin', { messageId: 'missing-id' }, unknownCallback);
+		expect(unknownCallback).toHaveBeenCalledWith({
+			success: false,
+			error: 'Message is no longer available to pin',
+		});
+		expect(host.emitCalls.some((c) => c.event === 'chat:pin_updated')).toBe(
+			false,
+		);
+	});
+
+	it('late joiners receive existing_pinned_message for a currently pinned chat message', async () => {
+		const harness = createManager();
+
+		const host = connectFullSocket(harness, {
+			id: 'sock-pin-host3',
+			userId: 'pin-host-3',
+			userName: 'PinHost3',
+			isHost: true,
+			isCohost: false,
+		});
+		emitJoin(host, { userId: 'pin-host-3', name: 'PinHost3' });
+		await new Promise((r) => setImmediate(r));
+
+		const sendCallback = vi.fn();
+		host.fire('chat:send', { message: 'pinned greeting' }, sendCallback);
+		const messageId = sendCallback.mock.calls[0]?.[0].messageId as string;
+		host.fire('chat:pin', { messageId }, () => {});
+
+		const lateJoiner = connectFullSocket(harness, {
+			id: 'sock-pin-late',
+			userId: 'pin-late-1',
+			userName: 'Late',
+		});
+		emitJoin(lateJoiner, { userId: 'pin-late-1', name: 'Late' });
+		await new Promise((r) => setImmediate(r));
+
+		const existing = lateJoiner.emitCalls.find(
+			(c) => c.event === 'existing_pinned_message',
+		);
+		expect(existing).toBeDefined();
+		expect(existing?.data).toEqual({
+			pinned: {
+				messageId,
+				message: 'pinned greeting',
+				fromUser: 'pin-host-3',
+				fromName: 'PinHost3',
+				timestamp: expect.any(String),
+			},
+		});
 	});
 
 	it('raise_hand round-trip: raised:true stores timestamp and broadcasts, raised:false clears the entry and broadcasts with raised:false', async () => {

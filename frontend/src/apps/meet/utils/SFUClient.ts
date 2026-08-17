@@ -705,6 +705,8 @@ export class SFUClient {
 			webrtc_answer: () => {},
 			ice_candidate: () => {},
 			"chat:message": () => {},
+			"chat:pin_updated": () => {},
+			"existing_pinned_message": () => {},
 			active_speaker: () => {},
 			hand_raised: () => {},
 			existing_raised_hands: () => {},
@@ -991,7 +993,7 @@ export class SFUClient {
 	async sendChatMessage(
 		message: string,
 		options: { clientId?: unknown } = {},
-	): Promise<{ success: boolean; timestamp: string }> {
+	): Promise<{ success: boolean; timestamp: string; messageId?: string }> {
 		if (!this.connected) {
 			throw new Error("Not connected to SFU");
 		}
@@ -1004,7 +1006,15 @@ export class SFUClient {
 		return (await this.sendRequest("chat:send", payload)) as {
 			success: boolean;
 			timestamp: string;
+			messageId?: string;
 		};
+	}
+
+	async sendChatPin(messageId: string): Promise<unknown> {
+		if (!this.connected) {
+			throw new SFURequestError("DISCONNECTED", "Not connected to SFU");
+		}
+		return this.sendRequest("chat:pin", { messageId: String(messageId) });
 	}
 
 	// ==================== REACTION OPERATIONS ====================

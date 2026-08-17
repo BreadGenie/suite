@@ -5,6 +5,7 @@ import type {
 	ClientToServerEvents,
 	HandRaisedEvent,
 	MediaControlAction,
+	PinnedChatMessage,
 	ProducerCloseDetails,
 	ProducerCloseReason,
 	ProducerCloseSource,
@@ -32,6 +33,8 @@ export class RoomRegistry {
 	private io: Server<ClientToServerEvents, ServerToClientEvents>;
 	private raisedHands: Record<string, Record<string, string>> = {};
 	private hostOnlyChat: Record<string, boolean> = {};
+	private recentChatMessages: Record<string, ChatMessage[]> = {};
+	private pinnedChatMessage: Record<string, PinnedChatMessage> = {};
 	private participantSockets: Record<string, Record<string, string>> = {};
 	private participantConnections = new Map<string, Map<string, Set<string>>>();
 	private activePolls: Record<string, Map<string, ActivePoll>> = {};
@@ -223,6 +226,31 @@ export class RoomRegistry {
 		return Boolean(this.hostOnlyChat[roomId]);
 	}
 
+	recordChatMessage(roomId: string, message: ChatMessage): void {
+		const buffer = this.recentChatMessages[roomId] ?? [];
+		buffer.push(message);
+		if (buffer.length > 200) buffer.shift();
+		this.recentChatMessages[roomId] = buffer;
+	}
+
+	getRecentChatMessage(
+		roomId: string,
+		messageId: string,
+	): ChatMessage | undefined {
+		return this.recentChatMessages[roomId]?.find(
+			(message) => message.messageId === messageId,
+		);
+	}
+
+	setPinnedChatMessage(roomId: string, pinned: PinnedChatMessage | null): void {
+		if (pinned === null) delete this.pinnedChatMessage[roomId];
+		else this.pinnedChatMessage[roomId] = pinned;
+	}
+
+	getPinnedChatMessage(roomId: string): PinnedChatMessage | null {
+		return this.pinnedChatMessage[roomId] ?? null;
+	}
+
 	getActivePolls(roomId: string): Map<string, ActivePoll> | undefined {
 		return this.activePolls[roomId];
 	}
@@ -252,6 +280,8 @@ export class RoomRegistry {
 		}
 		delete this.raisedHands[roomId];
 		delete this.hostOnlyChat[roomId];
+		delete this.recentChatMessages[roomId];
+		delete this.pinnedChatMessage[roomId];
 		delete this.participantSockets[roomId];
 		this.participantConnections.delete(roomId);
 		delete this.activePolls[roomId];
@@ -398,6 +428,7 @@ export class RoomRegistry {
 		this.emitToFullAccessParticipants(roomId, 'chat:message', data);
 		this.emitToRecorders(roomId, 'chat:message', {
 			roomId: data.roomId,
+			messageId: data.messageId,
 			message: data.message,
 			fromUser: data.fromUser,
 			fromName: data.fromName,
