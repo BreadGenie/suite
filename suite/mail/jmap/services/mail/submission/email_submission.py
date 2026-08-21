@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from suite import __version__
@@ -63,7 +64,10 @@ class EmailSubmissionService(CoreService):
         }
 
         if hold_until:
-            parameters["HOLDUNTIL"] = str(hold_until)
+            # RFC 4865 requires an RFC 3339 date-time; Stalwart >= 0.16.17 rejects epoch seconds.
+            parameters["HOLDUNTIL"] = datetime.fromtimestamp(hold_until, tz=UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
 
         return {
             "mailFrom": {
@@ -81,6 +85,61 @@ class EmailSubmissionService(CoreService):
                 for rcpt in sorted(set(rcpt_emails))
             ],
         }
+
+    def query(
+        self,
+        filter: dict | None = None,
+        position: int = 0,
+        limit: int | None = None,
+        sort: list[dict] | None = None,
+    ) -> tuple[list[str], int]:
+        """Returns one page of ids of submissions matching `filter` (e.g. {"undoStatus":
+        "pending"}), in `sort` order (e.g. [{"property": "sentAt", "isAscending": False}]),
+        plus the server's total match count.
+
+        The page is filled across follow-up queries when the server enforces a lower limit
+        than requested (it then echoes the limit it used, RFC 8620 §5.5) — otherwise a clamp
+        below the page length would silently shrink the page and strand the rows behind it,
+        since the pager advances in strides of the full page."""
+
+        limit = limit or self.max_objects_in_get
+        # One id past the page is a look-ahead: whether more matches exist is then known even
+        # when the server's total is missing or zero-valued.
+        target = limit + 1
+
+        ids: list[str] = []
+        total = None
+        while len(ids) < target:
+            remaining = target - len(ids)
+            response = self._query(filter=filter, position=position + len(ids), limit=remaining, sort=sort)
+            if not (method_responses := response.get("methodResponses")):
+                if not ids:
+                    return [], 0
+                break
+
+            body = method_responses[0][1]
+            batch = body.get("ids", [])[:remaining]
+            served_limit = min(int(body.get("limit") or remaining), remaining)
+            if total is None and body.get("total") is not None:
+                total = int(body["total"])
+
+            ids.extend(batch)
+            # A batch below the enforced limit is the end of the results; one that merely
+            # filled a clamp is not — loop on for the rest of the page.
+            if not batch or len(batch) < served_limit:
+                break
+            if total is not None and position + len(ids) >= total:
+                break
+
+        has_more = len(ids) > limit
+        ids = ids[:limit]
+
+        if total is None:
+            # calculateTotal is requested, but RFC 8620 §5.5 lets a server omit total; the
+            # floor then sits one past a full page, so the pager can still advance.
+            total = position + len(ids) + (1 if has_more else 0)
+
+        return ids, int(total)
 
     def get(self, ids: list[str], properties: list[str] | None = None) -> list[dict]:
         """Public method to get email submissions by ids, handling batching if the number of ids exceeds the server's maximum allowed in a single 'get' call."""
@@ -107,6 +166,21 @@ class EmailSubmissionService(CoreService):
 
         if submission_id not in (result.get("updated") or {}):
             raise ValueError(get_jmap_set_error_message(result, "notUpdated", submission_id))
+
+    def destroy(self, submission_id: str) -> None:
+        """Destroys a submission object (its record, not the message) — used to drop a finalized
+        delivery from the Outbox listing."""
+
+        from suite.mail.jmap import get_jmap_set_error_message
+
+        response = self._delete([submission_id])
+
+        result = {}
+        if method_responses := response.get("methodResponses"):
+            result = method_responses[0][1]
+
+        if submission_id not in (result.get("destroyed") or []):
+            raise ValueError(get_jmap_set_error_message(result, "notDestroyed", submission_id))
 
     def resubmit(
         self,

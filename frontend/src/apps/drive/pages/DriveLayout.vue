@@ -49,6 +49,7 @@ import { ref, computed, onMounted, provide } from 'vue'
 import { sidebarCollapsed, shareView } from '@/apps/drive/data/prefs'
 import { onKeyDown, useMediaQuery } from '@vueuse/core'
 import emitter from '@/apps/drive/emitter'
+import { useEmitter } from '@/apps/drive/utils/useEmitter'
 import { initSocket } from '@/apps/drive/socket'
 import { DesktopShell, FrappeUIProvider, MobileShell } from 'frappe-ui'
 import { useRoute } from 'vue-router'
@@ -67,7 +68,7 @@ provide('inIframe', inIframe)
 const showSearchPopup = ref(false)
 const isLoggedIn = computed(() => useSessionStore().isLoggedIn)
 const normalView = computed(() => !inIframe && isLoggedIn.value)
-emitter.on('showSearchPopup', (data) => {
+useEmitter('showSearchPopup', (data) => {
   showSearchPopup.value = data
 })
 

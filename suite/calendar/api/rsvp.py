@@ -239,8 +239,11 @@ def sync_response_to_participant_calendars(
             if not participant_account or participant_account == account:
                 continue
 
+            # The account may still be linked to a user who has since been disabled or
+            # deleted; their calendar is unreachable (get_jmap_connection would refuse the
+            # user), so skip them instead of logging a failure for this best-effort sync.
             user = get_user_for_jmap_account(participant_account, ignore_permissions=True)
-            if not user:
+            if not user or not frappe.get_cached_value("User", user, "enabled"):
                 continue
 
             service = CalendarEventService(

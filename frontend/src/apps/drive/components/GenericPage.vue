@@ -14,7 +14,7 @@
     <DriveListSkeleton v-if="!props.getEntities.data" />
     <NoFilesSection v-else-if="!props.getEntities.data?.length" v-bind="empty" />
     <ListView v-else-if="view === 'list'" ref="viewEl" v-model="selections" v-model:sort-order="sortOrder"
-      :folder-contents="rows && grouper(rows)"
+      :folder-contents="groupedRows"
       :action-items="actionItems" :root-entity="verify?.data" :loading-more="loadingMore" @dropped="onDrop" />
     <GridView v-else ref="viewEl" v-model="selections" :selection-mode="selectionMode"
       :folder-contents="rows" :action-items="actionItems"
@@ -78,6 +78,7 @@ import { move } from '@/apps/drive/resources/files'
 import DriveListSkeleton from '@/apps/drive/components/DriveListSkeleton.vue'
 import { settings } from '@/apps/drive/resources/permissions'
 import emitter from '@/apps/drive/emitter'
+import { useEmitter } from '@/apps/drive/utils/useEmitter'
 import { getFileLink } from '@/apps/drive/ui/drive/js/utils'
 
 import LucideClock from '~icons/lucide/clock'
@@ -139,6 +140,11 @@ const rows = computed(() => {
   }
   return out
 })
+
+// Computed, not inline in the template: a grouper that builds a fresh object
+// (Recents) would give ListView a new prop identity every render, and this
+// component reads that prop back via `selectableNames` — an infinite loop.
+const groupedRows = computed(() => rows.value && props.grouper(rows.value))
 
 watch(
   sortId,
@@ -324,7 +330,7 @@ watch(
   },
   { immediate: true, deep: false }
 )
-emitter.on('refresh', refreshData)
+useEmitter('refresh', refreshData)
 
 // Removes entities from the currently rendered list once a confirm-dialog
 // write (remove/restore/delete forever) succeeds server-side. Provided so
@@ -338,7 +344,7 @@ function removeFromList(entities) {
 }
 provide('removeFromList', removeFromList)
 
-emitter.on('remove-file', (item) => {
+useEmitter('remove-file', (item) => {
   const names = Array.isArray(item) ? item : [item]
   const entities = allRows.value.filter((e) => names.includes(e.name))
   if (!entities.length) return
@@ -380,7 +386,7 @@ const onDrop = (targetFile, draggedItem) => {
     refreshFolder(targetFile.name, sortOrder.value)
   selections.value = new Set()
 }
-emitter.on('remove-file-ui', removeFile)
+useEmitter('remove-file-ui', removeFile)
 
 // Auto-scroll the file area while dragging near its top/bottom edge, so files
 // can be dropped into folders that aren't currently in view.

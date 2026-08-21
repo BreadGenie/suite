@@ -60,6 +60,10 @@ RESPONSE_LOGO_EMBED = "event-logo.png"
 # Shared font stack for the event email templates (passed into the render context).
 EMAIL_FONT = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 
+# `strip_html_tags` only drops the tags, so the <style> block that carries the templates'
+# responsive rules would otherwise land in the text/plain part as raw CSS.
+STYLE_BLOCK_PATTERN = re.compile(r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL)
+
 
 def custom_event_invites_enabled() -> bool:
     """Returns True when Mail Settings is configured to send invites from the client."""
@@ -397,7 +401,7 @@ def _build_mime(from_name, organizer, to_email, subject, html, ics, method) -> s
     root["Message-ID"] = make_msgid()
 
     alternative = MIMEMultipart("alternative")
-    alternative.attach(MIMEText(strip_html_tags(html), "plain", "utf-8"))
+    alternative.attach(MIMEText(_plain_text(html), "plain", "utf-8"))
     alternative.attach(MIMEText(html, "html", "utf-8"))
 
     # Inline calendar part carries the iTIP method so clients can offer native controls.
@@ -434,6 +438,12 @@ def _build_mime(from_name, organizer, to_email, subject, html, ics, method) -> s
     root.attach(attachment)
 
     return root.as_string()
+
+
+def _plain_text(html: str) -> str:
+    """Returns the text/plain alternative for a rendered email body."""
+
+    return strip_html_tags(STYLE_BLOCK_PATTERN.sub("", html))
 
 
 _IMAGE_CACHE: dict[str, bytes] = {}

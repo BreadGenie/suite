@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+	declaresFixedPalette,
 	isArtDirected,
 	mapColorToken,
 	normalizeToLightScheme,
@@ -485,6 +486,34 @@ describe('normalizeToLightScheme', () => {
 		)
 		normalizeToLightScheme(doc)
 		expect(doc.querySelector('style')).toBeNull()
+	})
+})
+
+describe('declaresFixedPalette', () => {
+	it('detects the opt-out suite\'s own templates carry', () => {
+		expect(declaresFixedPalette(parseDoc('<body data-fixed-palette><p>hi</p></body>'))).toBe(true)
+	})
+
+	it('is not implied by a light-only color-scheme declaration', () => {
+		// Near every email declares this; honoring it would disable the remap inbox-wide.
+		const doc = parseDoc('<meta name="color-scheme" content="light"><p>hi</p>')
+		expect(declaresFixedPalette(doc)).toBe(false)
+	})
+
+	it('leaves the achromatic card of an event invite alone', () => {
+		// The shape of suite/templates/emails/_event_base.html: every background is
+		// achromatic, so the art-direction heuristic reads it as plain mail and would
+		// remap it. The attribute is what keeps it in its authored palette.
+		const invite = `
+			<body data-fixed-palette style="background-color: #f3f3f3">
+				<table width="100%" style="background-color: #f3f3f3"><tr><td>
+					<table style="max-width: 600px"><tr>
+						<td style="background-color: #ffffff">Onsite sprint</td>
+					</tr></table>
+				</td></tr></table>
+			</body>`
+		expect(isArtDirected(parseDoc(invite))).toBe(false)
+		expect(declaresFixedPalette(parseDoc(invite))).toBe(true)
 	})
 })
 

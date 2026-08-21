@@ -47,6 +47,7 @@ import LucideGalleryVerticalEnd from '~icons/lucide/gallery-vertical-end'
 import SettingsDialog from '@/apps/drive/components/Settings/SettingsDialog.vue'
 import ShortcutsDialog from '@/apps/drive/components/ShortcutsDialog.vue'
 import emitter from '@/apps/drive/emitter'
+import { useEmitter } from '@/apps/drive/utils/useEmitter'
 import { ref, computed, watch } from 'vue'
 import { useAppSwitcher } from '@/composables/useAppSwitcher'
 import { useRouter, useRoute } from 'vue-router'
@@ -70,14 +71,14 @@ rootInfo.fetch()
 const showSettings = ref(false)
 const showShortcuts = ref(false)
 const suggestedTab = ref('profile')
-emitter.on('showSettings', (val = 'profile') => {
+useEmitter('showSettings', (val = 'profile') => {
   if (val === -1) showSettings.value = false
   else {
     showSettings.value = true
     suggestedTab.value = val
   }
 })
-emitter.on('toggleShortcuts', () => {
+useEmitter('toggleShortcuts', () => {
   showShortcuts.value = !showShortcuts.value
 })
 

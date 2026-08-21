@@ -1,18 +1,22 @@
 # Copyright (c) 2024, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 
+import io
 import os
 
 import frappe
 from frappe.client import set_value
 from frappe.tests import IntegrationTestCase
+from PIL import Image
 
 from suite.slides.doctype.presentation.presentation import (
     create_presentation,
     delete_presentation,
     get_composite_presentation,
     get_public_presentation,
+    get_templates,
     get_updated_json,
+    get_webp_doc,
     save_base64_image,
     save_presentation_thumbnail,
     update_slide_attachments,
@@ -68,6 +72,25 @@ class TestPresentationSecurity(IntegrationTestCase):
             with self.assertRaises(frappe.PermissionError):
                 create_presentation(duplicate_from=self.owner_presentation)
 
+    def test_create_rejects_a_template_that_no_longer_exists(self):
+        for template in ("this-template-was-deleted", None, ""):
+            with self.subTest(template=template):
+                with self.assertRaises(frappe.DoesNotExistError):
+                    create_presentation(template=template)
+
+    def test_create_rejects_a_presentation_that_is_not_a_template(self):
+        # readable is not enough. `theme` has to name a template or the editor cannot
+        # resolve layouts for the slides added later, and the same throw covers a deck
+        # the caller cannot read so neither answer leaks whether it exists
+        with self.set_user(OWNER):
+            own = make_presentation("Not A Template").name
+
+        for presentation in (own, self.other_presentation):
+            with self.subTest(presentation=presentation):
+                with self.set_user(OWNER):
+                    with self.assertRaises(frappe.DoesNotExistError):
+                        create_presentation(template=presentation)
+
     def test_updated_json_blocks_file_exfil(self):
         exfil = [{"type": "image", "src": self.private_file.file_url}]
         with self.set_user(OTHER_USER):
@@ -91,8 +114,21 @@ class TestPresentationSecurity(IntegrationTestCase):
         self.assertTrue(url.endswith(".png"))
         file = frappe.get_doc("File", {"file_url": url})
         self.assertEqual(file.is_private, 1)
+        self.assertEqual(file.file_type, "Image")
+        self.assertEqual(file.mime_type, "image/png")
         self.assertEqual(file.attached_to_doctype, "Presentation")
         self.assertEqual(file.attached_to_name, self.other_presentation)
+
+    def test_webp_conversion_keeps_drive_image_metadata(self):
+        content = io.BytesIO()
+        Image.new("RGB", (2, 1), (17, 34, 51)).save(content, "PNG")
+
+        with self.set_user(OWNER):
+            source = make_private_image(self.owner_presentation, content.getvalue())
+            converted = get_webp_doc(self.owner_presentation, source.as_dict())
+
+        self.assertEqual(converted.file_type, "Image")
+        self.assertEqual(converted.mime_type, "image/webp")
 
     def test_composite_blocks_private_presentation(self):
         with self.set_user("Guest"):
@@ -190,6 +226,40 @@ class TestPresentationSecurity(IntegrationTestCase):
             result = get_composite_presentation(composite.name)
 
         self.assertEqual(result["slides"], [])
+
+
+class TestTemplates(IntegrationTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        ensure_user(OWNER)
+
+        with cls.set_user(OWNER):
+            cls.one_layout = make_presentation("One Layout Template")
+
+            cls.three_layouts = make_presentation("Three Layout Template")
+            cls.three_layouts.append("slides", {"elements": "[]"})
+            cls.three_layouts.append("slides", {"elements": "[]"})
+            cls.three_layouts.save()
+
+        for template in (cls.one_layout, cls.three_layouts):
+            frappe.db.set_value("Presentation", template.name, "is_template", 1)
+
+    def test_layouts_are_grouped_per_template_in_idx_order(self):
+        # one bulk query feeds every template, so a grouping slip shows up only when the
+        # templates differ in size
+        by_name = {template["name"]: template for template in get_templates()}
+
+        self.assertEqual(len(by_name[self.one_layout.name]["layouts"]), 1)
+
+        layouts = by_name[self.three_layouts.name]["layouts"]
+        self.assertEqual([layout["idx"] for layout in layouts], [1, 2, 3])
+        self.assertEqual(
+            [layout["name"] for layout in layouts],
+            [slide.name for slide in self.three_layouts.slides],
+        )
+        # the editor spreads a layout into a new child row, which needs its doctype
+        self.assertEqual({layout["doctype"] for layout in layouts}, {"Slide"})
 
 
 class TestSlideRows(IntegrationTestCase):

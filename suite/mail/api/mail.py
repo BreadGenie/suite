@@ -1,6 +1,5 @@
 import hashlib
 import io
-import json
 import os
 import zipfile
 
@@ -34,7 +33,7 @@ from suite.mail.doctype.mail_message.mail_message import (
     set_seen_status,
     set_spam_status,
 )
-from suite.mail.doctype.mail_queue.mail_queue import MailQueue, apply_reconciled_submissions
+from suite.mail.doctype.mail_queue.mail_queue import MailQueue
 from suite.mail.doctype.mailbox.mailbox import add_mailbox, delete_mailboxes
 from suite.mail.doctype.mailbox_settings.mailbox_settings import (
     automation_rules_to_settings,
@@ -57,7 +56,6 @@ from suite.mail.doctype.user_account.user_account import (
 )
 from suite.mail.jmap import (
     get_email_service,
-    get_email_submission_service,
     get_mailbox_id_by_name,
     get_mailbox_id_by_role,
     get_mailbox_service,
@@ -70,7 +68,6 @@ from suite.mail.utils.user import get_account_emails, is_jmap_configured
 from suite.mail.utils.validation import normalize_screened_value, validate_screened_value
 from suite.utils import convert_html_to_text
 from suite.utils.rate_limiter import dynamic_rate_limit
-from suite.utils.user import is_system_manager
 
 AVATAR_CACHE_TTL = 60 * 60 * 24
 SCREENING_FETCH_LIMIT = 500
@@ -659,7 +656,7 @@ def create_mail(
         send_at=send_at,
     )
 
-    if not save_as_draft and doc.status in ("Submitted", "Scheduled"):
+    if not save_as_draft and doc.status == "Submitted":
         create_contacts_if_not_exists(account, doc.recipients)
         auto_accept_recipients(account, doc.recipients)
 
@@ -669,6 +666,8 @@ def create_mail(
         "status": doc.status,
         "error": doc.error_message,
         "thread_id": doc.thread_id,
+        "submission_id": doc.submission_id,
+        "send_at": to_utc_z(doc.send_at),
     }
 
 
@@ -747,7 +746,7 @@ def update_draft_mail(
 
     queue = message.submit(send_at=send_at) if submit else message.save_draft()
 
-    if submit and queue.status in ("Submitted", "Scheduled"):
+    if submit and queue.status == "Submitted":
         create_contacts_if_not_exists(account, message.recipients)
         auto_accept_recipients(account, message.recipients)
 
@@ -757,105 +756,9 @@ def update_draft_mail(
         "status": queue.status,
         "error": queue.error_message,
         "thread_id": queue.thread_id,
+        "submission_id": queue.submission_id,
+        "send_at": to_utc_z(queue.send_at),
     }
-
-
-@frappe.whitelist()
-def get_scheduled_mails(account: str) -> list[dict]:
-    """Returns the account's scheduled (held) emails, reconciling any whose submission went final."""
-
-    user = get_user_for_jmap_account(account, raise_exception=True)
-    if user != frappe.session.user and not is_system_manager(frappe.session.user):
-        frappe.throw(_("You are not permitted to access this account."), frappe.PermissionError)
-
-    rows = frappe.db.get_all(
-        "Mail Queue",
-        filters={"account": account, "user": user, "status": "Scheduled"},
-        fields=[
-            "name",
-            "id",
-            "thread_id",
-            "subject",
-            "from_email",
-            "recipients",
-            "send_at",
-            "submission_id",
-            "creation",
-        ],
-        order_by="send_at asc",
-    )
-    if not rows:
-        return []
-
-    # Lazy reconcile via EmailSubmission/get — EmailSubmission/query returns empty on Stalwart
-    # even for pending submissions, so the queue rows are the source of truth for listing.
-    service = get_email_submission_service(account)
-    submission_ids = [row.submission_id for row in rows if row.submission_id]
-    undo_by_id = {
-        s["id"]: s.get("undoStatus") for s in (service.get(submission_ids) if submission_ids else [])
-    }
-
-    result, submitted, cancelled = [], [], []
-    for row in rows:
-        undo_status = undo_by_id.get(row.submission_id)
-        if row.submission_id and undo_status == "final":
-            submitted.append(row.name)
-            continue
-        if row.submission_id and undo_status == "canceled":
-            # Canceled out-of-band (e.g. from the desk or the admin MTA queue).
-            cancelled.append(row.name)
-            continue
-
-        row.recipients = json.loads(row.recipients or "[]")
-        row.send_at = to_utc_z(row.send_at)
-        row.creation = to_utc_z(row.creation)
-        result.append(row)
-
-    # Two writes at most, however many rows finalized since the last visit.
-    apply_reconciled_submissions(submitted, cancelled)
-
-    return result
-
-
-def _get_scheduled_queue_doc(account: str, name: str) -> MailQueue:
-    """Fetches a Mail Queue row for a scheduled-send action, enforcing account and owner checks."""
-
-    doc: MailQueue = frappe.get_doc("Mail Queue", name)
-    if doc.account != account:
-        frappe.throw(_("Mail Queue {0} does not belong to account {1}.").format(name, account))
-
-    doc.check_permission("write")
-    return doc
-
-
-@frappe.whitelist()
-def reschedule_mail(account: str, name: str, send_at: str) -> dict:
-    """Updates the delivery time of a scheduled email. `send_at` is UTC `...Z`."""
-
-    doc = _get_scheduled_queue_doc(account, name)
-    doc.reschedule(from_utc_z(send_at))
-
-    return {"status": doc.status, "send_at": to_utc_z(doc.send_at)}
-
-
-@frappe.whitelist()
-def send_scheduled_mail_now(account: str, name: str) -> dict:
-    """Delivers a scheduled email immediately."""
-
-    doc = _get_scheduled_queue_doc(account, name)
-    doc.send_now()
-
-    return {"status": doc.status, "thread_id": doc.thread_id}
-
-
-@frappe.whitelist()
-def cancel_scheduled_mail(account: str, name: str) -> dict:
-    """Cancels a scheduled email's delivery and moves the message back to Drafts."""
-
-    doc = _get_scheduled_queue_doc(account, name)
-    doc.cancel_schedule()
-
-    return {"status": doc.status, "id": doc.id}
 
 
 @frappe.whitelist()
@@ -1562,20 +1465,42 @@ def get_screening_sender_mails(account: str, from_email: str) -> list[dict]:
     return add_user_images_to_emails(account, mails, is_thread=True)
 
 
+# Where a sender's already-screened mail is filed when you allow them in. The decision itself is the
+# same either way — future mail always reaches the inbox — this only says what happens to what's
+# waiting, so mail already read in the Screener needn't be triaged a second time in the Inbox.
+ALLOW_DESTINATION_ROLES = ("inbox", "archive", "trash")
+
+
 @frappe.whitelist()
-def allow_screening_senders(account: str, from_emails: list[str]) -> None:
-    """Allow senders in: accept them (future mail reaches the inbox) and move their screened mail there."""
+def allow_screening_senders(
+    account: str, from_emails: list[str], destination: str = "inbox"
+) -> dict[str, list[str]]:
+    """Allow senders in: accept them (future mail reaches the inbox) and file their screened mail into
+    `destination` — the inbox by default, or straight to Archive/Trash.
+
+    Returns the ids moved, keyed by the sender they moved for. Once the mail has left the Screening
+    folder there is no finding it from the sender again — the lookup below only searches Screening —
+    so the interface holds on to these to offer refiling the same mail elsewhere ("Archive instead")
+    or undoing the verdict outright.
+    """
 
     if not from_emails:
-        return
+        return {}
+
+    if destination not in ALLOW_DESTINATION_ROLES:
+        frappe.throw(_("Invalid destination: {0}").format(destination))
 
     _screen_email_addresses(account, from_emails, action="Accepted")
 
-    inbox_id = get_mailbox_id_by_role(account, "inbox", raise_exception=True)
+    mailbox_id = get_mailbox_id_by_role(account, destination, create_if_not_exists=True, raise_exception=True)
+    moved: dict[str, list[str]] = {}
     for from_email in from_emails:
         ids = _screening_message_ids(account, from_email)
         if ids:
-            move_mails(account, ids, inbox_id, clear_junk=True)
+            move_mails(account, ids, mailbox_id, clear_junk=True)
+            moved[from_email] = ids
+
+    return moved
 
 
 @frappe.whitelist()
@@ -1591,18 +1516,52 @@ def move_screening_mails_to_inbox(account: str) -> None:
 
 
 @frappe.whitelist()
-def screen_out_senders(account: str, from_emails: list[str]) -> None:
-    """Screen senders out: mark them Spam (future mail to Junk) and move their screened mail to Junk."""
+def screen_out_senders(account: str, from_emails: list[str]) -> dict[str, list[str]]:
+    """Screen senders out: mark them Spam (future mail to Junk) and move their screened mail to Junk.
+
+    Returns the ids junked, keyed by sender — see `allow_screening_senders` for why the interface
+    needs them back.
+    """
 
     if not from_emails:
-        return
+        return {}
 
     _screen_email_addresses(account, from_emails, action="Spam")
 
+    junked: dict[str, list[str]] = {}
     for from_email in from_emails:
         ids = _screening_message_ids(account, from_email)
         if ids:
             set_mails_spam_status(account, ids, spam=True)
+            junked[from_email] = ids
+
+    return junked
+
+
+@frappe.whitelist()
+def undo_screening_verdict(account: str, from_emails: list[str], ids: list[str]) -> None:
+    """Reverse a Screener verdict: drop the rules it wrote and put the mail back in the Screener.
+
+    `ids` are the ids the verdict returned. Restoring by id rather than by sender is the only correct
+    way round: the sender's other mail may have been in the Inbox all along and mustn't be dragged
+    back into the Screener with it. Because screened mail only ever lives in the Screening folder,
+    moving those ids back there restores exactly the membership they had.
+    """
+
+    is_jmap_account_belongs_to_user(account, raise_exception=True)
+
+    if from_emails:
+        unscreen_email_addresses(account, [normalize_screened_value(e) for e in from_emails])
+
+    if not ids:
+        return
+
+    screening_id = get_mailbox_id_by_name(account, SCREENER_MAILBOX_NAME)
+    if not screening_id:
+        return
+
+    # clear_junk because a denied sender's mail was marked spam on the way out.
+    move_mails(account, ids, screening_id, clear_junk=True)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

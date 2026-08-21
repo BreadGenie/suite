@@ -1,7 +1,16 @@
-import { computed, ref } from 'vue'
+import { computed, ref, type Component } from 'vue'
 import { Mail as MailIcon, Mails, Paperclip, Star } from 'lucide-vue-next'
 
 import { userStore } from '@/apps/mail/stores/user'
+
+/** One entry of the filter menu — what the toolbar hands to Dropdown/AdaptiveDropdown. */
+export interface FilterOption {
+	label: string
+	icon: Component
+	onClick: () => void
+	selected: boolean
+	condition?: () => boolean
+}
 
 export interface StoredFilterOptions {
 	/**
@@ -42,7 +51,7 @@ export const useStoredFilter = ({ scope, onChange, starrable = () => true }: Sto
 	// Computed, not a constant array: `selected` is the menu's own boolean field (frappe-ui
 	// reads it as `Boolean(option.selected)`, so it can't be a getter), and it has to be
 	// re-evaluated whenever the filter changes.
-	const FILTER_OPTIONS = computed(() => [
+	const FILTER_OPTIONS = computed<FilterOption[]>(() => [
 		{
 			label: __('All'),
 			icon: Mails,

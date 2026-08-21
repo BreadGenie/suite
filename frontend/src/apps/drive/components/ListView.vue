@@ -46,9 +46,9 @@
       <template v-if="folderContents">
         <NoFilesSection v-if="!formattedRows.length" description="Nothing found - try something else?" />
         <template v-else-if="formattedRows[0]?.group">
-          <ListGroup v-for="group in formattedRows" :key="group.group" :label="group.group" class="mt-3 first:mt-0">
+          <ListGroup v-for="group in groupedItems" :key="group.group" :label="group.group" class="mt-3 first:mt-0">
             <DriveListRow
-              :items="flattenRows(group.rows)"
+              :items="group.items"
               :context-menu="contextMenu"
               :selections
               :toggle-selection="toggleSelection"
@@ -160,6 +160,14 @@ const formattedRows = computed(() => {
 
 const columnTracks = useListColumns()
 
+// Flattened once per group, so a re-render doesn't rebuild every group's rows.
+const groupedItems = computed(() =>
+  formattedRows.value.map(({ group, rows }) => ({
+    group,
+    items: flattenRows(rows),
+  }))
+)
+
 const visibleItems = computed(() => flattenRows(formattedRows.value))
 // Collapsing hides rows that may be selected — drop them from the selection so
 // the toolbar can't act on rows nobody can see.
@@ -179,7 +187,7 @@ watch(sortOrder, () => refreshExpanded(sortOrder.value), { deep: true })
 const lastSelectedName = ref(null)
 const flatRows = computed(() =>
   (formattedRows.value[0]?.group
-    ? formattedRows.value.flatMap((g) => flattenRows(g.rows))
+    ? groupedItems.value.flatMap((g) => g.items)
     : visibleItems.value
   )
     .filter((i) => i.row)

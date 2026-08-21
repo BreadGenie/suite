@@ -386,6 +386,21 @@ export const normalizeToLightScheme = (doc: Document) => {
 	})
 }
 
+// ——— Explicit opt-out ———————————————————————————————————————————————————————
+//
+// The heuristic below reads DOM shape rather than declarations on purpose:
+// nearly all third-party mail declares `color-scheme: light`, so honoring that
+// would switch the remap off almost everywhere. Suite's own templates are the
+// exception — they are designed as one fixed light card, and they can say so in
+// a way third-party mail never says by accident. A message carrying this
+// attribute renders exactly as authored in either theme.
+//
+// Spoofable by any sender, deliberately: the worst an impostor buys is the
+// rendering an art-directed email already gets for free.
+
+export const declaresFixedPalette = (doc: Document): boolean =>
+	doc.body.hasAttribute('data-fixed-palette')
+
 // ——— Art direction detection ————————————————————————————————————————————————
 //
 // An email is art-directed when its author both claimed the whole canvas — a

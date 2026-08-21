@@ -56,7 +56,7 @@
             </template>
           </Dropdown>
         </div>
-        <SortControl v-if="$route.name !== 'Recents' && view !== 'list'" v-model="sortOrder" :options="columnHeaders"
+        <SortControl v-if="$route.name !== 'drive-Recents' && view !== 'list'" v-model="sortOrder" :options="columnHeaders"
           :menu-items="sortMenuItems" :disabled />
 
         <TabButtons v-model="view" :options="[

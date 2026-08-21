@@ -45,9 +45,38 @@ export const raiseToast = (
 	type = 'success',
 	action?: { label: string; onClick: () => void },
 	duration?: number,
+	// A toast can carry two buttons: `action` is the urgent one, `secondaryAction` the aside. The
+	// second is sonner's `cancel` slot — named for its usual job, but it is just a second button, and
+	// frappe-ui already styles it (ToastProvider's `cancelButton`). Sonner dismisses the toast when
+	// it is pressed, which suits anything that navigates away.
+	secondaryAction?: { label: string; onClick: () => void },
 ) => {
 	if (type === 'success')
-		return toast.success(message, action || duration ? { action, duration } : undefined)
+		return toast.success(
+			message,
+			action || duration || secondaryAction
+				? {
+						action,
+						duration,
+						cancel: secondaryAction,
+						// frappe-ui styles the two slots for being alone: the action carries `ml-auto` to
+						// sit against the right edge, and the cancel — never used until now — never got
+						// the action's shape. With both present that reads as one button by the message
+						// and another across the toast, in two different styles. Overridden per toast
+						// (sonner merges these over the provider's) so the pair sits together, matching:
+						// the cancel takes the auto margin for both, the action gives its up.
+						...(action && secondaryAction
+							? {
+									classes: {
+										cancelButton:
+											'!ml-auto mr-1 h-7 shrink-0 rounded bg-transparent !transition-colors',
+										actionButton: '!ml-0',
+									},
+								}
+							: {}),
+					}
+				: undefined,
+		)
 
 	const div = document.createElement('div')
 	div.innerHTML = message

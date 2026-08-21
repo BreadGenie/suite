@@ -7,7 +7,26 @@
 		<template #body>
 			<div class="bg-surface-base">
 				<div class="flex items-center border-b px-4 py-2">
-					<Search class="text-ink-gray-5 h-4 w-4" />
+					<!-- Mobile trades the decorative magnifier for the way out: search is a
+					     full page there, and the tab bar it would otherwise be dismissed from
+					     steps aside while the field is focused. Goes through history rather
+					     than closing directly, so the button and the back gesture are the same
+					     action and neither leaves a spent entry behind.
+
+					     A bare button rather than the styled one, matching the results header's icon
+					     exactly — same 16px glyph, no box of its own — so the field starts in the same
+					     place in both and nothing shifts as the overlay opens over the page. `-m-2 p-2`
+					     buys back a 32px tap target without the padding counting towards layout. -->
+					<button
+						v-if="isMobile"
+						type="button"
+						class="-m-2 shrink-0 p-2"
+						:aria-label="__('Back')"
+						@click="closeSearch"
+					>
+						<ArrowLeft class="text-ink-gray-5 size-4" />
+					</button>
+					<Search v-else class="text-ink-gray-5 size-4 shrink-0" />
 					<input
 						ref="searchInput"
 						v-model="filter.text"
@@ -260,7 +279,7 @@
 import { computed, nextTick, reactive, ref, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { watchDebounced } from '@vueuse/core'
-import { Paperclip, Plus, Search, SlidersHorizontal, X } from 'lucide-vue-next'
+import { ArrowLeft, Paperclip, Plus, Search, SlidersHorizontal, X } from 'lucide-vue-next'
 import { Avatar, Button, Dialog, FormControl, Switch, createResource } from 'frappe-ui'
 import { Icon } from 'frappe-ui/icons'
 
@@ -586,6 +605,10 @@ watchDebounced(
 	},
 	{ debounce: 250 },
 )
+
+// Pops the entry SearchMobileLayout pushed when it opened, so its popstate handler does
+// the closing — the same path the system back gesture takes.
+const closeSearch = () => history.back()
 
 const openSearchPage = () => {
 	router.push({

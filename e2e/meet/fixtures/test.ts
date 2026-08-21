@@ -5,7 +5,7 @@ import {
 	type BrowserContext,
 	type Page,
 } from "@playwright/test";
-import { STUB_MEDIA_SCRIPT } from "./media";
+import { MEDIA_FAULT_SCRIPT, STUB_MEDIA_SCRIPT } from "./media";
 import { loginViaApi } from "../../shared/auth";
 import {
 	clearMeetingCreateRateLimit,
@@ -21,6 +21,19 @@ const baseURL = process.env.BASE_URL ?? "http://localhost:8098";
 
 function appUrl(pathname: string): string {
 	return new URL(pathname, baseURL).toString();
+}
+
+async function gotoAppPage(page: Page, pathname: string): Promise<void> {
+	const url = appUrl(pathname);
+	const response = await page.goto(url);
+	if (!response || response.ok()) return;
+
+	const traceback = (
+		await page.locator(".error-content").textContent().catch(() => "")
+	)?.trim();
+	throw new Error(
+		`${url} returned HTTP ${response.status()}${traceback ? `\n${traceback}` : ""}`,
+	);
 }
 
 interface Participant {
@@ -40,7 +53,9 @@ interface TestFixtures {
 }
 
 async function prepareContext(context: BrowserContext): Promise<void> {
-	await context.addInitScript({ content: STUB_MEDIA_SCRIPT });
+	await context.addInitScript({
+		content: `${STUB_MEDIA_SCRIPT}\n${MEDIA_FAULT_SCRIPT}`,
+	});
 	await context.grantPermissions(["camera", "microphone"]);
 }
 
@@ -91,7 +106,7 @@ async function joinHostAndGuest(
 ): Promise<void> {
 	await Promise.all([
 		(async () => {
-			await hostPage.goto(appUrl(`/meet/${meetingId}`));
+			await gotoAppPage(hostPage, `/meet/${meetingId}`);
 			await joinFromPreview(hostPage);
 		})(),
 		guest.joinAsGuest(meetingId, guestName),
@@ -133,11 +148,11 @@ async function buildParticipant(browser: Browser): Promise<Participant> {
 		context,
 		page,
 		async joinMeeting(meetingId: string) {
-			await page.goto(appUrl(`/meet/${meetingId}`));
+			await gotoAppPage(page, `/meet/${meetingId}`);
 			await joinFromPreview(page);
 		},
 		async joinAsGuest(meetingId: string, guestName: string) {
-			await page.goto(appUrl(`/meet/${meetingId}`));
+			await gotoAppPage(page, `/meet/${meetingId}`);
 			await expect(page.getByRole("heading", { name: "Ready to join?" })).toBeVisible({
 				timeout: previewTimeout,
 			});
@@ -151,8 +166,8 @@ async function buildParticipant(browser: Browser): Promise<Participant> {
 		},
 		async joinAsHost(meetingId: string) {
 			await loginViaApi(context.request, meetHost);
-			await page.goto(appUrl("/meet/"));
-			await page.goto(appUrl(`/meet/${meetingId}`));
+			await gotoAppPage(page, "/meet/");
+			await gotoAppPage(page, `/meet/${meetingId}`);
 			await joinFromPreview(page);
 		},
 		async endCall() {
@@ -168,7 +183,7 @@ export const test = base.extend<TestFixtures>({
 		await prepareContext(context);
 		await loginViaApi(context.request, meetHost);
 		const page = await context.newPage();
-		await page.goto(appUrl("/meet/"));
+		await gotoAppPage(page, "/meet/");
 		await use(page);
 		await context.close();
 	},

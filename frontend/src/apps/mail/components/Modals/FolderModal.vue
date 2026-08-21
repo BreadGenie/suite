@@ -18,7 +18,11 @@
 		<template #body-content>
 			<Tabs v-model="tab" :tabs="TABS" class="[&>[role=tablist]]:px-0">
 				<template #tab-panel>
-					<div class="space-y-4 pt-4 sm:pt-6">
+					<!-- px-0.5: the tab panel is an `overflow-auto` scroll container, and a focus ring
+					     is a box-shadow — which is clipped by an overflowing ancestor rather than
+					     scrolled to. A full-width control therefore had its ring shaved off both sides.
+					     Two pixels of inset gives it somewhere to draw. -->
+					<div class="space-y-4 px-0.5 pt-4 sm:pt-6">
 						<!-- General -->
 						<template v-if="tab === 0">
 							<FormControl v-model="folder.name" :label="__('Name')" required />

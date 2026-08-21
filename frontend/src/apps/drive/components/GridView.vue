@@ -38,7 +38,7 @@
       @mousedown.stop
     >
       <LucideStar
-        v-if="$route.name !== 'Favourites' && file.is_favourite"
+        v-if="$route.name !== 'drive-Favourites' && file.is_favourite"
         class="z-10 text-ink-amber-6 stroke-current fill-current absolute top-2 left-2 h-4"
         :class="selectionMode ? 'invisible' : 'group-hover:invisible'"
         width="16"
@@ -210,7 +210,7 @@ const toggleSelection = (file, event) => {
 }
 
 const open = (row) =>
-  !selections.value.size && route.name !== 'Trash' && openEntity(row)
+  !selections.value.size && route.name !== 'drive-Trash' && openEntity(row)
 
 const draggedItem = ref(null)
 const dragOverItem = ref(null)

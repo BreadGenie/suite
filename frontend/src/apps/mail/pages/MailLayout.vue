@@ -341,6 +341,20 @@ body.mail-app .menu-content {
 	z-index: 30;
 }
 
+/* Same problem one layer up, for popovers that ship WITH a z-index rather than
+   without one: frappe-ui's IconPicker gives its popover z-10, and reka copies that
+   onto the portaled wrapper as an inline style. Ten loses to the dialog above, so
+   the icon grid — the folder dialog is the only place we open it — renders behind
+   the panel, and a picker whose dropdown never appears reads as a picker that does
+   not work. Lift it between dialog (30) and bottom sheets (50).
+
+   `!important` beats the inline value, which nothing else can. The `.z-10` hook
+   keeps this to popovers that shipped with the low z: frappe-ui's own Combobox
+   content is z-[100] and is left alone. */
+body.mail-app [data-reka-popper-content-wrapper]:has(> [role='listbox'].z-10) {
+	z-index: 40 !important;
+}
+
 /* Swipe paging (mobile) — shared by the thread pane (MailThread) and the screener
    preview: the incoming page slides in from the swipe side while the outgoing one —
    lifted out of flow so they overlap — slides away in tandem. */

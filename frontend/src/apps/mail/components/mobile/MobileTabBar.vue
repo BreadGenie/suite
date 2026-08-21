@@ -7,6 +7,7 @@
 	<Button
 		v-if="
 			!isThreadOpen &&
+			!keyboardOpen &&
 			!isMobileSelectionActive &&
 			!isSearchRoute &&
 			!showSearchModal &&
@@ -16,7 +17,7 @@
 		variant="solid"
 		class="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-10 !h-14 !w-14 !rounded-full shadow-lg"
 		:aria-label="__('Compose')"
-		@click="showSendModal = true"
+		@click="openCompose"
 	>
 		<template #icon>
 			<FeatherIcon name="edit" class="h-6 w-6" />
@@ -26,9 +27,12 @@
 	<!-- Bottom tab bar — Raven-inspired: translucent bar with a hairline top border
 	     and faint upward shadow; lucide icons, tint-only active state. -->
 	<!-- Stays mounted during selection mode — the selection action bar overlays it at
-	     identical geometry, so the layout never shifts. -->
+	     identical geometry, so the layout never shifts. Steps aside for the on-screen
+	     keyboard, though: the shell is sized in dvh and the keyboard shrinks that, so a
+	     bar left mounted rides up and sits on top of the keyboard (worst in search, where
+	     the field is focused the whole time). -->
 	<nav
-		v-if="!isThreadOpen"
+		v-if="!isThreadOpen && !keyboardOpen"
 		class="bg-surface-base/80 z-10 shrink-0 border-t pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_5px_rgba(0,0,0,0.03)] backdrop-blur-lg"
 	>
 		<div class="flex h-15 items-stretch">
@@ -77,7 +81,6 @@
 		</div>
 	</nav>
 
-	<SendMail v-model="showSendModal" />
 	<SearchModal v-model="showSearchModal" />
 	<MobileFolderSheet />
 </template>
@@ -89,10 +92,10 @@ import { Avatar, Button, FeatherIcon } from 'frappe-ui'
 import { Icon } from 'frappe-ui/icons'
 
 import { getIcon, getMailboxName } from '@/apps/mail/utils'
-import { useFolderSheet, useMobileSelection } from '@/apps/mail/utils/composables'
+import { useFolderSheet, useKeyboardOpen, useMobileSelection } from '@/apps/mail/utils/composables'
 import { userStore } from '@/apps/mail/stores/user'
+import { openComposePage } from '@/apps/mail/composables/composeHandoff'
 import SearchModal from '@/apps/mail/components/Modals/SearchModal.vue'
-import SendMail from '@/apps/mail/components/SendMail.vue'
 import MobileFolderSheet from '@/apps/mail/components/mobile/MobileFolderSheet.vue'
 
 import type { MailboxData } from '@/apps/mail/types'
@@ -104,6 +107,7 @@ const user = inject('$user') as { data: Record<string, any> }
 const { mailboxes, allInboxesUnread } = store
 const { openFolderSheet } = useFolderSheet()
 const { isMobileSelectionActive } = useMobileSelection()
+const keyboardOpen = useKeyboardOpen()
 
 const activeAccountName = computed(
 	() => store.userResource?.data?.accounts?.find((a) => a.id === store.accountId)?._name ?? '',
@@ -118,8 +122,11 @@ const currentFolder = computed(() => {
 	return mailbox ? { label: getMailboxName(mailbox), icon: getIcon(mailbox) } : null
 })
 
-const showSendModal = ref(false)
 const showSearchModal = ref(false)
+
+// Compose is a route now, not an overlay, so the back gesture closes it and the composer owns a
+// whole screen to lay itself out in rather than floating over this one.
+const openCompose = () => openComposePage(router, store.accountId)
 
 const MAIL_ROUTES = ['mail-mailbox', 'mail-all-inboxes']
 const isThreadOpen = computed(() => !!route.params.threadID)
@@ -131,7 +138,10 @@ const isSearchRoute = computed(
 const mailActive = computed(
 	() => MAIL_ROUTES.includes(route.name as string) && !isSearchRoute.value,
 )
-const screenerActive = computed(() => route.name === 'mail-screener')
+// Either screener route: with a sender open the tab is still the screener's.
+const screenerActive = computed(() =>
+	['mail-screener', 'mail-screener-sender'].includes(route.name as string),
+)
 const searchActive = computed(() => showSearchModal.value || isSearchRoute.value)
 const profileActive = computed(() => route.name === 'mail-profile')
 

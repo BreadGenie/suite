@@ -135,6 +135,40 @@ class TestMailScreening(StalwartIntegrationTestCase):
             message="Screener flush did not move pending mail to the inbox.",
         )
 
+    def test_allow_sender_and_archive(self):
+        """Allowing a sender can file their waiting mail straight into Archive instead of the Inbox —
+        the sender is accepted either way."""
+
+        sender = self.create_member()
+        subject = f"Allow and archive {unique_name('subject')}"
+        self.send_mail(sender, self.screener.email, subject=subject)
+        self.wait_until(
+            lambda: sender.email in {r["from_email"] for r in self._screening_senders()},
+            timeout=60,
+            message="Sender did not land in the Screener.",
+        )
+
+        with self.set_user(self.screener.email):
+            self.assertRaisesRegex(
+                frappe.ValidationError,
+                "Invalid destination",
+                allow_screening_senders,
+                self.account,
+                [sender.email],
+                "junk",
+            )
+
+            allow_screening_senders(self.account, [sender.email], destination="archive")
+            roles = {(m["role"] or "").lower(): m["id"] for m in get_mailboxes(self.account)}
+            archive_id = roles["archive"]
+
+        self.assertEqual(self._screened().get(sender.email), "Accepted")
+        self.wait_until(
+            lambda: subject in [t["subject"] for t in get_threads(self.account, archive_id, limit=20)[0]],
+            message="Allowed sender's mail did not move to Archive.",
+        )
+        self.assertNotIn(subject, [t["subject"] for t in self.get_inbox_threads(self.screener)])
+
     def test_rejected_sender_is_discarded(self):
         rejected = self.create_member()
         with self.set_user(self.screener.email):

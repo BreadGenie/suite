@@ -20,7 +20,6 @@
 			v-model:show-search="showSearchModal"
 			v-model:show-advanced="showSearchAdvanced"
 			v-model:edit-filter="searchEditFilter"
-			@reload-mails="resetThreads(true, ['drafts', 'sent'])"
 		/>
 	</header>
 
@@ -128,70 +127,53 @@
 								{{ isAllSelected ? __('Unselect All') : __('Select All') }}
 							</button>
 						</div>
-						<div v-else-if="mailbox !== 'search'" class="flex h-12 items-center px-4">
-							<!-- The selector label carries the active filter ("Unread Mails", …);
-							     picking "All" in the sheet clears it, so no dismissal chip needed. -->
-							<AdaptiveDropdown :options="FILTER_OPTIONS" :title="__('Filter')">
-								<button class="flex min-w-0 items-center gap-1.5 text-base !font-medium">
-									<span class="truncate">{{ title }}</span>
-									<ChevronDown class="text-ink-gray-5 h-4 w-4 shrink-0" />
-								</button>
-							</AdaptiveDropdown>
-						</div>
+						<!-- No `loading`: the bar below spans this whole header block, so it
+						     also covers selection mode and search, where this row is absent. -->
+						<MailListToolbar
+							v-else-if="mailbox !== 'search'"
+							:title="title"
+							:filter-options="FILTER_OPTIONS"
+						/>
 
 						<!-- Loading bar -->
 						<LoadingBar v-if="threadsResource?.loading" />
 					</div>
 
 					<!-- Toolbar/Actions -->
-					<div
+					<MailListToolbar
 						v-else
-						class="relative flex items-center border-b border-l-transparent px-3.5 py-2.5 sm:border-l sm:px-5"
+						:title="title"
+						:filter-options="FILTER_OPTIONS"
+						:show-filter="!selections.length && mailbox !== 'search'"
+						:show-actions="!selections.length"
+						:fetching="isFetching"
+						:loading="threadsResource?.loading"
+						@refresh="refreshThreads()"
 					>
-						<div v-if="!isAllAccountsSearch" class="mr-5">
-							<Tooltip
-								:text="
-									isAllSelected
-										? __('Clear All (Esc)')
-										: __('Select All ({0}+A)', [modifier])
-								"
-							>
-								<div
-									class="checkbox-hitbox -m-3 cursor-pointer p-3"
-									@click.stop.prevent="toggleSelectAll(!isAllSelected)"
+						<template #lead>
+							<div v-if="!isAllAccountsSearch" class="mr-5">
+								<Tooltip
+									:text="
+										isAllSelected
+											? __('Clear All (Esc)')
+											: __('Select All ({0}+A)', [modifier])
+									"
 								>
-									<Checkbox
-										:model-value="isAllSelected"
-										size="md"
-										class="pointer-events-none"
-									/>
-								</div>
-							</Tooltip>
-						</div>
-						<Dropdown
-							v-if="!selections.length && mailbox !== 'search'"
-							:options="FILTER_OPTIONS"
-						>
-							<button
-								class="text-ink-gray-8 hover:bg-surface-gray-2 -ml-2 flex min-w-0 items-center gap-1 rounded px-2 py-1"
-							>
-								<span class="truncate">{{ title }}</span>
-								<ChevronDown class="text-ink-gray-5 icon shrink-0" />
-							</button>
-						</Dropdown>
-						<p v-else class="pb-[2px]">{{ title }}</p>
-						<div class="-mr-1.5 ml-auto flex items-center space-x-1.5 sm:space-x-3">
-							<Button
-								v-if="!selections.length"
-								variant="ghost"
-								:tooltip="__('Refresh')"
-								:disabled="isFetching"
-								@click="refreshThreads()"
-							>
-								<template #icon>
-									<RefreshCw class="icon" />
-								</template>
-							</Button>
+									<div
+										class="checkbox-hitbox -m-3 cursor-pointer p-3"
+										@click.stop.prevent="toggleSelectAll(!isAllSelected)"
+									>
+										<Checkbox
+											:model-value="isAllSelected"
+											size="md"
+											class="pointer-events-none"
+										/>
+									</div>
+								</Tooltip>
+							</div>
+						</template>
+
+						<template #actions>
 							<template v-if="selections.length">
 								<Dropdown v-if="showReadingPane" :options="selectActions">
 									<Button variant="ghost" :tooltip="__('Actions')">
@@ -239,10 +221,8 @@
 									</template>
 								</Button>
 							</Dropdown>
-						</div>
-						<!-- Subtle loading bar: a segment sliding across the bottom outline (no layout shift) -->
-						<LoadingBar v-if="threadsResource?.loading" />
-					</div>
+						</template>
+					</MailListToolbar>
 
 					<!-- Mail list -->
 					<div
@@ -477,7 +457,6 @@ import { computed, inject, onMounted, onUnmounted, ref, useTemplateRef, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import {
 	Archive,
-	ChevronDown,
 	CircleAlert,
 	CircleCheck,
 	Ellipsis,
@@ -521,6 +500,7 @@ import {
 	useGPrefix,
 } from '@/apps/mail/utils/listNavigation'
 import {
+	useListReload,
 	useMobileSelection,
 	useReadingPane,
 	useScreenSize,
@@ -544,6 +524,7 @@ import MailListItem from '@/apps/mail/components/MailListItem.vue'
 import MailThread from '@/apps/mail/components/MailThread.vue'
 import MobileTitleHeader from '@/apps/mail/components/mobile/MobileTitleHeader.vue'
 import ScreenedEmailAddressModal from '@/apps/mail/components/Modals/ScreenedEmailAddressModal.vue'
+import MailListToolbar from '@/apps/mail/components/MailListToolbar.vue'
 import SearchResultsHeader from '@/apps/mail/components/SearchResultsHeader.vue'
 import StackListItem from '@/apps/mail/components/StackListItem.vue'
 import ThreadPane from '@/apps/mail/components/ThreadPane.vue'
@@ -560,6 +541,7 @@ const { accountId, mailbox, threadID } = defineProps<{
 const route = useRoute()
 const router = useRouter()
 const { isMobile } = useScreenSize()
+const { listReloadRequest } = useListReload()
 const { setMobileSelectionActive } = useMobileSelection()
 const { undo, setUndoAction } = useUndo()
 
@@ -1250,6 +1232,11 @@ const resetThreads: (reloadMailboxes?: boolean, mailboxRoles?: MailboxRole[]) =>
 	threadsResource.value.reload()
 	if (reloadMailboxes) mailboxes.reload()
 }
+
+// The composer lives in the layout now, above every route, so it has no view to hand an event to —
+// it announces a send or a draft saved instead (see useListReload). Drafts and Sent are the two lists
+// that answer: everywhere else the mail it wrote does not belong.
+watch(listReloadRequest, () => resetThreads(true, ['drafts', 'sent']))
 
 // Check for new mail without losing the reader's place: refetch the newest window and prepend only the
 // threads not already loaded (see onResetSuccess), keeping scroll position and the loaded rows. Used by

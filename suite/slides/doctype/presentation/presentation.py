@@ -12,7 +12,6 @@ import frappe
 from frappe.core.doctype.file.file import get_local_image
 from frappe.model.document import Document
 from frappe.query_builder.functions import Count
-from frappe.utils.caching import redis_cache
 
 from suite.drive.api.permissions import user_has_permission
 from suite.drive.overrides.file import File as DriveFile
@@ -246,14 +245,32 @@ def update_slide_attachments(parent: str, slide: dict | str):
 
     elements_data = slide.get("elements") or "[]"
     elements = elements_data if isinstance(elements_data, list) else json.loads(elements_data)
+    remap_element_ids(elements)
     for element in elements:
-        element["id"] = "".join(random.choices(string.ascii_lowercase + string.digits, k=9))
         if element.get("src") and element["src"].startswith("/private"):
             element["attachmentName"] = get_attachment(parent, element["src"])
+        attach_poster(parent, element)
 
     slide["elements"] = json.dumps(elements)
 
     return slide
+
+
+def remap_element_ids(elements):
+    """Fresh ids for a copied set: connector bindings inside the set follow the copies, the rest are dropped."""
+    new_ids = ["".join(random.choices(string.ascii_lowercase + string.digits, k=9)) for _ in elements]
+    id_map = {element.get("id"): new_id for element, new_id in zip(elements, new_ids, strict=True)}
+    for element, new_id in zip(elements, new_ids, strict=True):
+        element["id"] = new_id
+        connector = element.get("connector")
+        if not connector:
+            continue
+        for end in ("start", "end"):
+            bound = connector.get(end)
+            if not bound:
+                continue
+            target_id = id_map.get(bound.get("elementId"))
+            connector[end] = {**bound, "elementId": target_id} if target_id else None
 
 
 def apply_slide_layout(slide, ref_id, parent):
@@ -393,6 +410,10 @@ def create_presentation(
             frappe.throw("You cannot duplicate this presentation", frappe.PermissionError)
         source_thumbnail = set_duplicate_metadata(presentation, duplicate_from)
     else:
+        if not template or not frappe.db.get_value("Presentation", template, "is_template"):
+            frappe.throw(f"Template {template!r} does not exist", frappe.DoesNotExistError)
+        if not frappe.has_permission("Presentation", "read", template):
+            frappe.throw("You cannot create a presentation from this template", frappe.PermissionError)
         source_thumbnail = set_template_metadata(presentation, template)
     presentation.flags.drive_parent = parent
     presentation.insert()
@@ -441,6 +462,17 @@ def get_attachment(presentation, file_url):
     return attachment
 
 
+def attach_poster(presentation, element):
+    """Best-effort: a broken poster must not fail the paste."""
+    poster = element.get("poster")
+    if not isinstance(poster, str) or not poster.startswith("/private"):
+        return
+    try:
+        get_attachment(presentation, poster)
+    except Exception:
+        frappe.log_error(f"could not attach poster {poster} to {presentation}")
+
+
 @frappe.whitelist()
 def get_updated_json(presentation: str, elements: list[dict]):
     frappe.get_doc("Presentation", presentation).check_permission("write")
@@ -450,6 +482,7 @@ def get_updated_json(presentation: str, elements: list[dict]):
             file_url = element["src"].replace(frappe.local.site_name, "")
             name = get_attachment(presentation, file_url)
             element["attachmentName"] = name
+        attach_poster(presentation, element)
 
     return elements
 
@@ -486,23 +519,7 @@ def get_public_presentation(name: str):
     return frappe.get_doc("Presentation", name).as_dict()
 
 
-def set_layouts_in_template(template):
-    if template.get("is_template") is not None and not template.get("is_template"):
-        return
-
-    doc = frappe.get_doc("Presentation", template["name"])
-    template["layouts"] = [slide.as_dict() for slide in doc.slides]
-    title = doc.title
-
-    for layout in template["layouts"]:
-        if is_system_template(title):
-            layout["thumbnail"] = get_template_thumbnail(title, layout["idx"])
-        else:
-            layout["thumbnail"] = ""
-
-
 @frappe.whitelist()
-@redis_cache()
 def get_templates():
     templates = frappe.get_all(
         "Presentation",
@@ -511,8 +528,30 @@ def get_templates():
         order_by="creation",
     )
 
+    slides = frappe.get_all(
+        "Slide",
+        filters={
+            "parent": ["in", [t["name"] for t in templates]],
+            "parenttype": "Presentation",
+            "parentfield": "slides",
+        },
+        fields=["*"],
+        order_by="parent asc, idx asc",
+    )
+
+    layouts_by_template: dict[str, list[dict]] = {}
+    for slide in slides:
+        slide["doctype"] = "Slide"
+        layouts_by_template.setdefault(slide["parent"], []).append(slide)
+
     for template in templates:
-        set_layouts_in_template(template)
+        template["layouts"] = layouts_by_template.get(template["name"], [])
+        for layout in template["layouts"]:
+            layout["thumbnail"] = (
+                get_template_thumbnail(template["title"], layout["idx"])
+                if is_system_template(template["title"])
+                else ""
+            )
 
     return templates
 
@@ -565,6 +604,7 @@ def create_new_webp_file_doc(presentation_name, file_url, image, extn):
         new_file = frappe.copy_doc(_file)
         new_file.file_name = f"{_file.file_name.replace(extn, 'webp')}"
         new_file.file_url = f"{_file.file_url.replace(extn, 'webp')}"
+        new_file.mime_type = "image/webp"
         new_file.save()
         _file.delete()
         return new_file

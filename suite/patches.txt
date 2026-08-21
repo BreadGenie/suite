@@ -13,7 +13,7 @@ suite.drive.patches.update_roles
 suite.drive.patches.remove_personal #3
 suite.drive.patches.integrate_with_framework
 # --- mail ---
-execute:frappe.db.delete("Mail Cluster Store")
+suite.mail.patches.delete_stale_cluster_stores
 # --- writer ---
 suite.writer.patches.remove_frappe_writer_module
 
@@ -34,6 +34,7 @@ suite.drive.patches.add_modified_field
 suite.drive.patches.add_search_index
 suite.drive.patches.migrate_s3_url_prefix
 suite.drive.patches.switch_drive_roles_to_suite_roles
+suite.drive.patches.normalize_attachment_file_types
 # --- slides ---
 suite.slides.doctype.presentation.patches.sanitize_attachment_urls
 suite.slides.doctype.presentation.patches.move_attachments_to_private_folder
@@ -94,9 +95,11 @@ suite.mail.patches.reset_push_subscription_types_to_all
 suite.mail.patches.rename_skip_schedule_fetch_changes
 execute:frappe.db.set_single_value("Mail Settings", "expand_mailing_list_participants", 1)
 execute:frappe.db.set_single_value("Mail Settings", "max_mailing_list_participants", 100)
+suite.mail.patches.remove_held_queue_statuses
 # --- calendar ---
 # (no patches)
 # --- suite_core ---
 # Existing, already-set-up sites shouldn't be sent through Suite's onboarding.
 execute:frappe.db.set_single_value("Suite Settings", "is_onboarded", 1) if frappe.is_setup_complete() else None
 suite.suite_core.patches.move_blob_store_out_of_private
+suite.suite_core.patches.align_owner_with_user

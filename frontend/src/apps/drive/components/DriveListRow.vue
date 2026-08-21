@@ -115,10 +115,10 @@
               <div class="truncate text-base">{{ displayName(row) }}</div>
             </Tooltip>
           </InlineRenameInput>
-          <div v-if="(row.is_favourite && $route.name !== 'Favourites') || shareIcon(row)"
+          <div v-if="(row.is_favourite && $route.name !== 'drive-Favourites') || shareIcon(row)"
             class="ml-auto flex min-w-8 shrink-0 flex-row justify-end gap-2 pr-3">
             <LucideStar
-              v-if="row.is_favourite && $route.name !== 'Favourites'"
+              v-if="row.is_favourite && $route.name !== 'drive-Favourites'"
               width="16"
               height="16"
               class="my-auto shrink-0 text-ink-amber-6 stroke-current fill-current"
@@ -235,7 +235,7 @@ const selectedName = computed(() => activeEntity.value?.name)
 const open = (row) =>
   !renamingEntity.value &&
   !row.is_folder &&
-  route.name !== 'Trash' &&
+  route.name !== 'drive-Trash' &&
   openEntity(row)
 const routeFor = (row) =>
   row.is_folder && !props.selections.size ? folderRoute(row) : undefined

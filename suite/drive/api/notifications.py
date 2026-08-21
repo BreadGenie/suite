@@ -58,7 +58,9 @@ def mark_as_read(name: str | None = None, all: bool = False):
             "Drive Notification", {"to_user": frappe.session.user, "read": False}, "read", True
         )
         return
-    frappe.db.set_value("Drive Notification", name, "read", True)
+    # filter on the recipient too: a bare name would let any caller flip the flag
+    # on someone else's notification
+    frappe.db.set_value("Drive Notification", {"name": name, "to_user": frappe.session.user}, "read", True)
     return
 
 

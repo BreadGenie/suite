@@ -1,6 +1,7 @@
 <template>
+	<!-- clip, not just hidden: a hidden root still scrolls when a caret lands past its edge -->
 	<div
-		class="isolate flex h-screen w-screen select-none flex-col overflow-hidden"
+		class="isolate flex h-screen w-screen select-none flex-col overflow-hidden overflow-clip"
 		@click="focusedSlide = null"
 	>
 		<EditorNavbar
@@ -8,7 +9,7 @@
 			@performDropdownAction="performNavbarDropdownAction"
 		/>
 
-		<div class="relative flex h-screen bg-surface-gray-1">
+		<div class="relative flex h-screen bg-surface-gray-1 dark:bg-surface-base">
 			<SlideContainer
 				ref="slideContainer"
 				v-if="presentationDoc"
@@ -24,42 +25,16 @@
 	</div>
 
 	<LayoutDialog
-		v-model="showLayoutDialog"
+		v-model:open="showLayoutDialog"
 		@insert="(layoutObj) => handleInsertSlide(insertIndex, layoutObj)"
 	/>
 
 	<ThemeDialog
-		v-model="showThemeDialog"
+		v-model:open="showThemeDialog"
 		@create="(theme) => createPresentation(theme)"
 		@update="(theme) => updatePresentationTheme(theme)"
 		:update="themeDialogAction == 'update'"
 	/>
-
-	<Dialog v-model="showDeleteDialog" class="pb-0" size="sm">
-		<template #title>
-			<div class="font-semibold">Delete Presentation</div>
-		</template>
-		<template #default>
-			<div class="text-base">
-				This action will permanently delete
-				<strong>{{ presentationDoc?.title }}</strong
-				>. Are you sure you want to continue?
-			</div>
-		</template>
-		<template #actions>
-			<Button
-				class="w-full"
-				variant="solid"
-				theme="red"
-				label="Delete Presentation"
-				@click="confirmDelete"
-			>
-				<template #prefix>
-					<Trash size="14" class="stroke-[1.5]" />
-				</template>
-			</Button>
-		</template>
-	</Dialog>
 
 	<teleport to="body">
 		<ExportView v-if="showExportView" :slides="slides" />
@@ -80,6 +55,7 @@ import {
 	ref,
 	watch,
 	onMounted,
+	onActivated,
 	onBeforeUnmount,
 	provide,
 	nextTick,
@@ -87,7 +63,7 @@ import {
 } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 
-import { call, toast, usePageMeta, KeyboardShortcutsModal, Dialog, Button } from 'frappe-ui'
+import { call, toast, usePageMeta, KeyboardShortcutsModal } from 'frappe-ui'
 
 import ExportView from '@/apps/slides/pages/ExportView.vue'
 import EditorNavbar from '@/apps/slides/components/EditorNavbar.vue'
@@ -109,9 +85,10 @@ import {
 	inReadonlyMode,
 	createPresentationResource,
 	duplicatePresentation,
-	deletePresentation,
+	confirmDeletePresentation,
 	presentationTheme,
 	resetEditorState,
+	pageTitle,
 } from '@/apps/slides/stores/presentation'
 import {
 	slides,
@@ -133,8 +110,13 @@ import {
 
 import { useShortcuts, showShortcutsModal } from '@/apps/slides/composables/useShortcuts'
 import { saveChanges, saveCurrentState, dirty } from '@/apps/slides/stores/saving'
+import {
+	refreshOfflineStatus,
+	warmOfflineCopyAssets,
+	pruneOfflineCopy,
+} from '@/apps/slides/stores/offlineCopy'
 import { inSlideShowMode, startSlideShow } from '@/apps/slides/stores/slideshow'
-import { Layout, Trash } from 'lucide-vue-next'
+import { Layout } from 'lucide-vue-next'
 import { useCommandHistory } from '@/apps/slides/composables/useCommandHistory'
 
 
@@ -164,7 +146,7 @@ const isSlideInteractionActive = ref(false)
 const showLayoutDialog = ref(false)
 const insertIndex = ref(null)
 const showExportView = ref(false)
-const showDeleteDialog = ref(false)
+let deleteDialog = null
 
 const historyMetaForCommandHistory = {
 	actions: historyMetaActions,
@@ -177,9 +159,11 @@ useShortcuts(inReadonlyMode, inSlideShowMode)
 
 usePageMeta(() => {
 	return {
-		title: presentationDoc.value?.title || 'Slides',
+		title: pageTitle(),
 	}
 })
+
+onActivated(() => (document.title = pageTitle()))
 
 const handleAutoSave = () => {
 	if (isSlideInteractionActive.value || focusElementId.value != null) return
@@ -224,6 +208,8 @@ const performBeforeLoadOperations = () => {
 const performAfterLoadOperations = () => {
 	setSlideIndex(props.activeSlideId)
 	updateRoute(presentationDoc.value.slug)
+	// once per open: an image deleted then undone must not cost the copy its bytes
+	pruneOfflineCopy(presentationId.value).catch(() => {})
 
 	if (inReadonlyMode.value) return
 
@@ -253,6 +239,7 @@ const handleMounted = () => {
 const hideOpenDialogs = () => {
 	showThemeDialog.value = false
 	showLayoutDialog.value = false
+	deleteDialog?.close()
 }
 
 const handleBeforeUnmount = () => {
@@ -266,6 +253,13 @@ const handleBeforeUnmount = () => {
 	window.removeEventListener('beforeunload', handleBeforeUnload)
 	window.removeEventListener('popstate', hideOpenDialogs)
 }
+
+// slides land after the load resolves; a save is when new media shows up in them
+watch([slides, () => presentationDoc.value?.modified], () => {
+	const id = slides.value.length ? presentationId.value : null
+	refreshOfflineStatus(id)
+	warmOfflineCopyAssets(id)
+})
 
 watch(
 	() => props.activeSlideId,
@@ -390,20 +384,19 @@ const performNavbarDropdownAction = async (action) => {
 		const newPresentation = await duplicatePresentation(presentationId.value)
 		navigateToPresentation(newPresentation)
 	} else if (action == 'delete') {
-		showDeleteDialog.value = true
+		deleteDialog = confirmDeletePresentation(
+			{ name: presentationId.value, title: presentationDoc.value?.title },
+			() => {
+				thumbnailCaptureRef.value?.reset()
+				router.push({ name: 'slides-home' })
+			},
+		)
 	} else if (action == 'updateTheme') {
 		themeDialogAction.value = 'update'
 		showThemeDialog.value = true
 	} else if (action == 'export') {
 		exportPdf()
 	}
-}
-
-const confirmDelete = async () => {
-	showDeleteDialog.value = false
-	await deletePresentation(presentationId.value)
-	thumbnailCaptureRef.value?.reset()
-	router.push({ name: 'slides-home' })
 }
 
 const openLayoutDialog = (index) => {

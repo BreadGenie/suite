@@ -1,11 +1,28 @@
 <template>
-	<div :class="{ 'fixed left-0 right-0 z-20': isMobile }" :style="{ bottom: toolbarBottom }">
+	<!-- Sticky rather than fixed: fixed positions against the layout viewport, which on iOS still spans
+	     the screen with the keyboard up, so the toolbar had to be chased into place with a JS-computed
+	     `bottom` — a frame behind every pan, which is what made it judder. Sticking to the bottom of the
+	     scroller needs no measuring: the scroller already ends at the keyboard. -->
+	<div :class="{ 'bg-surface-base sticky bottom-0 z-20': isMobile }">
+		<!-- One line, always. Wrapping was decided on the groups' natural widths — nothing shrank
+		     first — so a container any narrower than the two of them together dropped Discard and
+		     Send onto a second row, and the docked composer's width was pinned to whatever kept that
+		     from happening. Held on one line, the editor buttons give up the space instead: their
+		     row is a scroller already, and Send stays where the eye expects it. -->
 		<div
-			class="flex flex-wrap justify-between gap-2 overflow-hidden pt-2.5"
+			class="flex justify-between gap-2 overflow-hidden pt-2.5"
 			:class="{ 'pb-2.5': isMobile }"
 		>
 			<!-- Text editor buttons -->
-			<div class="flex items-center gap-1 overflow-x-auto" :class="{ 'px-3': isMobile }">
+			<!-- frappe-ui's TextEditorMenu pads its own row by 4px and each button by another 4, so
+			     left alone the toolbar sits 8px in from the fields and body above it. -ml-1 cancels
+			     the row's half: the buttons' boxes then start on the content axis, so the pressed
+			     state lines up with the column instead of hanging off it. The glyphs stay 4px in,
+			     which is the price of squaring the boxes — -ml-2 buys the reverse. -->
+			<div
+				class="flex items-center gap-1 overflow-x-auto"
+				:class="isMobile ? 'px-3' : '-ml-1'"
+			>
 				<TextEditorFixedMenu :buttons class="!bg-inherit" />
 				<EmojiPicker
 					v-if="!isMobile"
@@ -33,7 +50,9 @@
 			</div>
 
 			<!-- Send & Discard -->
-			<div v-if="!isMobile" class="ml-auto flex items-center space-x-2">
+			<!-- shrink-0: whatever the line is short of comes off the scrolling button row, never
+			     off the two things the toolbar is for. -->
+			<div v-if="!isMobile" class="ml-auto flex shrink-0 items-center space-x-2">
 				<Button
 					:label="__('Discard')"
 					:tooltip="__('Discard ({0}+D)', [modifier])"
@@ -47,7 +66,7 @@
 						:label="__('Send')"
 						:tooltip="__('Send ({0}+Enter)', [modifier])"
 						:icon-left="SendHorizontal"
-						:disabled="isRecipientsEmpty"
+						:disabled="isRecipientsEmpty || isUploading"
 						class="!rounded-r-none"
 						@click="emit('sendMail')"
 					/>
@@ -55,7 +74,7 @@
 						<Button
 							variant="solid"
 							:tooltip="__('Schedule send')"
-							:disabled="isRecipientsEmpty"
+							:disabled="isRecipientsEmpty || isUploading"
 							class="!rounded-l-none"
 						>
 							<template #icon>
@@ -74,11 +93,12 @@ import { CalendarClock, ChevronDown, Laugh, Paperclip, SendHorizontal, Trash2 } 
 import { Button, Dropdown, TextEditorFixedMenu } from 'frappe-ui'
 
 import { isMac } from '@/apps/mail/utils'
-import { useScreenSize, useTextEditorButtons, useVisualViewport } from '@/apps/mail/utils/composables'
+import { useScreenSize, useTextEditorButtons } from '@/apps/mail/utils/composables'
 import EmojiPicker from '@/apps/mail/components/EmojiPicker.vue'
 
-const { isRecipientsEmpty } = defineProps<{
+const { isRecipientsEmpty, isUploading } = defineProps<{
 	isRecipientsEmpty: boolean
+	isUploading?: boolean
 }>()
 
 const emit = defineEmits(['appendEmoji', 'selectFiles', 'discardMail', 'sendMail', 'scheduleSend'])
@@ -93,14 +113,8 @@ const sendOptions = [
 	},
 ]
 
-// Make toolbar hover over keyboard on mobile
-
 const { isMobile } = useScreenSize()
-const { buttons } = useTextEditorButtons()
-
-const toolbarBottom = useVisualViewport(
-	(viewport) => `${window.innerHeight - viewport.height - viewport.offsetTop}px`,
-)
+const { buttons } = useTextEditorButtons(() => true)
 
 const fileInput = useTemplateRef('fileInput')
 

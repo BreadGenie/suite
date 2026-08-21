@@ -11,9 +11,12 @@
 		class="flex flex-col transition-all duration-300 ease-in-out"
 		:class="isCollapsed ? 'max-h-0 overflow-hidden py-0 opacity-0' : 'max-h-96 py-2 opacity-100'"
 	>
-		<!-- Mirrors the section labels and unread suffixes of the sidebar's nav groups. -->
+		<!-- Mirrors the section labels and unread suffixes of the sidebar's nav groups.
+		     leading-4 on every truncating line: the preset's 1.15 line-height is
+		     shorter than Inter's glyph box, so truncate's overflow-hidden shaves
+		     the descenders. 16px is what frappe-ui pins its own section label to. -->
 		<div class="flex items-center justify-between px-2 py-1.5">
-			<span class="truncate text-sm text-ink-gray-5">{{ __('Upcoming events') }}</span>
+			<span class="truncate text-sm leading-4 text-ink-gray-5">{{ __('Upcoming events') }}</span>
 			<!-- The list shows three rows before scrolling, so a count only says
 			     something new once there are events hidden below the fold. -->
 			<span v-if="upcoming.length > 3" class="shrink-0 text-sm text-ink-gray-4">
@@ -41,8 +44,8 @@
 					:style="{ backgroundColor: eventColor(event) }"
 				/>
 				<div class="min-w-0 flex-1">
-					<div class="truncate text-xs text-ink-gray-5">{{ formatEventTime(event) }}</div>
-					<div class="mt-0.5 truncate text-sm text-ink-gray-8">
+					<div class="truncate text-xs leading-4 text-ink-gray-5">{{ formatEventTime(event) }}</div>
+					<div class="mt-0.5 truncate text-sm leading-4 text-ink-gray-8">
 						{{ event.title || __('Untitled event') }}
 					</div>
 				</div>
@@ -57,6 +60,7 @@ import { useRouter } from 'vue-router'
 import { useNow } from '@vueuse/core'
 
 import dayjs from '@/apps/calendar/utils/dayjs'
+import { isAllDayEvent } from '@/apps/calendar/utils/eventTime'
 import { eventDayRoute, useUpcomingEvents } from '@/apps/mail/composables/useUpcomingEvents'
 import { userStore } from '@/apps/mail/stores/user'
 import { useScreenSize } from '@/apps/mail/utils/composables'
@@ -95,19 +99,6 @@ const isOpen = (event: any) =>
 // the strip, matching what other clients do for multi-calendar events.
 const eventColor = (event: any) =>
 	event.calendars?.find((c: any) => c.color)?.color || DEFAULT_EVENT_COLOR
-
-const isAllDayEvent = (event: any) => {
-	const start = dayjs(event.start)
-	const duration = dayjs.duration(event.duration || 'PT0S')
-	return (
-		event.show_without_time ||
-		(start.hour() === 0 &&
-			start.minute() === 0 &&
-			start.second() === 0 &&
-			duration.asDays() >= 1 &&
-			duration.asDays() % 1 === 0)
-	)
-}
 
 const formatEventTime = (event: any) => {
 	if (isAllDayEvent(event)) return __('All day')

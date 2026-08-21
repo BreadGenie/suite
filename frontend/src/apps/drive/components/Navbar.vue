@@ -64,6 +64,7 @@ import { shareView } from '@/apps/drive/data/prefs'
 import { startRename } from '@/apps/drive/data/selection'
 const { systemUser } = useCurrentUser()
 import emitter from '@/apps/drive/emitter'
+import { useEmitter } from '@/apps/drive/utils/useEmitter'
 import { ref, computed, inject, h } from 'vue'
 import { entitiesDownload } from '@/apps/drive/utils/download'
 import { getRecents, getTrash, getFavourites, toggleFav, rootInfo } from '@/apps/drive/resources/files'
@@ -179,17 +180,17 @@ function removeCurrentEntities() {
   })
 }
 
-emitter.on('share', () => routeDialog('s'))
+useEmitter('share', () => routeDialog('s'))
 // Rename is inline everywhere: a list row in list/grid views, the last
 // breadcrumb on an entity page.
-emitter.on('rename', () => {
+useEmitter('rename', () => {
   const target = dialogEntities.value[0]
   if (target) startRename(target.name)
 })
-emitter.on('remove', removeCurrentEntities)
-emitter.on('move', () => routeDialog('m'))
-emitter.on('newFolder', () => openListDialog('f'))
-emitter.on('newLink', () => openListDialog('l'))
+useEmitter('remove', removeCurrentEntities)
+useEmitter('move', () => routeDialog('m'))
+useEmitter('newFolder', () => openListDialog('f'))
+useEmitter('newLink', () => openListDialog('l'))
 
 const defaultActions = computed(() => {
   if (!rootEntity.value?.file_name) return
