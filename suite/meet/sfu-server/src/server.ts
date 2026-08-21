@@ -69,6 +69,7 @@ export class SFUServer {
 		);
 		this.sttManager = new SttManager({
 			sttServerUrl: config.stt.serverUrl,
+			sttApiKey: config.stt.apiKey,
 			allowMockFallback: config.stt.allowMockFallback,
 			captureDirectory: config.stt.captureDirectory,
 		});

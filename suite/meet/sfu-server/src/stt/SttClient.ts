@@ -44,14 +44,16 @@ interface RealtimeServerMessage {
 
 export class SttClient implements ISttClient {
 	private serverUrl: string;
+	private apiKey?: string;
 	private available = false;
 	private healthCheckInFlight = false;
 	private healthCheckTimer: NodeJS.Timeout | null = null;
 	private availableListeners = new Set<() => void>();
 	private readonly healthCheckIntervalMs = 10_000;
 
-	constructor(serverUrl: string) {
+	constructor(serverUrl: string, apiKey?: string) {
 		this.serverUrl = serverUrl.replace(/\/$/, '');
+		this.apiKey = apiKey?.trim() || undefined;
 		this.checkHealth();
 		this.startHealthCheckLoop();
 	}
@@ -65,9 +67,10 @@ export class SttClient implements ISttClient {
 	private checkHealth(): void {
 		if (this.healthCheckInFlight) return;
 		this.healthCheckInFlight = true;
-		fetch(`${this.serverUrl}/health`)
+		fetch(`${this.serverUrl}/health`, { headers: this.authHeaders() })
 			.then((res) => {
-				if (res.ok) {
+				if (res.ok || res.status === 404) {
+					// 404 means the backend has no health endpoint; treat as reachable.
 					const recovered = !this.available;
 					this.available = true;
 					loggers.stt.info('STT server reachable at %s', this.serverUrl);
@@ -112,7 +115,9 @@ export class SttClient implements ISttClient {
 		metadata: SttStreamMetadata,
 		onTranscript: (event: SttTranscriptEvent) => void,
 	): Promise<ISttStream> {
-		const socket = new WebSocket(this.getStreamUrl());
+		const socket = new WebSocket(this.getStreamUrl(), {
+			headers: this.authHeaders(),
+		});
 		const stream = new SttStream(socket, metadata, onTranscript);
 		try {
 			await stream.connect();
@@ -122,6 +127,10 @@ export class SttClient implements ISttClient {
 			await stream.close();
 			throw error;
 		}
+	}
+
+	private authHeaders(): Record<string, string> {
+		return this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {};
 	}
 
 	private getStreamUrl(): string {

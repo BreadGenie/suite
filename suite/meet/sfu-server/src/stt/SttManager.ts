@@ -7,6 +7,8 @@ import { type ISttClient, MockSttClient, SttClient } from './SttClient';
 interface SttManagerOptions {
 	/** URL of the STT server (e.g. http://127.0.0.1:8080) */
 	sttServerUrl?: string;
+	/** Bearer token sent to the STT server, when it requires authentication */
+	sttApiKey?: string;
 	/** Use mock client in development when no STT server is configured */
 	allowMockFallback?: boolean;
 	captureDirectory?: string;
@@ -48,7 +50,7 @@ export class SttManager {
 		} else if (options.sttServerUrl) {
 			const url = options.sttServerUrl.trim();
 			loggers.stt.info('Using STT server: %s', url);
-			this.sttClient = new SttClient(url);
+			this.sttClient = new SttClient(url, options.sttApiKey);
 		} else if (options.allowMockFallback) {
 			loggers.stt.warn('No STT server URL configured. Using mock client.');
 			this.sttClient = new MockSttClient();
