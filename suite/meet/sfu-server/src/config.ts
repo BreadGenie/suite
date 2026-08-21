@@ -36,6 +36,7 @@ export interface SFUConfig {
 	};
 	stt: {
 		serverUrl?: string;
+		apiKey?: string;
 		allowMockFallback: boolean;
 		captureDirectory?: string;
 	};
@@ -344,6 +345,7 @@ export function loadConfig(
 		metrics: { token: optional(env, 'METRICS_TOKEN') },
 		stt: {
 			serverUrl: optional(env, 'STT_SERVER_URL'),
+			apiKey: optional(env, 'STT_API_KEY'),
 			allowMockFallback: mode === 'development',
 			captureDirectory: optional(env, 'STT_CAPTURE_DIR'),
 		},

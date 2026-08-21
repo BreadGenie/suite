@@ -229,6 +229,63 @@ describe('SttClient Realtime protocol', () => {
 		await stream.close();
 	});
 
+	it('sends the configured API key as a bearer token', async () => {
+		const authHeaders: (string | undefined)[] = [];
+		server = createServer((request, response) => {
+			authHeaders.push(request.headers.authorization);
+			response.writeHead(200, { 'Content-Type': 'application/json' });
+			response.end('{"status":"ok"}');
+		});
+		websocketServer = new WebSocketServer({ server, path: '/v1/realtime' });
+		await new Promise<void>((resolve) =>
+			server!.listen(0, '127.0.0.1', resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === 'string')
+			throw new Error('Missing test server address');
+		websocketServer.on('connection', (socket, request) => {
+			authHeaders.push(request.headers.authorization);
+			socket.send(JSON.stringify({ type: 'session.created' }));
+			socket.on('message', (raw) => {
+				const event = JSON.parse(raw.toString()) as ClientEvent;
+				if (event.type === 'session.update') {
+					socket.send(JSON.stringify({ type: 'session.updated' }));
+				}
+			});
+		});
+
+		client = new SttClient(`http://127.0.0.1:${address.port}`, 'test-key');
+		await vi.waitFor(() => expect(client.isAvailable()).toBe(true));
+		const stream = await client.createStream(
+			{
+				sessionId: 'meet-session-1',
+				roomId: 'room-1',
+				participantId: 'participant-1',
+				producerId: 'producer-1',
+				sampleRate: 24000,
+			},
+			vi.fn(),
+		);
+
+		expect(
+			authHeaders.filter((header) => header === 'Bearer test-key'),
+		).toHaveLength(2);
+		await stream.close();
+	});
+
+	it('treats a missing health endpoint as reachable', async () => {
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+			ok: false,
+			status: 404,
+		} as Response);
+		client = new SttClient('http://stt.example');
+		const internals = client as unknown as { checkHealth: () => void };
+
+		internals.checkHealth();
+
+		await vi.waitFor(() => expect(client!.isAvailable()).toBe(true));
+	});
+
 	it('notifies after each unhealthy-to-healthy recovery', async () => {
 		const fetchMock = vi
 			.spyOn(globalThis, 'fetch')
