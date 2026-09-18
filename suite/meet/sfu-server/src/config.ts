@@ -34,6 +34,11 @@ export interface SFUConfig {
 	metrics: {
 		token?: string;
 	};
+	stt: {
+		serverUrl?: string;
+		allowMockFallback: boolean;
+		captureDirectory?: string;
+	};
 	logging: {
 		level: SFULogLevel;
 	};
@@ -337,6 +342,11 @@ export function loadConfig(
 			bypassRateLimits: mode === 'development' || ci || githubActions,
 		},
 		metrics: { token: optional(env, 'METRICS_TOKEN') },
+		stt: {
+			serverUrl: optional(env, 'STT_SERVER_URL'),
+			allowMockFallback: mode === 'development',
+			captureDirectory: optional(env, 'STT_CAPTURE_DIR'),
+		},
 		logging: { level: logLevel },
 		sentry: {
 			dsn: sentryDsn,
