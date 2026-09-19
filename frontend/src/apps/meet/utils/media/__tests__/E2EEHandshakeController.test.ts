@@ -30,6 +30,7 @@ function createMediaReconfigurationController({
 	mediaState,
 	joinRoom = vi.fn().mockResolvedValue(undefined),
 	refreshToken = vi.fn().mockResolvedValue(undefined),
+	disconnect = vi.fn().mockResolvedValue(undefined),
 }: {
 	mediaState: {
 		isCameraOn: boolean;
@@ -39,6 +40,7 @@ function createMediaReconfigurationController({
 	};
 	joinRoom?: ReturnType<typeof vi.fn>;
 	refreshToken?: ReturnType<typeof vi.fn>;
+	disconnect?: ReturnType<typeof vi.fn>;
 }) {
 	const reconfigureForE2EE = vi.fn(
 		async (
@@ -56,6 +58,7 @@ function createMediaReconfigurationController({
 			isConnected: vi.fn(() => true),
 			setE2EERequired: vi.fn(),
 			refreshToken,
+			disconnect,
 			joinRoom,
 		} as never,
 		sfuManager: shallowRef({
@@ -74,7 +77,7 @@ function createMediaReconfigurationController({
 		Reflect.get(controller, "reconfigureMediaForE2EE").call(
 			controller,
 		) as Promise<void>;
-	return { controller, reconfigure, reconfigureForE2EE };
+	return { controller, reconfigure, reconfigureForE2EE, disconnect, joinRoom };
 }
 
 function createController() {
@@ -582,6 +585,32 @@ describe("E2EEHandshakeController", () => {
 			"Failed to reconfigure participant for E2EE:",
 			failure,
 		);
+	});
+
+	it("disconnects instead of reconfiguring with stale non-E2EE authorization", async () => {
+		const failure = new Error("token synchronization failed");
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const refreshToken = vi.fn().mockRejectedValue(failure);
+		const { controller, disconnect, joinRoom, reconfigureForE2EE } =
+			createMediaReconfigurationController({
+				mediaState: {
+					isCameraOn: true,
+					isMicOn: true,
+					localStream: stream([track("audio"), track("video")]),
+					processedStream: null,
+				},
+				refreshToken,
+			});
+		E2EEMeeting.instance.setMeetingContext(
+			new Uint8Array(32) as Uint8Array<ArrayBuffer>,
+			1,
+		);
+
+		await controller.handleMeetingE2EEEnabled({ meeting_id: "meeting-1" });
+
+		expect(disconnect).toHaveBeenCalledOnce();
+		expect(joinRoom).not.toHaveBeenCalled();
+		expect(reconfigureForE2EE).not.toHaveBeenCalled();
 	});
 
 	it("hard reconnect (legacy) wipes runtime state before sending a resync-request", async () => {
