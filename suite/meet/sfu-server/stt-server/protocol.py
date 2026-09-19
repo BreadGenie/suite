@@ -1,3 +1,4 @@
+import hmac
 import json
 import re
 import time
@@ -5,6 +6,18 @@ import uuid
 
 MODEL_SAMPLE_RATE = 16000
 REALTIME_SAMPLE_RATE = 24000
+
+
+def bearer_token_matches(authorization: str | None, expected_token: str | None) -> bool:
+    if not authorization or not expected_token:
+        return False
+    scheme, separator, token = authorization.partition(" ")
+    return (
+        separator == " "
+        and scheme.lower() == "bearer"
+        and bool(token)
+        and hmac.compare_digest(token, expected_token)
+    )
 
 
 def normalize_language(language: str | None, default: str) -> str:

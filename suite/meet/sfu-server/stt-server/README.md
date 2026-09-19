@@ -24,12 +24,14 @@ The model is downloaded at startup. Mount `/models` to persist the Hugging Face,
 | `NEMOTRON_ATT_CONTEXT_SIZE` | `56,3` |
 | `NEMOTRON_FINAL_SILENCE_MS` | `600` |
 | `STT_STREAM_QUEUE_FRAMES` | `400` |
+| `STT_API_KEY` | required |
 | `HF_TOKEN` | unset |
 
 ## OpenAI-Compatible API
 
 ```bash
 curl http://localhost:8000/v1/audio/transcriptions \
+  -H "Authorization: Bearer $STT_API_KEY" \
   -F file=@audio.wav \
   -F model=nemotron-3.5-asr-streaming-0.6b \
   -F language=en-US
@@ -37,13 +39,14 @@ curl http://localhost:8000/v1/audio/transcriptions \
 
 Set `stream=true` to receive `transcript.text.delta` and `transcript.text.done` Server-Sent Events.
 
-For live input, connect to `/v1/realtime`, send a transcription `session.update` configured for 24 kHz PCM16 mono, append base64 audio with `input_audio_buffer.append`, and finalize turns with `input_audio_buffer.commit`. The server emits OpenAI Realtime transcription delta and completed events. Authentication is expected to be enforced by the private deployment boundary.
+For live input, connect to `/v1/realtime` with the same bearer token, send a transcription `session.update` configured for 24 kHz PCM16 mono, append base64 audio with `input_audio_buffer.append`, and finalize turns with `input_audio_buffer.commit`. The server emits OpenAI Realtime transcription delta and completed events. Transcription routes reject every request when `STT_API_KEY` is unset.
 
 ## Run
 
 ```bash
 docker run --rm --gpus all \
   -p 8000:8000 \
+  -e STT_API_KEY="$STT_API_KEY" \
   -v nemotron-models:/models \
   ghcr.io/frappe/suite/nemotron-stt:<tag>
 ```

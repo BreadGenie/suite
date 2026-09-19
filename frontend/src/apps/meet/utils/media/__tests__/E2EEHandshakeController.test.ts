@@ -31,6 +31,7 @@ function createMediaReconfigurationController({
 	joinRoom = vi.fn().mockResolvedValue(undefined),
 	refreshToken = vi.fn().mockResolvedValue(undefined),
 	disconnect = vi.fn().mockResolvedValue(undefined),
+	recoverParticipantConnection = vi.fn().mockResolvedValue(true),
 }: {
 	mediaState: {
 		isCameraOn: boolean;
@@ -41,6 +42,7 @@ function createMediaReconfigurationController({
 	joinRoom?: ReturnType<typeof vi.fn>;
 	refreshToken?: ReturnType<typeof vi.fn>;
 	disconnect?: ReturnType<typeof vi.fn>;
+	recoverParticipantConnection?: ReturnType<typeof vi.fn>;
 }) {
 	const reconfigureForE2EE = vi.fn(
 		async (
@@ -64,6 +66,7 @@ function createMediaReconfigurationController({
 		sfuManager: shallowRef({
 			reconfigureForE2EE,
 			rejoinParticipantConnection: joinRoom,
+			recoverParticipantConnection,
 			hasLocalMediaPublications: vi.fn(() => true),
 		} as never),
 		currentUser: {
@@ -77,7 +80,14 @@ function createMediaReconfigurationController({
 		Reflect.get(controller, "reconfigureMediaForE2EE").call(
 			controller,
 		) as Promise<void>;
-	return { controller, reconfigure, reconfigureForE2EE, disconnect, joinRoom };
+	return {
+		controller,
+		reconfigure,
+		reconfigureForE2EE,
+		disconnect,
+		joinRoom,
+		recoverParticipantConnection,
+	};
 }
 
 function createController() {
@@ -587,20 +597,25 @@ describe("E2EEHandshakeController", () => {
 		);
 	});
 
-	it("disconnects instead of reconfiguring with stale non-E2EE authorization", async () => {
+	it("recovers securely instead of reconfiguring with stale authorization", async () => {
 		const failure = new Error("token synchronization failed");
 		vi.spyOn(console, "error").mockImplementation(() => {});
 		const refreshToken = vi.fn().mockRejectedValue(failure);
-		const { controller, disconnect, joinRoom, reconfigureForE2EE } =
-			createMediaReconfigurationController({
-				mediaState: {
-					isCameraOn: true,
-					isMicOn: true,
-					localStream: stream([track("audio"), track("video")]),
-					processedStream: null,
-				},
-				refreshToken,
-			});
+		const {
+			controller,
+			disconnect,
+			joinRoom,
+			reconfigureForE2EE,
+			recoverParticipantConnection,
+		} = createMediaReconfigurationController({
+			mediaState: {
+				isCameraOn: true,
+				isMicOn: true,
+				localStream: stream([track("audio"), track("video")]),
+				processedStream: null,
+			},
+			refreshToken,
+		});
 		E2EEMeeting.instance.setMeetingContext(
 			new Uint8Array(32) as Uint8Array<ArrayBuffer>,
 			1,
@@ -609,6 +624,9 @@ describe("E2EEHandshakeController", () => {
 		await controller.handleMeetingE2EEEnabled({ meeting_id: "meeting-1" });
 
 		expect(disconnect).toHaveBeenCalledOnce();
+		expect(recoverParticipantConnection).toHaveBeenCalledWith(
+			"e2ee_auth_sync_failed",
+		);
 		expect(joinRoom).not.toHaveBeenCalled();
 		expect(reconfigureForE2EE).not.toHaveBeenCalled();
 	});

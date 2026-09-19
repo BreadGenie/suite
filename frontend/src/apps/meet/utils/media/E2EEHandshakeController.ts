@@ -511,6 +511,11 @@ export class E2EEHandshakeController {
 		} catch (error) {
 			if (signal.aborted || isAbortError(error)) throw error;
 			this.sfuClient.disconnect();
+			const recovered =
+				await this.sfuManager.value?.recoverParticipantConnection(
+					"e2ee_auth_sync_failed",
+				);
+			if (recovered) return;
 			throw error;
 		}
 		await this.sfuManager.value?.rejoinParticipantConnection(

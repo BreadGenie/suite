@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from protocol import (
     REALTIME_SAMPLE_RATE,
+    bearer_token_matches,
     clean_transcript,
     normalize_language,
     openai_sse_event,
@@ -84,6 +85,13 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(transcript_delta("Hello", "Hello world"), " world")
         self.assertIsNone(transcript_delta("Hello word", "Hello world"))
         self.assertIsNone(transcript_delta("Hello", "Hello"))
+
+    def test_bearer_authentication_fails_closed(self):
+        self.assertTrue(bearer_token_matches("Bearer secret", "secret"))
+        self.assertTrue(bearer_token_matches("bearer secret", "secret"))
+        self.assertFalse(bearer_token_matches(None, "secret"))
+        self.assertFalse(bearer_token_matches("Bearer wrong", "secret"))
+        self.assertFalse(bearer_token_matches("Bearer secret", None))
 
 
 if __name__ == "__main__":

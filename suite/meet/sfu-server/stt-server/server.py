@@ -19,12 +19,13 @@ import numpy as np
 import soundfile as sf
 import torch
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
 from protocol import (
     MODEL_SAMPLE_RATE,
     REALTIME_SAMPLE_RATE,
+    bearer_token_matches,
     clean_transcript,
     event_id,
     item_id,
@@ -42,6 +43,7 @@ NEMOTRON_LANGUAGE = normalize_language(os.getenv("NEMOTRON_LANGUAGE"), "en-US")
 NEMOTRON_ATT_CONTEXT_SIZE = os.getenv("NEMOTRON_ATT_CONTEXT_SIZE", "56,3")
 NEMOTRON_FINAL_SILENCE_MS = int(os.getenv("NEMOTRON_FINAL_SILENCE_MS", "600"))
 STT_STREAM_QUEUE_FRAMES = max(1, int(os.getenv("STT_STREAM_QUEUE_FRAMES", "400")))
+STT_API_KEY = os.getenv("STT_API_KEY")
 
 MODEL_ID = NEMOTRON_MODEL.rsplit("/", 1)[-1]
 MEL_HOP_SAMPLES = 160
@@ -470,6 +472,15 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Nemotron STT Server", lifespan=lifespan)
 
 
+def require_stt_auth(authorization: str | None) -> None:
+    if not bearer_token_matches(authorization, STT_API_KEY):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 @app.get("/health")
 async def health():
     if not ready:
@@ -498,6 +509,7 @@ async def list_models():
 @app.post("/v1/audio/transcriptions")
 async def transcribe_audio_file(
     file: Annotated[UploadFile, File()],
+    authorization: Annotated[str | None, Header()] = None,
     model_name: Annotated[str, Form(alias="model")] = MODEL_ID,
     response_format: Annotated[str, Form()] = "json",
     stream: Annotated[bool, Form()] = False,
@@ -506,6 +518,7 @@ async def transcribe_audio_file(
     prompt: Annotated[str | None, Form()] = None,
 ):
     del temperature, prompt
+    require_stt_auth(authorization)
     if not ready or model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     if model_name not in {MODEL_ID, NEMOTRON_MODEL}:
@@ -563,6 +576,9 @@ async def transcribe_audio_file(
 
 @app.websocket("/v1/realtime")
 async def realtime_transcription(websocket: WebSocket):
+    if not bearer_token_matches(websocket.headers.get("authorization"), STT_API_KEY):
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
     await websocket.accept()
     if not ready or model is None:
         await websocket.send_json(realtime_error("Model not loaded", code="server_not_ready"))
