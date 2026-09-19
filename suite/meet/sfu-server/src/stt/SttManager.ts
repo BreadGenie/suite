@@ -349,7 +349,6 @@ export class SttManager {
 
 		try {
 			await failedIngester.stop();
-			let currentIngester = failedIngester;
 			let attempt = 0;
 			while (this.sessionRecoveries.get(sessionKey) === recovery) {
 				const delayMs =
@@ -358,7 +357,8 @@ export class SttManager {
 					];
 				attempt++;
 				if (this.sessionRecoveries.get(sessionKey) !== recovery) return;
-				if (this.activeSessions.get(sessionKey) !== currentIngester) return;
+				const activeIngester = this.activeSessions.get(sessionKey);
+				if (activeIngester && activeIngester !== failedIngester) return;
 				if (
 					!this.hasSubscribers(roomId) ||
 					producer.closed ||
@@ -370,7 +370,8 @@ export class SttManager {
 				if (delayMs > 0)
 					await new Promise((resolve) => setTimeout(resolve, delayMs));
 				if (this.sessionRecoveries.get(sessionKey) !== recovery) return;
-				if (this.activeSessions.get(sessionKey) !== currentIngester) return;
+				const replacement = this.activeSessions.get(sessionKey);
+				if (replacement && replacement !== failedIngester) return;
 
 				this.activeSessions.delete(sessionKey);
 				try {
@@ -381,14 +382,10 @@ export class SttManager {
 						producer,
 						transcriptParticipantId,
 					);
-					const replacement = this.activeSessions.get(sessionKey);
-					if (replacement && replacement !== currentIngester) return;
+					if (this.activeSessions.has(sessionKey)) return;
 					throw new Error('STT replacement did not start');
 				} catch (error) {
 					if (this.sessionRecoveries.get(sessionKey) !== recovery) return;
-					currentIngester =
-						this.activeSessions.get(sessionKey) ?? currentIngester;
-					this.activeSessions.set(sessionKey, currentIngester);
 					loggers.stt.warn(
 						'STT stream recovery attempt failed for %s: %s',
 						sessionKey,

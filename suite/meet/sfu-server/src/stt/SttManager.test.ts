@@ -18,6 +18,7 @@ function createSttClient(available = false) {
 
 describe('SttManager', () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -166,6 +167,46 @@ describe('SttManager', () => {
 		).toBe(healthy);
 		expect(internals.activeSessions).toHaveLength(2);
 		expect(AudioIngester.prototype.start).toHaveBeenCalledTimes(3);
+	});
+
+	it('keeps retrying after a replacement stream fails to start', async () => {
+		vi.useFakeTimers();
+		const start = vi
+			.spyOn(AudioIngester.prototype, 'start')
+			.mockResolvedValueOnce()
+			.mockRejectedValueOnce(new Error('replacement failed'))
+			.mockResolvedValueOnce();
+		vi.spyOn(AudioIngester.prototype, 'stop').mockResolvedValue();
+		const sttClient = createSttClient(true);
+		const manager = new SttManager({ sttClient: sttClient.client });
+		manager.setGetRouter(() => ({}) as Router);
+		manager.addSubscriber('room-1', 'socket-1');
+		const producer = { id: 'producer-a', closed: false } as Producer;
+		await manager.startTranscription(
+			'room-1',
+			'participant-a',
+			'Alice',
+			producer,
+		);
+		const internals = manager as unknown as {
+			activeSessions: Map<string, AudioIngester>;
+		};
+		const sessionKey = 'room-1:participant-a:producer-a';
+		const failed = internals.activeSessions.get(sessionKey)!;
+
+		(
+			failed as unknown as { onUnexpectedStreamClose: () => void }
+		).onUnexpectedStreamClose();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(start).toHaveBeenCalledTimes(2);
+		expect(internals.activeSessions.get(sessionKey)).toBeUndefined();
+
+		await vi.advanceTimersByTimeAsync(1000);
+
+		expect(start).toHaveBeenCalledTimes(3);
+		expect(internals.activeSessions.get(sessionKey)).toBeDefined();
+		expect(internals.activeSessions.get(sessionKey)).not.toBe(failed);
 	});
 
 	it('blocks new sessions until overlapping room stops finish', async () => {
