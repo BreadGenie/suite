@@ -1,34 +1,67 @@
-import { onMounted, onUnmounted, watch } from "vue";
+import { toast } from "frappe-ui";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { isUnknownRecord } from "../types";
 import { type SFUClient, SFURequestError } from "../utils/SFUClient";
-import { useCaptionStore } from "./useCaptionStore";
 import { useE2EEState } from "./useE2EEState";
 
-export async function restoreCaptionSubscription(
-	sfuClient: SFUClient,
-	isCaptionsEnabled: boolean,
-): Promise<boolean> {
-	if (
-		!isCaptionsEnabled ||
-		!sfuClient.isConnected() ||
-		sfuClient.isE2EERequired()
-	)
-		return false;
-	try {
-		await sfuClient.sendRequest("stt:toggle", { enabled: true });
-		return true;
-	} catch (error) {
-		console.error("Failed to restore captions after reconnect:", error);
-		return error instanceof SFURequestError;
-	}
+interface CaptionLine {
+	id: string;
+	participantId: string;
+	participantName: string;
+	text: string;
+	isFinal?: boolean;
 }
 
-/** Connects the local caption store to this participant's SFU subscription. */
+interface CaptionSegment {
+	participantId: string;
+	participantName?: string;
+	text: string;
+	isFinal?: boolean;
+}
+
+/** Owns this participant's caption preference, recent lines, and SFU subscription. */
 export function useCaptions(deps: { sfuClient: SFUClient }) {
 	const { sfuClient } = deps;
-	const captionStore = useCaptionStore();
 	const { isContextReady: isE2EEContextReady } = useE2EEState();
-	let captionOperationGeneration = 0;
+	const isCaptionsEnabled = ref(false);
+	const captionLines = ref<CaptionLine[]>([]);
+	const isAvailable = ref(!sfuClient.isE2EERequired());
+	let nextCaptionId = 0;
+	let desiredEnabled = isCaptionsEnabled.value;
+	let isToggling = false;
+	let hasRequestedE2EECleanup = false;
+	let captionRestoreGeneration = 0;
+
+	const addCaptionLine = (segment: CaptionSegment) => {
+		const text = segment.text?.trim() || "";
+		const draftIndex = captionLines.value.findIndex(
+			(line) => line.participantId === segment.participantId && !line.isFinal,
+		);
+
+		if (segment.isFinal && !text) {
+			if (draftIndex >= 0) captionLines.value.splice(draftIndex, 1);
+			return;
+		}
+		if (!text) return;
+
+		const line: CaptionLine = {
+			id: `caption-${nextCaptionId++}`,
+			participantId: segment.participantId,
+			participantName: segment.participantName || segment.participantId,
+			text,
+			isFinal: segment.isFinal,
+		};
+
+		if (draftIndex >= 0) {
+			captionLines.value.splice(draftIndex, 1, line);
+		} else {
+			captionLines.value.push(line);
+		}
+
+		if (captionLines.value.length > 50) {
+			captionLines.value = captionLines.value.slice(-50);
+		}
+	};
 
 	const handleSttSegment = (data: unknown) => {
 		if (!isUnknownRecord(data) || !isUnknownRecord(data.segment)) return;
@@ -42,61 +75,126 @@ export function useCaptions(deps: { sfuClient: SFUClient }) {
 			(segment.isFinal !== undefined && typeof segment.isFinal !== "boolean")
 		)
 			return;
-		captionStore.addCaptionLine({
+		addCaptionLine({
 			participantId: segment.participantId,
 			participantName: segment.participantName || segment.participantId,
 			text: segment.text,
-			timestamp: segment.timestamp,
 			isFinal: segment.isFinal,
 		});
 	};
 
-	const toggleCaptions = async () => {
-		if (!sfuClient.isConnected()) return;
-
-		const newEnabled = !captionStore.isCaptionsEnabled;
-		if (newEnabled && sfuClient.isE2EERequired()) return;
-		const generation = ++captionOperationGeneration;
-		try {
-			await sfuClient.sendRequest("stt:toggle", {
-				enabled: newEnabled,
-			});
-			if (generation !== captionOperationGeneration) return;
-			captionStore.setCaptionsEnabled(newEnabled);
-		} catch (error) {
-			console.error("Failed to toggle captions:", error);
-			if (
-				generation === captionOperationGeneration &&
-				error instanceof SFURequestError
-			) {
-				captionStore.setCaptionsEnabled(newEnabled);
+	const reconcileCaptionState = async () => {
+		if (isToggling) return;
+		isToggling = true;
+		while (desiredEnabled !== isCaptionsEnabled.value) {
+			const requestedEnabled = desiredEnabled;
+			try {
+				await sfuClient.sendRequest("stt:toggle", {
+					enabled: requestedEnabled,
+				});
+				if (!requestedEnabled || isAvailable.value) {
+					isCaptionsEnabled.value = requestedEnabled;
+				}
+			} catch (error) {
+				console.error("Failed to toggle captions:", error);
+				if (error instanceof SFURequestError) {
+					if (requestedEnabled && isAvailable.value) {
+						isCaptionsEnabled.value = true;
+					} else {
+						desiredEnabled = isCaptionsEnabled.value;
+					}
+				} else if (requestedEnabled === desiredEnabled) {
+					desiredEnabled = isCaptionsEnabled.value;
+					toast.error(
+						`Failed to ${requestedEnabled ? "enable" : "disable"} captions`,
+					);
+				}
 			}
+		}
+		isToggling = false;
+	};
+
+	const toggleCaptions = () => {
+		captionRestoreGeneration++;
+		if (!sfuClient.isConnected() || !isAvailable.value)
+			return Promise.resolve();
+		if (!isToggling) desiredEnabled = isCaptionsEnabled.value;
+		desiredEnabled = !desiredEnabled;
+		return reconcileCaptionState();
+	};
+
+	const restoreCaptionSubscription = async (): Promise<boolean> => {
+		const generation = ++captionRestoreGeneration;
+		if (
+			!isCaptionsEnabled.value ||
+			!sfuClient.isConnected() ||
+			sfuClient.isE2EERequired()
+		) {
+			if (generation === captionRestoreGeneration) {
+				isCaptionsEnabled.value = false;
+			}
+			return false;
+		}
+		try {
+			await sfuClient.sendRequest("stt:toggle", { enabled: true });
+			return true;
+		} catch (error) {
+			console.error("Failed to restore captions after reconnect:", error);
+			const restored = error instanceof SFURequestError;
+			if (generation === captionRestoreGeneration && !restored) {
+				isCaptionsEnabled.value = false;
+			}
+			return restored;
 		}
 	};
 
 	const disableCaptionsForE2EE = () => {
-		captionOperationGeneration++;
-		captionStore.setCaptionsEnabled(false);
-		captionStore.clearCaptionLines();
-		if (sfuClient.isConnected()) {
-			void sfuClient.sendRequest("stt:toggle", { enabled: false });
+		isAvailable.value = false;
+		desiredEnabled = false;
+		isCaptionsEnabled.value = false;
+		captionLines.value = [];
+		if (sfuClient.isConnected() && !hasRequestedE2EECleanup) {
+			hasRequestedE2EECleanup = true;
+			void sfuClient
+				.sendRequest("stt:toggle", { enabled: false })
+				.catch((error) =>
+					console.error("Failed to clean up captions for E2EE:", error),
+				);
 		}
 	};
 
+	if (!isAvailable.value) disableCaptionsForE2EE();
+
 	onMounted(() => {
 		sfuClient.on("stt:segment", handleSttSegment);
+		document.addEventListener("meet:e2ee-host-enabled", disableCaptionsForE2EE);
 	});
 
 	onUnmounted(() => {
 		sfuClient.off("stt:segment");
+		document.removeEventListener(
+			"meet:e2ee-host-enabled",
+			disableCaptionsForE2EE,
+		);
 	});
 
 	watch(isE2EEContextReady, (ready) => {
 		if (ready) disableCaptionsForE2EE();
 	});
 
+	const reset = () => {
+		isCaptionsEnabled.value = false;
+		captionLines.value = [];
+		nextCaptionId = 0;
+	};
+
 	return {
+		isCaptionsEnabled,
+		captionLines,
+		isAvailable,
 		toggleCaptions,
+		restoreCaptionSubscription,
 		disableCaptionsForE2EE,
+		reset,
 	};
 }

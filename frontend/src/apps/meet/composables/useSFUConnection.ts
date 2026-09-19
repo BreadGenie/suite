@@ -268,12 +268,9 @@ export function useSFUConnection(deps: {
 		mediaState,
 		isCurrentTabHost,
 	});
-	const handleMeetingE2EEEnabled = async (data: {
-		meeting_id?: string;
-		e2ee_enabled?: boolean;
-	}) => {
+	const handleMeetingE2EEEnabled = (data: { meeting_id?: string }) => {
 		if (data.meeting_id === meetingId) onE2EERequired?.();
-		await e2eeHandshake.handleMeetingE2EEEnabled(data);
+		return e2eeHandshake.handleMeetingE2EEEnabled(data);
 	};
 
 	const joinMeetingAPI = useCall<JoinPayload, { meeting_id: string }>({

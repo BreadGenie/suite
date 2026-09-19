@@ -97,7 +97,6 @@ const getParticipant = (participantId) => {
 const scrollContainer = ref(null);
 const canScrollUp = ref(false);
 const canScrollDown = ref(false);
-const shouldStickToBottom = ref(true);
 
 const visibleLines = computed(() =>
 	props.lines.map((line) => {
@@ -115,22 +114,20 @@ const updateScrollShadows = () => {
 	if (!el) return;
 	canScrollUp.value = el.scrollTop > 1;
 	canScrollDown.value = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
-	shouldStickToBottom.value = !canScrollDown.value;
 };
 
 watch(
-	() => props.lines.length,
+	visibleLines,
 	() => {
-		const stickToBottom = shouldStickToBottom.value;
+		const stickToBottom = !canScrollDown.value;
 		nextTick(() => {
 			const el = scrollContainer.value;
 			if (el && stickToBottom) el.scrollTop = el.scrollHeight;
 			updateScrollShadows();
 		});
 	},
+	{ immediate: true },
 );
-
-watch(visibleLines, () => nextTick(updateScrollShadows), { immediate: true });
 </script>
 
 <style scoped>

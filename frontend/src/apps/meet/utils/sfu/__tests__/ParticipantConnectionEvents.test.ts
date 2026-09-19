@@ -570,28 +570,18 @@ describe("ParticipantConnection", () => {
 		expect(onRoomRejoined).toHaveBeenCalledTimes(1);
 	});
 
-	it("notifies room rejoin only after the join request succeeds", async () => {
+	it("does not notify room rejoin when the join request fails", async () => {
 		const { manager, sfuClient } = createManager();
 		const onRoomRejoined = vi.fn();
-		let finishJoin: () => void = () => {};
 		manager.initialize("meeting-1", { user_id: "me" }, { onRoomRejoined });
 		await manager.joinRoom(
 			{ name: "Me", userId: "me" },
 			{ audio_enabled: true, video_enabled: true },
 		);
-		sfuClient.joinRoom.mockReturnValueOnce(
-			new Promise<void>((resolve) => {
-				finishJoin = resolve;
-			}),
-		);
+		sfuClient.joinRoom.mockRejectedValue(new Error("join failed"));
 
-		const rejoin = manager.rejoinAfterSignalingReconnect();
-		await vi.waitFor(() => expect(sfuClient.joinRoom).toHaveBeenCalledTimes(2));
+		await manager.rejoinAfterSignalingReconnect();
 		expect(onRoomRejoined).not.toHaveBeenCalled();
-
-		finishJoin();
-		await rejoin;
-		expect(onRoomRejoined).toHaveBeenCalledTimes(1);
 	});
 
 	it("resubscribes expected remote media on a fresh Participant Connection", async () => {

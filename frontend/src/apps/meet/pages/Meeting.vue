@@ -142,8 +142,8 @@
 							<MeetingLayout v-else @open-people-panel="togglePeople" />
 							<CaptionOverlay
 								v-if="!e2eeJoinPendingMessage"
-								:is-captions-enabled="captionStore.isCaptionsEnabled"
-								:lines="captionStore.captionLines"
+								:is-captions-enabled="isCaptionsEnabled"
+								:lines="captionLines"
 								:participants="participantStore.participants"
 								:current-user="currentUser.currentUser.value"
 							/>
@@ -231,7 +231,8 @@
 						:statsVisible="showStatsForNerds"
 						:isHandRaised="isHandRaised"
 						:isReactionPickerOpen="isReactionPickerOpen"
-						:isCaptionsEnabled="captionStore.isCaptionsEnabled"
+						:isCaptionsEnabled="isCaptionsEnabled"
+						:areCaptionsAvailable="areCaptionsAvailable"
 						@update:isReactionPickerOpen="isReactionPickerOpen = $event"
 						:meetingId="meetingId"
 						:meetingTitle="meetingTitle"
@@ -329,11 +330,7 @@ import PeoplePanel from "../components/PeoplePanel.vue";
 import RejectionOverlay from "../components/RejectionOverlay.vue";
 import StatsForNerdsOverlay from "../components/StatsForNerdsOverlay.vue";
 import { useBackgroundEffects } from "../composables/useBackgroundEffects";
-import { useCaptionStore } from "../composables/useCaptionStore";
-import {
-	restoreCaptionSubscription,
-	useCaptions,
-} from "../composables/useCaptions";
+import { useCaptions } from "../composables/useCaptions";
 import { useChat } from "../composables/useChat";
 import { useChatStore } from "../composables/useChatStore";
 import { useConnectionState } from "../composables/useConnectionState";
@@ -443,8 +440,6 @@ const lobbyStore = useLobbyStore();
 const reactionStore = useReactionStore();
 const raiseHandStore = useRaiseHandStore();
 const gridLayout = useGridLayout(mediaState);
-const captionStore = useCaptionStore();
-let captionRestoreGeneration = 0;
 
 // --- Lobby notification tracking ---
 const notifiedLobbyUsers = ref(new Set<string>());
@@ -691,17 +686,7 @@ const sfuConnection = useSFUConnection({
 	onActiveSpeakerChanged: (participantIds: string[]) => {
 		participantStore.activeSpeakerIds = participantIds;
 	},
-	onRoomRejoined: (sfuClient) => {
-		const generation = ++captionRestoreGeneration;
-		void restoreCaptionSubscription(
-			sfuClient,
-			captionStore.isCaptionsEnabled,
-		).then((restored) => {
-			if (generation === captionRestoreGeneration && !restored) {
-				captionStore.setCaptionsEnabled(false);
-			}
-		});
-	},
+	onRoomRejoined: () => void captions.restoreCaptionSubscription(),
 	onE2EERequired: () => captions.disableCaptionsForE2EE(),
 	onRecordingState: recording.syncState,
 	onRecordingEnabled: recording.setGlobalEnabled,
@@ -797,10 +782,12 @@ const raiseHand = useRaiseHand({
 const captions = useCaptions({
 	sfuClient: sfuConnection.sfuClient,
 });
-const toggleCaptions = async () => {
-	captionRestoreGeneration++;
-	await captions.toggleCaptions();
-};
+const {
+	isAvailable: areCaptionsAvailable,
+	isCaptionsEnabled,
+	captionLines,
+	toggleCaptions,
+} = captions;
 
 // --- Lobby ---
 const lobby = useLobby({
@@ -1193,7 +1180,7 @@ onMounted(async () => {
 	lobbyStore.$reset();
 	reactionStore.$reset();
 	raiseHandStore.$reset();
-	captionStore.$reset();
+	captions.reset();
 	gridLayout.resetGridLayout();
 	currentUser.resetCurrentUser();
 	e2eeState.reset();

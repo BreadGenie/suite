@@ -631,6 +631,32 @@ describe("E2EEHandshakeController", () => {
 		expect(reconfigureForE2EE).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		["returns false", vi.fn().mockResolvedValue(false), "token synchronization failed"],
+		["rejects", vi.fn().mockRejectedValue(new Error("recovery failed")), "recovery failed"],
+	])("propagates failure when secure recovery %s", async (_case, recover, message) => {
+		const refreshToken = vi
+			.fn()
+			.mockRejectedValue(new Error("token synchronization failed"));
+		const { reconfigure, disconnect, joinRoom, reconfigureForE2EE } =
+			createMediaReconfigurationController({
+				mediaState: {
+					isCameraOn: true,
+					isMicOn: true,
+					localStream: stream([track("audio"), track("video")]),
+					processedStream: null,
+				},
+				refreshToken,
+				recoverParticipantConnection: recover,
+			});
+
+		await expect(reconfigure()).rejects.toThrow(message);
+
+		expect(disconnect).toHaveBeenCalledOnce();
+		expect(joinRoom).not.toHaveBeenCalled();
+		expect(reconfigureForE2EE).not.toHaveBeenCalled();
+	});
+
 	it("hard reconnect (legacy) wipes runtime state before sending a resync-request", async () => {
 		const sendE2EEEpochEnvelope = vi.fn();
 		const sfuClient = {

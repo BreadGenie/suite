@@ -235,6 +235,7 @@ const props = defineProps<{
 	cameraPermissionGranted?: boolean;
 	microphonePermissionGranted?: boolean;
 	isCaptionsEnabled?: boolean;
+	areCaptionsAvailable: boolean;
 	canManageRecording?: boolean;
 	recordingStatus?: string;
 	recordingLoading?: boolean;
@@ -288,7 +289,7 @@ const moreOptions = computed(() => [
 				},
 			]
 		: []),
-	...(!isE2EEContextReady.value
+	...(props.areCaptionsAvailable
 		? [
 				{
 					icon: props.isCaptionsEnabled ? LucideCaptionsOff : LucideCaptions,
