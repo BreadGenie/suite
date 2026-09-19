@@ -19,7 +19,16 @@ import numpy as np
 import soundfile as sf
 import torch
 import uvicorn
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
 from protocol import (
@@ -37,6 +46,7 @@ from protocol import (
     validate_session_update,
 )
 from resampling import StreamingResampler
+from runtime import AuthenticatedBodyLimitMiddleware, run_in_thread_serialized
 
 NEMOTRON_MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3.5-asr-streaming-0.6b")
 NEMOTRON_LANGUAGE = normalize_language(os.getenv("NEMOTRON_LANGUAGE"), "en-US")
@@ -44,13 +54,28 @@ NEMOTRON_ATT_CONTEXT_SIZE = os.getenv("NEMOTRON_ATT_CONTEXT_SIZE", "56,3")
 NEMOTRON_FINAL_SILENCE_MS = int(os.getenv("NEMOTRON_FINAL_SILENCE_MS", "600"))
 STT_STREAM_QUEUE_FRAMES = max(1, int(os.getenv("STT_STREAM_QUEUE_FRAMES", "400")))
 STT_API_KEY = os.getenv("STT_API_KEY")
+STT_ALLOW_CPU = os.getenv("STT_ALLOW_CPU", "").lower() in {"1", "true", "yes"}
+STT_MAX_UPLOAD_BYTES = int(os.getenv("STT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+STT_MAX_HTTP_BODY_BYTES = STT_MAX_UPLOAD_BYTES + 1024 * 1024
+STT_MAX_AUDIO_SECONDS = float(os.getenv("STT_MAX_AUDIO_SECONDS", "300"))
+STT_MAX_DECODED_BYTES = int(os.getenv("STT_MAX_DECODED_BYTES", str(256 * 1024 * 1024)))
+STT_FFMPEG_TIMEOUT_SECONDS = float(os.getenv("STT_FFMPEG_TIMEOUT_SECONDS", "30"))
+STT_REALTIME_MESSAGE_BYTES = int(os.getenv("STT_REALTIME_MESSAGE_BYTES", str(1024 * 1024)))
+STT_REALTIME_QUEUE_BYTES = int(os.getenv("STT_REALTIME_QUEUE_BYTES", str(4 * 1024 * 1024)))
+STT_REALTIME_UTTERANCE_SECONDS = float(os.getenv("STT_REALTIME_UTTERANCE_SECONDS", "60"))
+STT_REALTIME_IDLE_SECONDS = float(os.getenv("STT_REALTIME_IDLE_SECONDS", "30"))
+STT_REALTIME_SESSION_SECONDS = float(os.getenv("STT_REALTIME_SESSION_SECONDS", "3600"))
+STT_INFERENCE_FAILURE_SECONDS = float(os.getenv("STT_INFERENCE_FAILURE_SECONDS", "60"))
 
 MODEL_ID = NEMOTRON_MODEL.rsplit("/", 1)[-1]
 MEL_HOP_SAMPLES = 160
 
 model = None
 inference_semaphore: asyncio.Semaphore | None = None
+decode_semaphore: asyncio.Semaphore | None = None
 ready = False
+inference_started_at: float | None = None
+last_inference_failure_at: int | None = None
 
 
 def parse_att_context_size() -> list[int]:
@@ -92,7 +117,10 @@ def apply_language(language: str | None) -> str:
 
 def load_model() -> None:
     global model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    cuda_available = torch.cuda.is_available()
+    if not cuda_available and not STT_ALLOW_CPU:
+        raise RuntimeError("CUDA is required; set STT_ALLOW_CPU=1 only for CPU development")
+    device = "cuda" if cuda_available else "cpu"
     att_context_size = parse_att_context_size()
     _label(event="model_loading", model=NEMOTRON_MODEL, device=device, language=NEMOTRON_LANGUAGE)
     t0 = time.time()
@@ -374,67 +402,81 @@ class RealtimeTranscriptionSession:
 
     def close(self) -> None:
         self.fallback_audio.close()
-        self.incremental_failed = False
 
 
 def _run_with_language(language: str, operation: Callable[..., Any], *args):
-    apply_language(language)
-    return operation(*args)
+    global inference_started_at, last_inference_failure_at
+    inference_started_at = time.monotonic()
+    try:
+        apply_language(language)
+        return operation(*args)
+    except Exception:
+        last_inference_failure_at = int(time.time())
+        raise
+    finally:
+        inference_started_at = None
 
 
 async def run_inference(language: str, operation: Callable[..., Any], *args):
     if inference_semaphore is None:
         raise RuntimeError("Inference service is not initialized")
-    async with inference_semaphore:
-        return await asyncio.to_thread(_run_with_language, language, operation, *args)
+    return await run_in_thread_serialized(inference_semaphore, _run_with_language, language, operation, *args)
 
 
-def direct_transcribe(audio: np.ndarray) -> str:
-    device = model_device()
-    audio_tensor = torch.from_numpy(np.ascontiguousarray(audio)).float().unsqueeze(0).to(device)
-    audio_len = torch.tensor([audio.shape[0]], dtype=torch.long, device=device)
-    with torch.inference_mode():
-        processed, processed_len = model.preprocessor(input_signal=audio_tensor, length=audio_len)
-        encoded, encoded_len = model.encoder(audio_signal=processed, length=processed_len)
-        hypotheses = model.decoding.rnnt_decoder_predictions_tensor(
-            encoded,
-            encoded_len,
-            return_hypotheses=False,
-        )
-    hypothesis = hypotheses[0]
-    return clean_transcript(hypothesis.text if hasattr(hypothesis, "text") else str(hypothesis))
+class AudioLimitError(ValueError):
+    pass
 
 
 def load_uploaded_audio(audio_bytes: bytes, filename: str) -> np.ndarray:
     suffix = os.path.splitext(filename)[1] or ".wav"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as audio_file:
-        audio_file.write(audio_bytes)
-        path = audio_file.name
-    try:
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, f"audio{suffix}")
+        with open(path, "wb") as audio_file:
+            audio_file.write(audio_bytes)
         try:
+            info = sf.info(path)
+            if info.samplerate <= 0 or info.channels <= 0:
+                raise AudioLimitError("Invalid audio stream metadata")
+            if info.duration > STT_MAX_AUDIO_SECONDS:
+                raise AudioLimitError(f"Audio exceeds the {STT_MAX_AUDIO_SECONDS:g} second limit")
+            if info.frames * info.channels * 4 > STT_MAX_DECODED_BYTES:
+                raise AudioLimitError("Decoded audio exceeds the size limit")
             audio, sample_rate = sf.read(path, dtype="float32")
+        except AudioLimitError:
+            raise
         except Exception:
-            decoded = subprocess.run(
+            decoded_path = os.path.join(directory, "decoded.f32")
+            subprocess.run(
                 [
                     "ffmpeg",
                     "-v",
                     "error",
                     "-i",
                     path,
+                    "-t",
+                    str(STT_MAX_AUDIO_SECONDS + 1),
                     "-f",
                     "f32le",
                     "-ac",
                     "1",
                     "-ar",
                     str(MODEL_SAMPLE_RATE),
-                    "pipe:1",
+                    "-y",
+                    decoded_path,
                 ],
                 check=True,
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=STT_FFMPEG_TIMEOUT_SECONDS,
             )
-            return np.frombuffer(decoded.stdout, dtype=np.float32).copy()
-    finally:
-        os.unlink(path)
+            decoded_size = os.path.getsize(decoded_path)
+            max_samples = int(STT_MAX_AUDIO_SECONDS * MODEL_SAMPLE_RATE)
+            if decoded_size > max_samples * 4:
+                raise ValueError(f"Audio exceeds the {STT_MAX_AUDIO_SECONDS:g} second limit")
+            if decoded_size > STT_MAX_DECODED_BYTES:
+                raise ValueError("Decoded audio exceeds the size limit")
+            with open(decoded_path, "rb") as decoded_file:
+                return np.frombuffer(decoded_file.read(), dtype=np.float32).copy()
 
     if audio.ndim > 1:
         audio = audio.mean(axis=-1) if audio.shape[-1] <= audio.shape[0] else audio.mean(axis=0)
@@ -446,39 +488,57 @@ def load_uploaded_audio(audio_bytes: bytes, filename: str) -> np.ndarray:
             orig_sr=sample_rate,
             target_sr=MODEL_SAMPLE_RATE,
         )
-    return np.asarray(audio, dtype=np.float32)
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size > int(STT_MAX_AUDIO_SECONDS * MODEL_SAMPLE_RATE):
+        raise ValueError(f"Audio exceeds the {STT_MAX_AUDIO_SECONDS:g} second limit")
+    if audio.nbytes > STT_MAX_DECODED_BYTES:
+        raise ValueError("Decoded audio exceeds the size limit")
+    return audio
+
+
+async def read_upload_limited(file: UploadFile) -> bytes:
+    if file.size is not None and file.size > STT_MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio upload is too large")
+    chunks = []
+    total = 0
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+        if total > STT_MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Audio upload is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def run_warmup() -> None:
     t0 = time.time()
-    _run_with_language(NEMOTRON_LANGUAGE, direct_transcribe, np.zeros(MODEL_SAMPLE_RATE, dtype=np.float32))
+    _run_with_language(NEMOTRON_LANGUAGE, final_transcribe, np.zeros(MODEL_SAMPLE_RATE, dtype=np.float32))
     _label(event="warmup", elapsed=f"{time.time() - t0:.2f}s")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global inference_semaphore, ready
+    global decode_semaphore, inference_semaphore, ready
+    if not STT_API_KEY:
+        raise RuntimeError("STT_API_KEY is required")
     load_model()
+    decode_semaphore = asyncio.Semaphore(2)
     inference_semaphore = asyncio.Semaphore(1)
-    try:
-        await asyncio.to_thread(run_warmup)
-    finally:
-        ready = True
+    await asyncio.to_thread(run_warmup)
+    ready = True
     _label(event="ready", max_concurrency=1)
-    yield
-    ready = False
+    try:
+        yield
+    finally:
+        ready = False
 
 
 app = FastAPI(title="Nemotron STT Server", lifespan=lifespan)
-
-
-def require_stt_auth(authorization: str | None) -> None:
-    if not bearer_token_matches(authorization, STT_API_KEY):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+app.add_middleware(
+    AuthenticatedBodyLimitMiddleware,
+    path="/v1/audio/transcriptions",
+    max_bytes=STT_MAX_HTTP_BODY_BYTES,
+    authorize=lambda value: bearer_token_matches(value, STT_API_KEY),
+)
 
 
 @app.get("/health")
@@ -488,7 +548,17 @@ async def health():
             {"status": "loading", "backend": "nemo", "model": NEMOTRON_MODEL},
             status_code=503,
         )
-    return {"status": "ok", "backend": "nemo", "model": NEMOTRON_MODEL}
+    busy_for = time.monotonic() - inference_started_at if inference_started_at is not None else None
+    recent_failure = bool(
+        last_inference_failure_at and time.time() - last_inference_failure_at <= STT_INFERENCE_FAILURE_SECONDS
+    )
+    return {
+        "status": "busy" if busy_for is not None else "degraded" if recent_failure else "ok",
+        "backend": "nemo",
+        "model": NEMOTRON_MODEL,
+        "inference_active_seconds": round(busy_for, 1) if busy_for is not None else None,
+        "recent_inference_failure": recent_failure,
+    }
 
 
 @app.get("/v1/models")
@@ -517,19 +587,21 @@ async def transcribe_audio_file(
     temperature: Annotated[str | None, Form()] = None,
     prompt: Annotated[str | None, Form()] = None,
 ):
-    del temperature, prompt
-    require_stt_auth(authorization)
     if not ready or model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     if model_name not in {MODEL_ID, NEMOTRON_MODEL}:
         raise HTTPException(status_code=400, detail=f"Unsupported model: {model_name}")
     if response_format not in {"json", "text", "verbose_json"}:
         raise HTTPException(status_code=400, detail=f"Unsupported response_format: {response_format}")
-    audio_bytes = await file.read()
+    audio_bytes = await read_upload_limited(file)
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Empty audio file")
     try:
-        audio = await asyncio.to_thread(load_uploaded_audio, audio_bytes, file.filename or "audio.wav")
+        if decode_semaphore is None:
+            raise RuntimeError("Decode service is not initialized")
+        audio = await run_in_thread_serialized(
+            decode_semaphore, load_uploaded_audio, audio_bytes, file.filename or "audio.wav"
+        )
     except Exception as error:
         raise HTTPException(status_code=400, detail=f"Failed to process audio: {error}") from error
 
@@ -602,38 +674,69 @@ async def realtime_transcription(websocket: WebSocket):
     )
 
     transcription: RealtimeTranscriptionSession | None = None
+    reader_task: asyncio.Task | None = None
     worker_task: asyncio.Task | None = None
     current_item_id = item_id()
     previous_item_id: str | None = None
     try:
-        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=STT_STREAM_QUEUE_FRAMES)
+        queue: asyncio.Queue[tuple[str, int] | None] = asyncio.Queue(maxsize=STT_STREAM_QUEUE_FRAMES)
         closed = asyncio.Event()
+        queued_bytes = 0
+        session_deadline = time.monotonic() + STT_REALTIME_SESSION_SECONDS
         _label(event="realtime_start", session=realtime_session_id, model=requested_model)
 
         async def reader() -> None:
+            nonlocal queued_bytes
             try:
                 while not closed.is_set():
-                    message = await websocket.receive()
+                    remaining = session_deadline - time.monotonic()
+                    if remaining <= 0:
+                        await websocket.close(code=1008, reason="Session time limit reached")
+                        break
+                    try:
+                        message = await asyncio.wait_for(
+                            websocket.receive(), timeout=min(STT_REALTIME_IDLE_SECONDS, remaining)
+                        )
+                    except TimeoutError:
+                        await websocket.close(code=1008, reason="Realtime session idle timeout")
+                        break
                     if message["type"] == "websocket.disconnect":
                         break
                     if message.get("bytes") is not None:
+                        if len(message["bytes"]) > STT_REALTIME_MESSAGE_BYTES:
+                            await websocket.close(code=1009, reason="WebSocket message is too large")
+                            break
                         await websocket.send_json(
                             realtime_error("Binary WebSocket messages are not supported")
                         )
                     elif message.get("text") is not None:
-                        await queue.put(message["text"])
+                        message_bytes = len(message["text"].encode("utf-8"))
+                        if message_bytes > STT_REALTIME_MESSAGE_BYTES:
+                            await websocket.close(code=1009, reason="WebSocket message is too large")
+                            break
+                        if queued_bytes + message_bytes > STT_REALTIME_QUEUE_BYTES:
+                            await websocket.close(code=1009, reason="WebSocket queue byte limit reached")
+                            break
+                        queued_bytes += message_bytes
+                        await queue.put((message["text"], message_bytes))
             except WebSocketDisconnect:
                 pass
             finally:
-                await queue.put(None)
+                closed.set()
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         async def worker() -> None:
-            nonlocal transcription, effective_session, current_item_id, previous_item_id
+            nonlocal transcription, effective_session, current_item_id, previous_item_id, queued_bytes
             while not closed.is_set():
-                payload = await queue.get()
+                queued = await queue.get()
                 try:
-                    if payload is None:
+                    if queued is None:
                         return
+                    payload, message_bytes = queued
+                    queued_bytes -= message_bytes
                     try:
                         client_event = json.loads(payload)
                     except json.JSONDecodeError:
@@ -690,11 +793,21 @@ async def realtime_transcription(websocket: WebSocket):
                             encoded_audio = client_event.get("audio")
                             if not isinstance(encoded_audio, str):
                                 raise ValueError("audio must be a base64 string")
+                            remaining_audio_bytes = (
+                                int(STT_REALTIME_UTTERANCE_SECONDS * REALTIME_SAMPLE_RATE) * 2
+                                - transcription.input_sample_count * 2
+                            )
+                            if len(encoded_audio) > 4 * ((max(0, remaining_audio_bytes) + 2) // 3):
+                                raise ValueError(
+                                    f"Audio buffer exceeds the {STT_REALTIME_UTTERANCE_SECONDS:g} second limit"
+                                )
                             audio_bytes = base64.b64decode(encoded_audio, validate=True)
                             if not audio_bytes or len(audio_bytes) % 2:
                                 raise ValueError("audio must contain PCM16 samples")
-                            if len(audio_bytes) > 15 * 1024 * 1024:
-                                raise ValueError("audio event exceeds the 15 MiB limit")
+                            if len(audio_bytes) > remaining_audio_bytes:
+                                raise ValueError(
+                                    f"Audio buffer exceeds the {STT_REALTIME_UTTERANCE_SECONDS:g} second limit"
+                                )
                         except (binascii.Error, ValueError) as decode_error:
                             await websocket.send_json(realtime_error(str(decode_error), client_event_id))
                             continue
@@ -703,6 +816,8 @@ async def realtime_transcription(websocket: WebSocket):
                             transcription.append_and_decode,
                             audio_bytes,
                         )
+                        if closed.is_set():
+                            return
                         if delta := transcript_delta(transcription.last_sent_text, text):
                             transcription.last_sent_text = text
                             await websocket.send_json(
@@ -719,6 +834,8 @@ async def realtime_transcription(websocket: WebSocket):
 
                     if event_type == "input_audio_buffer.clear":
                         await run_inference(transcription.language, transcription.clear)
+                        if closed.is_set():
+                            return
                         current_item_id = item_id()
                         await websocket.send_json(
                             {"event_id": event_id(), "type": "input_audio_buffer.cleared"}
@@ -746,6 +863,8 @@ async def realtime_transcription(websocket: WebSocket):
                         try:
                             text = await run_inference(transcription.language, transcription.finalize)
                         except Exception as inference_error:
+                            if closed.is_set():
+                                return
                             await websocket.send_json(
                                 {
                                     "event_id": event_id(),
@@ -761,6 +880,8 @@ async def realtime_transcription(websocket: WebSocket):
                                 }
                             )
                             continue
+                        if closed.is_set():
+                            return
                         _label(
                             event="realtime_final",
                             session=realtime_session_id,
@@ -822,12 +943,13 @@ async def realtime_transcription(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        if (
-            transcription is not None
-            and worker_task is not None
-            and worker_task.done()
-            and not worker_task.cancelled()
-        ):
+        tasks = [task for task in (reader_task, worker_task) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if transcription is not None:
             transcription.close()
         _label(event="realtime_end", session=realtime_session_id)
 
@@ -835,4 +957,4 @@ async def realtime_transcription(websocket: WebSocket):
 if __name__ == "__main__":
     host = os.getenv("STT_HOST", "127.0.0.1")
     port = int(os.getenv("STT_PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, ws_max_size=STT_REALTIME_MESSAGE_BYTES)

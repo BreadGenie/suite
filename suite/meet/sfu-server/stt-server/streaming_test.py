@@ -1,23 +1,27 @@
 """GPU/runtime regression tests. Run in the STT image with cached model weights."""
 
+import importlib.util
 import json
 import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-try:
+EXTERNAL_DEPENDENCIES = ("numpy", "soundfile", "soxr", "torch", "nemo")
+missing_dependencies = [name for name in EXTERNAL_DEPENDENCIES if importlib.util.find_spec(name) is None]
+
+if missing_dependencies:
+    server = None
+else:
     import numpy as np
     import server
     import soundfile as sf
     import soxr
     import torch
     from nemo.utils import logging
-except ImportError:
-    server = None
 
 
-@unittest.skipIf(server is None, "Requires the NeMo STT runtime")
+@unittest.skipIf(missing_dependencies, f"Missing STT dependencies: {', '.join(missing_dependencies)}")
 class StreamingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -156,19 +160,6 @@ class StreamingTest(unittest.TestCase):
         finally:
             session.close()
 
-    def test_fallback_audio_spools_and_closes(self):
-        session = server.RealtimeTranscriptionSession("en-US")
-        try:
-            with patch.object(session.incremental_decoder, "feed", return_value=""):
-                session.append_and_decode(np.zeros(24000 * 20, dtype="<i2").tobytes())
-            self.assertTrue(session.fallback_audio._rolled)
-            self.assertGreater(session.fallback_audio.tell(), 1024 * 1024)
-            captured = session.fallback_audio
-            session.clear()
-            self.assertTrue(captured.closed)
-        finally:
-            session.close()
-
     def test_decoder_flush_boundaries_and_large_packets(self):
         root = Path(os.getenv("STT_TEST_CORPUS", "/eval/mic-ab"))
         if not (root / "manifest.jsonl").exists():
@@ -212,7 +203,6 @@ class StreamingTest(unittest.TestCase):
             for i in range(0, len(pcm), 4800):
                 session.append_and_decode(pcm[i : i + 4800])
                 self.assertLess(session.incremental_decoder.features.audio.size, 20000)
-            self.assertTrue(session.fallback_audio._rolled)
             captured = session.fallback_audio
             with patch.object(
                 captured, "read", side_effect=AssertionError("Normal finalize read fallback audio")

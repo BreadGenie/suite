@@ -1,8 +1,4 @@
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
 
 from protocol import (
     REALTIME_SAMPLE_RATE,
@@ -58,6 +54,29 @@ class ProtocolTest(unittest.TestCase):
         )
         self.assertIsNone(error)
         self.assertEqual(config, {"model": "nemotron", "language": "en-US"})
+
+    def test_rejects_malformed_nested_session_values(self):
+        cases = (
+            ([], "session.audio must be an object"),
+            ({"input": []}, "session.audio.input must be an object"),
+            ({"input": {"format": []}}, "session.audio.input.format must be an object"),
+            ({"input": {"transcription": []}}, "session.audio.input.transcription must be an object"),
+            ({"input": {"transcription": {"model": []}}}, "transcription.model must be a string"),
+            ({"input": {"transcription": {"language": 1}}}, "transcription.language must be a string"),
+            (
+                {"input": {"transcription": {"languages": [1]}}},
+                "transcription.languages must be an array of strings",
+            ),
+        )
+        for audio, expected_error in cases:
+            with self.subTest(error=expected_error):
+                message = {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": audio},
+                }
+                config, error = validate_session_update(message, {"nemotron"}, "nemotron", "en-US")
+                self.assertIsNone(config)
+                self.assertEqual(error, expected_error)
 
     def test_builds_realtime_session_and_error_events(self):
         session = realtime_session("sess_1", "nemotron", "en-US")

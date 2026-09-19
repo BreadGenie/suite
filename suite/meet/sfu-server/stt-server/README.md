@@ -25,6 +25,17 @@ The model is downloaded at startup. Mount `/models` to persist the Hugging Face,
 | `NEMOTRON_FINAL_SILENCE_MS` | `600` |
 | `STT_STREAM_QUEUE_FRAMES` | `400` |
 | `STT_API_KEY` | required |
+| `STT_ALLOW_CPU` | unset (CUDA required) |
+| `STT_MAX_UPLOAD_BYTES` | `26214400` (25 MiB) |
+| `STT_MAX_AUDIO_SECONDS` | `300` |
+| `STT_MAX_DECODED_BYTES` | `268435456` (256 MiB) |
+| `STT_FFMPEG_TIMEOUT_SECONDS` | `30` |
+| `STT_REALTIME_MESSAGE_BYTES` | `1048576` (1 MiB) |
+| `STT_REALTIME_QUEUE_BYTES` | `4194304` (4 MiB) |
+| `STT_REALTIME_UTTERANCE_SECONDS` | `60` |
+| `STT_REALTIME_IDLE_SECONDS` | `30` |
+| `STT_REALTIME_SESSION_SECONDS` | `3600` |
+| `STT_INFERENCE_FAILURE_SECONDS` | `60` |
 | `HF_TOKEN` | unset |
 
 ## OpenAI-Compatible API
@@ -39,7 +50,7 @@ curl http://localhost:8000/v1/audio/transcriptions \
 
 Set `stream=true` to receive `transcript.text.delta` and `transcript.text.done` Server-Sent Events.
 
-For live input, connect to `/v1/realtime` with the same bearer token, send a transcription `session.update` configured for 24 kHz PCM16 mono, append base64 audio with `input_audio_buffer.append`, and finalize turns with `input_audio_buffer.commit`. The server emits OpenAI Realtime transcription delta and completed events. Transcription routes reject every request when `STT_API_KEY` is unset.
+For live input, connect to `/v1/realtime` with the same bearer token, send a transcription `session.update` configured for 24 kHz PCM16 mono, append base64 audio with `input_audio_buffer.append`, and finalize turns with `input_audio_buffer.commit`. The server emits OpenAI Realtime transcription delta and completed events. Startup fails when `STT_API_KEY` is unset. CUDA is also required unless `STT_ALLOW_CPU=1` is explicitly set for development.
 
 ## Run
 
@@ -51,4 +62,4 @@ docker run --rm --gpus all \
   ghcr.io/frappe/suite/nemotron-stt:<tag>
 ```
 
-The PR workflow publishes same-repository pull requests as `pr-<number>` and all feature branches as both their branch name and short commit SHA. Fork branches publish under the fork owner's GHCR namespace.
+Pull requests affecting the runtime run lightweight protocol, cancellation, and resampling tests without building or publishing an image. Pushes to `develop` publish `develop` and short-SHA tags after the same tests; manual runs additionally publish the requested tag.

@@ -74,21 +74,45 @@ def validate_session_update(
         return None, "Expected a session.update event"
     if session.get("type") != "transcription":
         return None, "session.type must be transcription"
-    audio = session.get("audio") or {}
-    audio_input = audio.get("input") or {}
+    audio = session.get("audio")
+    if audio is None:
+        audio = {}
+    if not isinstance(audio, dict):
+        return None, "session.audio must be an object"
+    audio_input = audio.get("input")
+    if audio_input is None:
+        audio_input = {}
+    if not isinstance(audio_input, dict):
+        return None, "session.audio.input must be an object"
     audio_format = audio_input.get("format")
+    if audio_format is not None and not isinstance(audio_format, dict):
+        return None, "session.audio.input.format must be an object"
     if audio_format and (
         audio_format.get("type") != "audio/pcm" or audio_format.get("rate") != REALTIME_SAMPLE_RATE
     ):
         return None, f"Only {REALTIME_SAMPLE_RATE} Hz audio/pcm is supported"
-    transcription = audio_input.get("transcription") or {}
-    model = transcription.get("model") or default_model
+    transcription = audio_input.get("transcription")
+    if transcription is None:
+        transcription = {}
+    if not isinstance(transcription, dict):
+        return None, "session.audio.input.transcription must be an object"
+    model = transcription.get("model")
+    if model is None or model == "":
+        model = default_model
+    if not isinstance(model, str):
+        return None, "transcription.model must be a string"
     if model not in supported_models:
         return None, f"Unsupported transcription model: {model}"
+    language = transcription.get("language")
+    languages = transcription.get("languages")
+    if languages is None:
+        languages = []
+    if language is not None and not isinstance(language, str):
+        return None, "transcription.language must be a string"
+    if not isinstance(languages, list) or any(not isinstance(value, str) for value in languages):
+        return None, "transcription.languages must be an array of strings"
     language = normalize_language(
-        transcription.get("language")
-        or next(iter(transcription.get("languages") or []), None)
-        or default_language,
+        language or next(iter(languages), None) or default_language,
         default_language,
     )
     return {"model": model, "language": language}, None
