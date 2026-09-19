@@ -3,10 +3,6 @@ import { loggers } from '../utils/logger';
 
 export interface SttStreamMetadata {
 	sessionId: string;
-	roomId: string;
-	participantId: string;
-	producerId: string;
-	participantName?: string;
 	sampleRate: number;
 	language?: string;
 }
@@ -32,7 +28,13 @@ export interface ISttClient {
 	): Promise<ISttStream>;
 	isAvailable(): boolean;
 	onAvailable(listener: () => void): void;
+	destroy?(): void;
 }
+
+export const MAX_STT_UTTERANCE_MS = 15_000;
+const MAX_WEBSOCKET_BUFFERED_BYTES = 1024 * 1024;
+const MAX_PENDING_COMMITS = 8;
+const HEALTH_CHECK_TIMEOUT_MS = 5000;
 
 interface RealtimeServerMessage {
 	type?: string;
@@ -48,8 +50,10 @@ export class SttClient implements ISttClient {
 	private available = false;
 	private healthCheckInFlight = false;
 	private healthCheckTimer: NodeJS.Timeout | null = null;
+	private healthCheckController: AbortController | null = null;
 	private availableListeners = new Set<() => void>();
 	private readonly healthCheckIntervalMs = 10_000;
+	private destroyed = false;
 
 	constructor(serverUrl: string, apiKey?: string) {
 		this.serverUrl = serverUrl.replace(/\/$/, '');
@@ -65,10 +69,20 @@ export class SttClient implements ISttClient {
 	}
 
 	private checkHealth(): void {
-		if (this.healthCheckInFlight) return;
+		if (this.destroyed || this.healthCheckInFlight) return;
 		this.healthCheckInFlight = true;
-		fetch(`${this.serverUrl}/health`, { headers: this.authHeaders() })
+		const controller = new AbortController();
+		this.healthCheckController = controller;
+		const timeout = setTimeout(
+			() => controller.abort(),
+			HEALTH_CHECK_TIMEOUT_MS,
+		);
+		fetch(`${this.serverUrl}/health`, {
+			headers: this.authHeaders(),
+			signal: controller.signal,
+		})
 			.then((res) => {
+				if (this.destroyed) return;
 				if (res.ok || res.status === 404) {
 					// 404 means the backend has no health endpoint; treat as reachable.
 					const recovered = !this.available;
@@ -86,6 +100,7 @@ export class SttClient implements ISttClient {
 				}
 			})
 			.catch((err) => {
+				if (this.destroyed) return;
 				this.available = false;
 				loggers.stt.debug(
 					'STT server unreachable at %s: %s',
@@ -94,13 +109,22 @@ export class SttClient implements ISttClient {
 				);
 			})
 			.finally(() => {
+				clearTimeout(timeout);
+				if (this.healthCheckController === controller) {
+					this.healthCheckController = null;
+				}
 				this.healthCheckInFlight = false;
 			});
 	}
 
 	destroy(): void {
+		this.destroyed = true;
 		if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
 		this.healthCheckTimer = null;
+		this.healthCheckController?.abort();
+		this.healthCheckController = null;
+		this.available = false;
+		this.availableListeners.clear();
 	}
 
 	isAvailable(): boolean {
@@ -206,11 +230,22 @@ class SttStream implements ISttStream {
 
 	sendAudio(frame: Buffer): void {
 		if (!this.ready || this.socket.readyState !== WebSocket.OPEN) return;
+		const maxUtteranceBytes =
+			(this.metadata.sampleRate * 2 * MAX_STT_UTTERANCE_MS) / 1000;
+		if (this.bufferedBytes + frame.length > maxUtteranceBytes) {
+			this.fail(
+				new Error(`STT utterance exceeded ${MAX_STT_UTTERANCE_MS} ms limit`),
+			);
+			return;
+		}
+		if (
+			!this.sendEvent({
+				type: 'input_audio_buffer.append',
+				audio: frame.toString('base64'),
+			})
+		)
+			return;
 		this.bufferedBytes += frame.length;
-		this.sendEvent({
-			type: 'input_audio_buffer.append',
-			audio: frame.toString('base64'),
-		});
 	}
 
 	markFinal(durationMs: number): void {
@@ -220,10 +255,17 @@ class SttStream implements ISttStream {
 			this.bufferedBytes === 0
 		)
 			return;
-		this.pendingDurations.push(durationMs);
-		this.pendingCommits++;
-		this.bufferedBytes = 0;
-		this.sendEvent({ type: 'input_audio_buffer.commit' });
+		if (this.pendingCommits >= MAX_PENDING_COMMITS) {
+			this.fail(
+				new Error('STT server is not acknowledging committed utterances'),
+			);
+			return;
+		}
+		if (this.sendEvent({ type: 'input_audio_buffer.commit' })) {
+			this.pendingDurations.push(durationMs);
+			this.pendingCommits++;
+			this.bufferedBytes = 0;
+		}
 	}
 
 	onUnexpectedClose(listener: () => void): void {
@@ -340,9 +382,28 @@ class SttStream implements ISttStream {
 		if (this.pendingCommits === 0) this.resolvePendingWaiters();
 	}
 
-	private sendEvent(event: object): void {
-		if (this.socket.readyState === WebSocket.OPEN)
-			this.socket.send(JSON.stringify(event));
+	private sendEvent(event: object): boolean {
+		if (this.socket.readyState !== WebSocket.OPEN) return false;
+		const payload = JSON.stringify(event);
+		if (
+			this.socket.bufferedAmount + Buffer.byteLength(payload) >
+			MAX_WEBSOCKET_BUFFERED_BYTES
+		) {
+			this.fail(new Error('STT WebSocket outbound buffer limit exceeded'));
+			return false;
+		}
+		this.socket.send(payload);
+		return true;
+	}
+
+	private fail(error: Error): void {
+		if (this.closeRequested || this.unexpectedlyClosed) return;
+		loggers.stt.warn('%s', error.message);
+		this.ready = false;
+		this.unexpectedlyClosed = true;
+		this.resolvePendingWaiters();
+		this.deliverUnexpectedClose();
+		this.socket.terminate();
 	}
 
 	private isSocketClosed(): boolean {
@@ -379,10 +440,8 @@ class SttStream implements ISttStream {
 }
 
 export class MockSttClient implements ISttClient {
-	private available = true;
-
 	isAvailable(): boolean {
-		return this.available;
+		return true;
 	}
 
 	onAvailable(_listener: () => void): void {}
@@ -396,7 +455,6 @@ export class MockSttClient implements ISttClient {
 }
 
 class MockSttStream implements ISttStream {
-	private chunks: Buffer[] = [];
 	private bytes = 0;
 	private sequence = 0;
 
@@ -406,7 +464,6 @@ class MockSttStream implements ISttStream {
 	) {}
 
 	sendAudio(frame: Buffer): void {
-		this.chunks.push(frame);
 		this.bytes += frame.length;
 	}
 
@@ -426,14 +483,12 @@ class MockSttStream implements ISttStream {
 			durationMs,
 			sequence: this.sequence,
 		});
-		this.chunks = [];
 		this.bytes = 0;
 	}
 
 	onUnexpectedClose(_listener: () => void): void {}
 
 	async close(): Promise<void> {
-		this.chunks = [];
 		this.bytes = 0;
 	}
 }

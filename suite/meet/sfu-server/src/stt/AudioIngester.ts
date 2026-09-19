@@ -12,18 +12,18 @@ import type {
 	RtpCapabilities,
 } from 'mediasoup/types';
 import { loggers } from '../utils/logger';
-import { AudioPreRoll } from './AudioPreRoll';
-import { updatePcmCaptureTranscript, writePcmCapture } from './PcmCapture';
-import type { ISttClient, ISttStream } from './SttClient';
+import {
+	type ISttClient,
+	type ISttStream,
+	MAX_STT_UTTERANCE_MS,
+} from './SttClient';
 
 interface AudioIngesterOptions {
 	roomId: string;
 	participantId: string;
-	participantName?: string;
 	producer: Producer;
 	router: Router;
 	sttClient: ISttClient;
-	captureDirectory?: string;
 	/** Called before each flush; if false, audio is discarded (active-speaker-only mode) */
 	isActiveSpeaker?: () => boolean;
 	onUnexpectedStreamClose: () => void;
@@ -39,35 +39,32 @@ const OUTPUT_CHANNELS = 1; // ASR input is mono; Meet still publishes stereo Opu
 const VAD_CHECK_MS = 100;
 /** Bytes of audio per VAD check */
 const BYTES_PER_CHECK = (SAMPLE_RATE * BYTES_PER_SAMPLE * VAD_CHECK_MS) / 1000;
+const MAX_UTTERANCE_BYTES =
+	(SAMPLE_RATE * BYTES_PER_SAMPLE * MAX_STT_UTTERANCE_MS) / 1000;
 const PRE_ROLL_CHECKS = Math.max(
 	0,
 	Math.ceil(
 		Number.parseInt(process.env.STT_PRE_ROLL_MS || '300', 10) / VAD_CHECK_MS,
 	),
 );
-
-/** Consecutive silent checks before we flush (500 ms pause by default) */
 const SILENCE_CHECKS_TO_FLUSH = Math.max(
 	1,
 	Math.ceil(
 		Number.parseInt(process.env.STT_SILENCE_MS || '500', 10) / VAD_CHECK_MS,
 	),
 );
-/** Minimum speech before a normal silence final (600 ms by default). */
 const MIN_SPEECH_CHECKS = Math.max(
 	1,
 	Math.ceil(
 		Number.parseInt(process.env.STT_MIN_SPEECH_MS || '600', 10) / VAD_CHECK_MS,
 	),
 );
-/** Min speech for short utterance / tail-end catch-up flush (200 ms by default). */
 const MIN_TAIL_CHECKS = Math.max(
 	1,
 	Math.ceil(
 		Number.parseInt(process.env.STT_MIN_TAIL_MS || '200', 10) / VAD_CHECK_MS,
 	),
 );
-/** Silence before finalizing a short utterance (700 ms by default). */
 const SHORT_UTTERANCE_SILENCE_CHECKS = Math.max(
 	SILENCE_CHECKS_TO_FLUSH,
 	Math.ceil(
@@ -75,11 +72,6 @@ const SHORT_UTTERANCE_SILENCE_CHECKS = Math.max(
 			VAD_CHECK_MS,
 	),
 );
-/**
- * Normalized RMS threshold for speech vs silence.
- * 0.0 = absolute silence, 1.0 = full-scale square wave.
- * 0.012 works well for typical mic input routed through Mediasoup.
- */
 const SPEECH_RMS_THRESHOLD = Number.parseFloat(
 	process.env.STT_VAD_THRESHOLD || '0.012',
 );
@@ -88,14 +80,10 @@ const SPEECH_RMS_THRESHOLD = Number.parseFloat(
 export class AudioIngester {
 	private roomId: string;
 	private participantId: string;
-	private participantName?: string;
 	private producer: Producer;
 	private router: Router;
 	private sttClient: ISttClient;
 	private sttStream: ISttStream | null = null;
-	private captureDirectory?: string;
-	private captureFrames: Buffer[] = [];
-	private pendingCaptureMetadata: string[] = [];
 	private sessionId = randomUUID();
 	private isActiveSpeaker?: () => boolean;
 	private onUnexpectedStreamClose: () => void;
@@ -120,16 +108,15 @@ export class AudioIngester {
 	private isInSpeech = false;
 	private vadTimer: NodeJS.Timeout | null = null;
 	private streamedBytes = 0;
-	private preRoll = new AudioPreRoll(PRE_ROLL_CHECKS);
+	private preRollFrames: Buffer[] = [];
+	private failureNotified = false;
 
 	constructor(options: AudioIngesterOptions) {
 		this.roomId = options.roomId;
 		this.participantId = options.participantId;
-		this.participantName = options.participantName;
 		this.producer = options.producer;
 		this.router = options.router;
 		this.sttClient = options.sttClient;
-		this.captureDirectory = options.captureDirectory;
 		this.isActiveSpeaker = options.isActiveSpeaker;
 		this.onUnexpectedStreamClose = options.onUnexpectedStreamClose;
 		this.onTranscript = options.onTranscript;
@@ -138,6 +125,7 @@ export class AudioIngester {
 	async start(): Promise<void> {
 		if (this.running) return;
 		this.running = true;
+		this.failureNotified = false;
 
 		try {
 			await this.setupPlainTransport();
@@ -166,15 +154,10 @@ export class AudioIngester {
 			const stream = await this.sttClient.createStream(
 				{
 					sessionId: this.sessionId,
-					roomId: this.roomId,
-					participantId: this.participantId,
-					producerId: this.producer.id,
-					participantName: this.participantName,
 					sampleRate: SAMPLE_RATE,
 					language: process.env.NEMOTRON_LANGUAGE || 'en-US',
 				},
 				(event) => {
-					if (event.isFinal) this.recordCaptureTranscript(event.text);
 					this.onTranscript(event.text, event.isFinal, event.durationMs);
 				},
 			);
@@ -186,7 +169,7 @@ export class AudioIngester {
 			this.sttStream = stream;
 			stream.onUnexpectedClose(() => {
 				if (!this.running || this.sttStream !== stream) return;
-				this.onUnexpectedStreamClose();
+				this.notifyFailure();
 			});
 			if (!this.running || this.sttStream !== stream) return;
 			this.startVadLoop();
@@ -341,21 +324,28 @@ export class AudioIngester {
 			}
 		});
 
-		this.ffmpeg.on('error', (error) => {
+		this.watchFfmpeg(this.ffmpeg);
+	}
+
+	private watchFfmpeg(ffmpeg: ChildProcess): void {
+		ffmpeg.on('error', (error) => {
 			loggers.stt.error(
 				'ffmpeg error for %s: %s',
 				this.participantId,
 				error.message,
 			);
+			if (this.ffmpeg === ffmpeg) this.notifyFailure();
 		});
 
-		this.ffmpeg.on('exit', (code) => {
-			if (code !== 0 && this.running) {
+		ffmpeg.on('exit', (code, signal) => {
+			if (this.ffmpeg === ffmpeg && this.running) {
 				loggers.stt.warn(
-					'ffmpeg exited with code %d for %s',
+					'ffmpeg exited unexpectedly (code=%s, signal=%s) for %s',
 					code,
+					signal,
 					this.participantId,
 				);
+				this.notifyFailure();
 			}
 		});
 	}
@@ -391,9 +381,10 @@ export class AudioIngester {
 
 			if (isSpeech) {
 				if (!this.isInSpeech) {
-					for (const preRollFrame of this.preRoll.drain()) {
+					for (const preRollFrame of this.preRollFrames) {
 						this.sendFrame(preRollFrame);
 					}
+					this.preRollFrames = [];
 				}
 				this.silenceCheckCount = 0;
 				this.speechCheckCount++;
@@ -403,14 +394,18 @@ export class AudioIngester {
 				this.silenceCheckCount++;
 				if (this.isInSpeech) {
 					this.sendFrame(frame);
-				} else {
-					this.preRoll.remember(frame);
+				} else if (PRE_ROLL_CHECKS > 0) {
+					this.preRollFrames.push(frame);
+					if (this.preRollFrames.length > PRE_ROLL_CHECKS) {
+						this.preRollFrames.shift();
+					}
 				}
 			}
 
 			if (this.shouldFlush()) {
 				this.markFinal();
 			}
+			if (this.streamedBytes >= MAX_UTTERANCE_BYTES) this.markFinal();
 		}
 	}
 
@@ -444,7 +439,6 @@ export class AudioIngester {
 			return;
 		}
 		this.sttStream?.sendAudio(frame);
-		if (this.captureDirectory) this.captureFrames.push(Buffer.from(frame));
 		this.streamedBytes += frame.length;
 	}
 
@@ -462,7 +456,6 @@ export class AudioIngester {
 			this.participantId,
 			this.sessionId,
 		);
-		this.writeCapture(durationMs);
 		this.sttStream?.markFinal(durationMs);
 		this.resetVadState();
 	}
@@ -472,47 +465,13 @@ export class AudioIngester {
 		this.silenceCheckCount = 0;
 		this.isInSpeech = false;
 		this.streamedBytes = 0;
-		this.captureFrames = [];
-		this.preRoll.clear();
+		this.preRollFrames = [];
 	}
 
-	private writeCapture(durationMs: number): void {
-		if (!this.captureDirectory || this.captureFrames.length === 0) return;
-		try {
-			const metadataPath = writePcmCapture(
-				this.captureDirectory,
-				Buffer.concat(this.captureFrames),
-				{
-					sessionId: this.sessionId,
-					roomId: this.roomId,
-					participantId: this.participantId,
-					producerId: this.producer.id,
-					sampleRate: SAMPLE_RATE,
-					channels: OUTPUT_CHANNELS,
-					durationMs,
-				},
-			);
-			this.pendingCaptureMetadata.push(metadataPath);
-			loggers.stt.info('Captured STT utterance at %s', metadataPath);
-		} catch (error) {
-			loggers.stt.warn(
-				'Failed to capture STT utterance: %s',
-				(error as Error).message,
-			);
-		}
-	}
-
-	private recordCaptureTranscript(transcript: string): void {
-		const metadataPath = this.pendingCaptureMetadata.shift();
-		if (!metadataPath) return;
-		try {
-			updatePcmCaptureTranscript(metadataPath, transcript);
-		} catch (error) {
-			loggers.stt.warn(
-				'Failed to update STT capture transcript: %s',
-				(error as Error).message,
-			);
-		}
+	private notifyFailure(): void {
+		if (!this.running || this.failureNotified) return;
+		this.failureNotified = true;
+		this.onUnexpectedStreamClose();
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────────

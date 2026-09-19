@@ -1,16 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ISttClient } from '../../stt/SttClient';
+import { SttManager } from '../../stt/SttManager';
 import { registerAuthHandlers } from './AuthHandlers';
 import { registerDisconnectHandlers } from './DisconnectHandlers';
 import { registerRoomJoinHandlers } from './RoomJoinHandlers';
 
-function captureHandler(eventName: string) {
-	let handler: ((...args: unknown[]) => void) | undefined;
+function createSttManager(): SttManager {
+	const sttClient = {
+		isAvailable: () => true,
+		onAvailable: vi.fn(),
+		createStream: vi.fn(),
+	} satisfies ISttClient;
+	return new SttManager({ sttClient });
+}
+
+function captureHandler(eventName: string, id: string) {
+	let handler: ((...args: never[]) => unknown) | undefined;
 	const socket = {
-		id: 'socket-1',
+		id,
 		roomId: 'room-1',
-		participantId: 'participant-1',
+		participantId: `participant-${id}`,
 		scope: 'full',
-		on: (event: string, listener: (...args: unknown[]) => void) => {
+		on: (event: string, listener: (...args: never[]) => unknown) => {
 			if (event === eventName) handler = listener;
 		},
 	};
@@ -18,62 +29,68 @@ function captureHandler(eventName: string) {
 }
 
 describe('caption lifecycle cleanup', () => {
-	it('removes a caption subscriber when it leaves the room', async () => {
-		const { socket, getHandler } = captureHandler('leave_room');
-		const removeSubscriber = vi.fn(() => true);
-		const stopRoom = vi.fn().mockResolvedValue(undefined);
+	it('keeps captions running until the last subscriber leaves or disconnects', async () => {
+		const sttManager = createSttManager();
+		sttManager.beginSession('room-1', 'socket-1');
+		sttManager.beginSession('room-1', 'socket-2');
+		const stopRoom = vi.spyOn(sttManager, 'stopRoom');
+		const leaving = captureHandler('leave_room', 'socket-1');
+		const disconnecting = captureHandler('disconnect', 'socket-2');
 		const leave = vi.fn().mockResolvedValue(undefined);
+		const disconnect = vi.fn().mockResolvedValue(undefined);
 		registerRoomJoinHandlers({
 			participantConnections: { leave },
-			sttManager: { removeSubscriber, stopRoom },
-		} as never)(socket as never);
+			sttManager,
+		} as never)(leaving.socket as never);
+		registerDisconnectHandlers({
+			authManager: { cleanupSocket: vi.fn() },
+			participantConnections: { disconnect },
+			sttManager,
+			telemetry: { socketDisconnects: { inc: vi.fn() } },
+		} as never)(disconnecting.socket as never);
 
-		getHandler()?.();
-		await vi.waitFor(() => expect(leave).toHaveBeenCalled());
+		await leaving.getHandler()?.();
 
-		expect(removeSubscriber).toHaveBeenCalledWith('room-1', 'socket-1');
+		expect(sttManager.hasSubscribers('room-1')).toBe(true);
+		expect(stopRoom).not.toHaveBeenCalled();
+
+		await disconnecting.getHandler()?.('client namespace disconnect' as never);
+
+		expect(sttManager.hasSubscribers('room-1')).toBe(false);
+		expect(stopRoom).toHaveBeenCalledOnce();
 		expect(stopRoom).toHaveBeenCalledWith('room-1', true);
 	});
 
-	it('removes a caption subscriber when refreshed auth requires E2EE', async () => {
-		const { socket, getHandler } = captureHandler('auth:update_token');
-		const updateSocketToken = vi.fn(() => {
-			(socket as typeof socket & { e2eeRequired?: boolean }).e2eeRequired =
-				true;
-		});
-		const removeSubscriber = vi.fn(() => true);
-		const stopRoom = vi.fn().mockResolvedValue(undefined);
+	it('removes a subscriber only when refreshed auth transitions to E2EE', async () => {
+		const sttManager = createSttManager();
+		sttManager.beginSession('room-1', 'socket-1');
+		const stopRoom = vi.spyOn(sttManager, 'stopRoom');
+		const { socket, getHandler } = captureHandler(
+			'auth:update_token',
+			'socket-1',
+		);
+		const updateSocketToken = vi.fn(
+			(target: typeof socket & { e2eeRequired?: boolean }, token: string) => {
+				target.e2eeRequired = token === 'e2ee-token';
+			},
+		);
 		registerAuthHandlers({
 			authManager: { updateSocketToken },
-			sttManager: { removeSubscriber, stopRoom },
+			sttManager,
 			telemetry: { authEvents: { inc: vi.fn() } },
 		} as never)(socket as never);
 		const callback = vi.fn();
 
-		getHandler()?.({ token: 'e2ee-token' }, callback);
-		await vi.waitFor(() => expect(stopRoom).toHaveBeenCalled());
+		getHandler()?.({ token: 'plain-token' } as never, callback as never);
 
-		expect(removeSubscriber).toHaveBeenCalledWith('room-1', 'socket-1');
-		expect(callback).toHaveBeenCalledWith({ success: true });
-	});
+		expect(callback).toHaveBeenLastCalledWith({ success: true });
+		expect(sttManager.hasSubscribers('room-1')).toBe(true);
+		expect(stopRoom).not.toHaveBeenCalled();
 
-	it('removes a caption subscriber when an unsafe E2EE transition disconnects', async () => {
-		const { socket, getHandler } = captureHandler('disconnect');
-		const removeSubscriber = vi.fn(() => true);
-		const stopRoom = vi.fn().mockResolvedValue(undefined);
-		registerDisconnectHandlers({
-			authManager: { cleanupSocket: vi.fn() },
-			participantConnections: {
-				disconnect: vi.fn().mockResolvedValue(undefined),
-			},
-			sttManager: { removeSubscriber, stopRoom },
-			telemetry: { socketDisconnects: { inc: vi.fn() } },
-		} as never)(socket as never);
+		getHandler()?.({ token: 'e2ee-token' } as never, callback as never);
+		await vi.waitFor(() => expect(stopRoom).toHaveBeenCalledOnce());
 
-		getHandler()?.('client namespace disconnect');
-		await vi.waitFor(() => expect(stopRoom).toHaveBeenCalled());
-
-		expect(removeSubscriber).toHaveBeenCalledWith('room-1', 'socket-1');
-		expect(stopRoom).toHaveBeenCalledWith('room-1', true);
+		expect(callback).toHaveBeenLastCalledWith({ success: true });
+		expect(sttManager.hasSubscribers('room-1')).toBe(false);
 	});
 });

@@ -38,7 +38,6 @@ export interface SFUConfig {
 		serverUrl?: string;
 		apiKey?: string;
 		allowMockFallback: boolean;
-		captureDirectory?: string;
 	};
 	logging: {
 		level: SFULogLevel;
@@ -347,7 +346,6 @@ export function loadConfig(
 			serverUrl: optional(env, 'STT_SERVER_URL'),
 			apiKey: optional(env, 'STT_API_KEY'),
 			allowMockFallback: mode === 'development',
-			captureDirectory: optional(env, 'STT_CAPTURE_DIR'),
 		},
 		logging: { level: logLevel },
 		sentry: {

@@ -152,7 +152,7 @@ export class MediasoupManager {
 			this.roomManager.getRouter(roomId),
 		);
 		this.sttManager.setRestartRoomTranscription((roomId) =>
-			this.startSttForExistingProducers(roomId, sttManager),
+			this.startSttForExistingProducers(roomId),
 		);
 	}
 
@@ -1142,10 +1142,9 @@ export class MediasoupManager {
 		return this.roomManager.getRoom(roomId)?.peers;
 	}
 
-	async startSttForExistingProducers(
-		roomId: string,
-		sttManager: SttManager,
-	): Promise<void> {
+	async startSttForExistingProducers(roomId: string): Promise<void> {
+		const sttManager = this.sttManager;
+		if (!sttManager) return;
 		const room = this.roomManager.getRoom(roomId);
 		if (!room) {
 			loggers.mediasoupManager.warn(

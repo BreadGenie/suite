@@ -6,6 +6,12 @@ import type { HandlerDeps, TypedSocket } from './Handler';
 export function registerSttHandlers(deps: HandlerDeps) {
 	return (socket: Socket) => {
 		socket.on('stt:toggle', async (data, callback) => {
+			if (typeof callback !== 'function') {
+				loggers.socketHandler.warn(
+					'Ignoring stt:toggle without acknowledgement',
+				);
+				return;
+			}
 			try {
 				deps.authManager.ensureFullAccess(socket);
 				if (!deps.sttManager) {
@@ -15,8 +21,11 @@ export function registerSttHandlers(deps: HandlerDeps) {
 
 				const typedSocket = socket as TypedSocket;
 				const roomId = typedSocket.roomId;
-				const enabled =
-					typeof data?.enabled === 'boolean' ? data.enabled : false;
+				if (typeof data?.enabled !== 'boolean') {
+					callback({ success: false, error: 'enabled must be a boolean' });
+					return;
+				}
+				const enabled = data.enabled;
 
 				if (!roomId) {
 					callback({ success: false, error: 'Not in a room' });
@@ -29,13 +38,12 @@ export function registerSttHandlers(deps: HandlerDeps) {
 					});
 					return;
 				}
-
 				if (enabled) {
-					const wasFirst = deps.sttManager.addSubscriber(roomId, socket.id);
+					const wasFirst = deps.sttManager.beginSession(roomId, socket.id);
 					callback({ success: true, enabled });
 					if (wasFirst) {
 						void deps.mediasoup
-							.startSttForExistingProducers(roomId, deps.sttManager)
+							.startSttForExistingProducers(roomId)
 							.catch((error) => {
 								loggers.socketHandler.warn(
 									'Failed to start STT for room %s: %s',

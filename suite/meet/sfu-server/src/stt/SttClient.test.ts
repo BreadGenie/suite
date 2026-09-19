@@ -19,6 +19,7 @@ describe('SttClient Realtime protocol', () => {
 
 	afterEach(async () => {
 		client?.destroy();
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 		await new Promise<void>(
 			(resolve) => websocketServer?.close(() => resolve()) ?? resolve(),
@@ -99,9 +100,6 @@ describe('SttClient Realtime protocol', () => {
 		const stream = await client.createStream(
 			{
 				sessionId: 'meet-session-1',
-				roomId: 'room-1',
-				participantId: 'participant-1',
-				producerId: 'producer-1',
 				sampleRate: 24000,
 				language: 'en-US',
 			},
@@ -165,9 +163,6 @@ describe('SttClient Realtime protocol', () => {
 		const stream = await client.createStream(
 			{
 				sessionId: 'meet-session-1',
-				roomId: 'room-1',
-				participantId: 'participant-1',
-				producerId: 'producer-1',
 				sampleRate: 24000,
 			},
 			vi.fn(),
@@ -179,6 +174,43 @@ describe('SttClient Realtime protocol', () => {
 		await vi.waitFor(() => expect(unexpectedClose).toHaveBeenCalledTimes(1));
 		await stream.close();
 		expect(unexpectedClose).toHaveBeenCalledTimes(1);
+	});
+
+	it('fails the stream when outbound WebSocket buffering exceeds its bound', async () => {
+		server = createServer((_request, response) => response.end('ok'));
+		websocketServer = new WebSocketServer({ server, path: '/v1/realtime' });
+		await new Promise<void>((resolve) =>
+			server!.listen(0, '127.0.0.1', resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === 'string')
+			throw new Error('Missing test server address');
+		websocketServer.on('connection', (socket) => {
+			socket.send(JSON.stringify({ type: 'session.created' }));
+			socket.on('message', (raw) => {
+				const event = JSON.parse(raw.toString()) as ClientEvent;
+				if (event.type === 'session.update') {
+					socket.send(JSON.stringify({ type: 'session.updated' }));
+				}
+			});
+		});
+		client = new SttClient(`http://127.0.0.1:${address.port}`);
+		const stream = await client.createStream(
+			{
+				sessionId: 'meet-session-1',
+				sampleRate: 24000,
+			},
+			vi.fn(),
+		);
+		const unexpectedClose = vi.fn();
+		stream.onUnexpectedClose(unexpectedClose);
+		const socket = (stream as unknown as { socket: WebSocket }).socket;
+		Object.defineProperty(socket, 'bufferedAmount', { value: 1024 * 1024 });
+
+		stream.sendAudio(Buffer.alloc(2));
+
+		expect(unexpectedClose).toHaveBeenCalledOnce();
+		await vi.waitFor(() => expect(socket.readyState).toBe(socket.CLOSED));
 	});
 
 	it('delivers an unexpected close that occurs before listener registration', async () => {
@@ -194,7 +226,12 @@ describe('SttClient Realtime protocol', () => {
 		if (!address || typeof address === 'string')
 			throw new Error('Missing test server address');
 
+		let signalServerSocketClosed: () => void = () => {};
+		const serverSocketClosed = new Promise<void>((resolve) => {
+			signalServerSocketClosed = resolve;
+		});
 		websocketServer.on('connection', (socket) => {
+			socket.once('close', signalServerSocketClosed);
 			socket.send(JSON.stringify({ type: 'session.created' }));
 			socket.on('message', (raw) => {
 				const event = JSON.parse(raw.toString()) as ClientEvent;
@@ -210,17 +247,11 @@ describe('SttClient Realtime protocol', () => {
 		const stream = await client.createStream(
 			{
 				sessionId: 'meet-session-1',
-				roomId: 'room-1',
-				participantId: 'participant-1',
-				producerId: 'producer-1',
 				sampleRate: 24000,
 			},
 			vi.fn(),
 		);
-		await vi.waitFor(() => {
-			const internals = stream as unknown as { unexpectedlyClosed: boolean };
-			expect(internals.unexpectedlyClosed).toBe(true);
-		});
+		await serverSocketClosed;
 		const unexpectedClose = vi.fn();
 
 		stream.onUnexpectedClose(unexpectedClose);
@@ -259,9 +290,6 @@ describe('SttClient Realtime protocol', () => {
 		const stream = await client.createStream(
 			{
 				sessionId: 'meet-session-1',
-				roomId: 'room-1',
-				participantId: 'participant-1',
-				producerId: 'producer-1',
 				sampleRate: 24000,
 			},
 			vi.fn(),
@@ -312,5 +340,37 @@ describe('SttClient Realtime protocol', () => {
 		await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(2));
 
 		expect(fetchMock).toHaveBeenCalledTimes(4);
+	});
+
+	it('aborts a health check after its timeout', async () => {
+		vi.useFakeTimers();
+		let signal: AbortSignal | undefined;
+		vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
+			signal = init?.signal ?? undefined;
+			return new Promise((_resolve, reject) => {
+				signal?.addEventListener('abort', () => reject(signal?.reason));
+			});
+		});
+
+		client = new SttClient('http://stt.example');
+		await vi.advanceTimersByTimeAsync(5000);
+
+		expect(signal?.aborted).toBe(true);
+	});
+
+	it('destroy aborts an in-flight health check', () => {
+		let signal: AbortSignal | undefined;
+		vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
+			signal = init?.signal ?? undefined;
+			return new Promise((_resolve, reject) => {
+				signal?.addEventListener('abort', () => reject(signal?.reason));
+			});
+		});
+		client = new SttClient('http://stt.example');
+
+		client.destroy();
+
+		expect(signal?.aborted).toBe(true);
+		expect(client.isAvailable()).toBe(false);
 	});
 });

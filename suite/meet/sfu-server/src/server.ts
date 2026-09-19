@@ -71,7 +71,6 @@ export class SFUServer {
 			sttServerUrl: config.stt.serverUrl,
 			sttApiKey: config.stt.apiKey,
 			allowMockFallback: config.stt.allowMockFallback,
-			captureDirectory: config.stt.captureDirectory,
 		});
 		this.mediasoup.setSttManager(this.sttManager);
 		const recordingPersistencePath = config.persistence.recordingGrantFile;
@@ -195,6 +194,7 @@ export class SFUServer {
 		try {
 			this.socketHandlerManager.stop();
 			await this.mediasoup.cleanup();
+			this.sttManager.destroy();
 
 			this.server.close(() => {
 				loggers.server.info('SFU Server stopped');
@@ -205,6 +205,7 @@ export class SFUServer {
 				(error as Error).message,
 			);
 			this.socketHandlerManager.stop();
+			this.sttManager.destroy();
 			this.server.close(() => {
 				loggers.server.info('SFU Server force stopped');
 			});

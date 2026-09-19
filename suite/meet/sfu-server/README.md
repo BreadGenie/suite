@@ -20,7 +20,6 @@ Set `STT_SERVER_URL` to an externally managed STT backend. The SFU deployment do
 |---|---|---|
 | `STT_SERVER_URL` | SFU URL for the STT service | — |
 | `STT_API_KEY` | Bearer token sent to the STT service when it requires authentication | — |
-| `STT_CAPTURE_DIR` | Optional local directory for diagnostic utterance WAV/JSON captures | — |
 | `NEMOTRON_MODEL` | Hugging Face model ID | `nvidia/nemotron-3.5-asr-streaming-0.6b` |
 | `NEMOTRON_LANGUAGE` | Locale prompt such as `en-US`, or `auto` for multilingual rooms | `en-US` |
 | `NEMOTRON_ATT_CONTEXT_SIZE` | NeMo streaming attention context, `left,right` | `56,3` |
@@ -32,6 +31,11 @@ Set `STT_SERVER_URL` to an externally managed STT backend. The SFU deployment do
 | `STT_VAD_THRESHOLD` | Speech detection sensitivity (0.0–1.0) | `0.012` |
 | `STT_PRE_ROLL_MS` | Audio retained before speech detection to avoid clipped words | `300` |
 | `HF_TOKEN` | Hugging Face token (optional, avoids rate limits) | — |
+
+The SFU finalizes continuous speech every 15 seconds. If a Realtime stream exceeds
+that utterance limit, queues more than 1 MiB of outbound WebSocket data, or leaves
+eight committed utterances unacknowledged, the SFU closes that stream and
+recreates its ingester while captions remain subscribed.
 
 ## Development Setup
 

@@ -37,7 +37,6 @@ describe('loadConfig', () => {
 		expect(config.stt).toEqual({
 			serverUrl: undefined,
 			allowMockFallback: false,
-			captureDirectory: undefined,
 		});
 		expect(Object.isFrozen(config)).toBe(true);
 		expect(Object.isFrozen(config.mediasoup.worker)).toBe(true);
@@ -66,18 +65,16 @@ describe('loadConfig', () => {
 		expect(config.runtime.bypassRateLimits).toBe(true);
 	});
 
-	it('loads optional STT diagnostics configuration', () => {
+	it('loads optional STT configuration', () => {
 		const config = loadConfig(
 			validEnv({
 				STT_SERVER_URL: 'https://stt.example.test',
-				STT_CAPTURE_DIR: './data/stt-captures',
 			}),
 			system,
 		);
 		expect(config.stt).toEqual({
 			serverUrl: 'https://stt.example.test',
 			allowMockFallback: false,
-			captureDirectory: './data/stt-captures',
 		});
 	});
 

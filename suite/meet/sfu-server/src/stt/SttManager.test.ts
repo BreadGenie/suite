@@ -4,7 +4,7 @@ import { AudioIngester } from './AudioIngester';
 import type { ISttClient, ISttStream } from './SttClient';
 import { SttManager } from './SttManager';
 
-function createSttClient(available = false) {
+function createSttClient(available = true) {
 	let onAvailable: (() => void) | undefined;
 	const client: ISttClient = {
 		isAvailable: () => available,
@@ -26,18 +26,32 @@ describe('SttManager', () => {
 		const sttClient = createSttClient();
 		const manager = new SttManager({ sttClient: sttClient.client });
 		const restartRoom = vi.fn<() => Promise<void>>().mockResolvedValue();
-		manager.addSubscriber('room-1', 'socket-1');
+		manager.beginSession('room-1', 'socket-1');
 		manager.setRestartRoomTranscription(restartRoom);
 
 		sttClient.recover();
 		await vi.waitFor(() => expect(restartRoom).toHaveBeenCalledWith('room-1'));
 	});
 
+	it('reports real constructed configuration and availability', () => {
+		const disabled = new SttManager({ allowMockFallback: false });
+		const developmentMock = new SttManager({ allowMockFallback: true });
+		const unavailableClient = createSttClient(false);
+		const unavailable = new SttManager({ sttClient: unavailableClient.client });
+
+		expect(disabled.isAvailable()).toBe(false);
+		expect(developmentMock.isAvailable()).toBe(true);
+		expect(unavailable.isAvailable()).toBe(false);
+		expect(() => unavailable.beginSession('room-1', 'socket-1')).toThrow(
+			'STT is unavailable',
+		);
+	});
+
 	it('passes only room subscribers to the transcript emitter', () => {
 		const sttClient = createSttClient();
 		const manager = new SttManager({ sttClient: sttClient.client });
 		const emit = vi.fn();
-		manager.addSubscriber('room-1', 'socket-1');
+		manager.beginSession('room-1', 'socket-1');
 		manager.setEmitToSubscribers(emit);
 
 		const internals = manager as unknown as {
@@ -73,7 +87,7 @@ describe('SttManager', () => {
 		const manager = new SttManager({ sttClient: sttClient.client });
 		const emit = vi.fn();
 		manager.setGetRouter(() => ({}) as Router);
-		manager.addSubscriber('room-1', 'socket-1');
+		manager.beginSession('room-1', 'socket-1');
 		manager.setEmitToSubscribers(emit);
 		const start = manager.startTranscription as unknown as (
 			roomId: string,
@@ -124,7 +138,7 @@ describe('SttManager', () => {
 		const sttClient = createSttClient(true);
 		const manager = new SttManager({ sttClient: sttClient.client });
 		manager.setGetRouter(() => ({}) as Router);
-		manager.addSubscriber('room-1', 'socket-1');
+		manager.beginSession('room-1', 'socket-1');
 		const producerA = { id: 'producer-a', closed: false } as Producer;
 		const producerB = { id: 'producer-b', closed: false } as Producer;
 
@@ -180,7 +194,7 @@ describe('SttManager', () => {
 		const sttClient = createSttClient(true);
 		const manager = new SttManager({ sttClient: sttClient.client });
 		manager.setGetRouter(() => ({}) as Router);
-		manager.addSubscriber('room-1', 'socket-1');
+		manager.beginSession('room-1', 'socket-1');
 		const producer = { id: 'producer-a', closed: false } as Producer;
 		await manager.startTranscription(
 			'room-1',
@@ -221,7 +235,7 @@ describe('SttManager', () => {
 		const sttClient = createSttClient(true);
 		const manager = new SttManager({ sttClient: sttClient.client });
 		manager.setGetRouter(() => ({}) as Router);
-		manager.addSubscriber('room-1', 'socket-1');
+		manager.beginSession('room-1', 'socket-1');
 		await manager.startTranscription('room-1', 'participant-a', 'Alice', {
 			id: 'producer-a',
 			closed: false,
@@ -229,10 +243,10 @@ describe('SttManager', () => {
 
 		const firstStop = manager.stopRoom('room-1');
 		const secondStop = manager.stopRoom('room-1');
-		expect(manager.addSubscriber('room-1', 'socket-2')).toBe(false);
+		expect(manager.beginSession('room-1', 'socket-2')).toBe(false);
 
 		finishStop();
 		await Promise.all([firstStop, secondStop]);
-		expect(manager.addSubscriber('room-1', 'socket-2')).toBe(true);
+		expect(manager.beginSession('room-1', 'socket-2')).toBe(true);
 	});
 });

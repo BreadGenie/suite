@@ -11,7 +11,6 @@ interface SttManagerOptions {
 	sttApiKey?: string;
 	/** Use mock client in development when no STT server is configured */
 	allowMockFallback?: boolean;
-	captureDirectory?: string;
 	sttClient?: ISttClient;
 }
 
@@ -35,16 +34,14 @@ export class SttManager {
 	private restartRoomTranscription:
 		| ((roomId: string) => Promise<void>)
 		| undefined;
-	private captureDirectory?: string;
+	private configured: boolean;
 
 	constructor(options: SttManagerOptions) {
-		this.captureDirectory = options.captureDirectory;
-		if (this.captureDirectory) {
-			loggers.stt.warn(
-				'STT diagnostic audio capture enabled at %s',
-				this.captureDirectory,
-			);
-		}
+		this.configured = Boolean(
+			options.sttClient ||
+				options.sttServerUrl?.trim() ||
+				options.allowMockFallback,
+		);
 		if (options.sttClient) {
 			this.sttClient = options.sttClient;
 		} else if (options.sttServerUrl) {
@@ -57,7 +54,6 @@ export class SttManager {
 		} else {
 			loggers.stt.warn('STT disabled: no server URL and mock fallback is off.');
 			this.sttClient = new MockSttClient();
-			(this.sttClient as MockSttClient).isAvailable = () => false;
 		}
 		this.sttClient.onAvailable(() => this.restartSubscribedRooms());
 	}
@@ -79,6 +75,10 @@ export class SttManager {
 		this.roomActiveSpeakers.set(roomId, new Set(participantIds));
 	}
 
+	isAvailable(): boolean {
+		return this.configured && this.sttClient.isAvailable();
+	}
+
 	isActiveSpeaker(roomId: string, participantId: string): boolean {
 		const speakers = this.roomActiveSpeakers.get(roomId);
 		if (!speakers) return true;
@@ -89,11 +89,8 @@ export class SttManager {
 		return (this.roomSubscribers.get(roomId)?.size ?? 0) > 0;
 	}
 
-	getSubscribers(roomId: string): Set<string> | undefined {
-		return this.roomSubscribers.get(roomId);
-	}
-
-	addSubscriber(roomId: string, socketId: string): boolean {
+	beginSession(roomId: string, socketId: string): boolean {
+		if (!this.isAvailable()) throw new Error('STT is unavailable');
 		if ((this.stoppingRooms.get(roomId) ?? 0) > 0) return false;
 		if (!this.roomSubscribers.has(roomId)) {
 			this.roomSubscribers.set(roomId, new Set());
@@ -146,7 +143,7 @@ export class SttManager {
 			return;
 		}
 
-		if (!this.sttClient.isAvailable()) {
+		if (!this.isAvailable()) {
 			loggers.stt.warn('STT server unavailable, cannot start transcription');
 			return;
 		}
@@ -160,11 +157,9 @@ export class SttManager {
 		const ingester = new AudioIngester({
 			roomId,
 			participantId,
-			participantName,
 			producer,
 			router,
 			sttClient: this.sttClient,
-			captureDirectory: this.captureDirectory,
 			isActiveSpeaker: () => this.isActiveSpeaker(roomId, participantId),
 			onUnexpectedStreamClose: () => {
 				void this.recoverIngester(
@@ -281,9 +276,7 @@ export class SttManager {
 	}
 
 	destroy(): void {
-		if (typeof (this.sttClient as SttClient).destroy === 'function') {
-			(this.sttClient as SttClient).destroy();
-		}
+		this.sttClient.destroy?.();
 	}
 
 	private handleTranscript(
@@ -362,7 +355,7 @@ export class SttManager {
 				if (
 					!this.hasSubscribers(roomId) ||
 					producer.closed ||
-					!this.sttClient.isAvailable()
+					!this.isAvailable()
 				) {
 					this.activeSessions.delete(sessionKey);
 					return;
